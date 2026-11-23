@@ -1,3 +1,5 @@
+<img src="Media/logo.png" width="128" alt="WatchX logo">
+
 # WatchX
 
 **Made by Rikerud** – a World of Warcraft: Forever addon.

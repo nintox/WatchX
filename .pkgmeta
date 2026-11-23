@@ -5,4 +5,6 @@ package-as: WatchX
 ignore:
   - bridge
   - README.md
+  - Media/logo.png
+  - Media/make_logo.py
   - .github

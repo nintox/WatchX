@@ -12,7 +12,7 @@ local MINI_H, TARGET_H = 26, 42   -- the mini bar, and the bar it grows into whe
 local BG = { 0.06, 0.07, 0.09, 0.95 }
 local EDGE = { 0.22, 0.25, 0.30, 1 }
 local ACCENT = { 0.22, 0.80, 0.68 }   -- WatchX teal
-local LOGO = "Interface\\Icons\\Ability_EyeOfTheOwl"
+local LOGO = "Interface\\AddOns\\WatchX\\Media\\logo"   -- Media/logo.tga (made by Media/make_logo.py)
 
 local panel, mini, settingsPage, settingsCategory, helpFrame, prompt, sendBar
 local promptPending = false
@@ -1460,7 +1460,6 @@ local function BuildPanel()
     p.logo:SetSize(18, 18)
     p.logo:SetPoint("TOPLEFT", p, "TOPLEFT", PAD, -11)
     p.logo:SetTexture(LOGO)
-    p.logo:SetTexCoord(0.08, 0.92, 0.08, 0.92)
     p.title = p:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
     p.title:SetPoint("LEFT", p.logo, "RIGHT", 7, 0)
     p.title:SetText("WatchX")
@@ -2041,7 +2040,6 @@ local function BuildMini()
     m.icon:SetSize(20, 20)
     m.icon:SetPoint("TOPLEFT", m, "TOPLEFT", 5, -3)
     m.icon:SetTexture(LOGO)
-    m.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
     m.rows = {}
     for i = 1, MINI_MAX do
         local name = m:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
@@ -3351,7 +3349,6 @@ local function SpotPin(preset, i, spot, mini)
     local icon = f:CreateTexture(nil, "ARTWORK")
     icon:SetAllPoints()
     icon:SetTexture(LOGO)
-    icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
     local num = f:CreateFontString(nil, "OVERLAY", mini and "GameFontHighlightSmall" or "GameFontHighlight")
     num:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", 3, -3)
     num:SetText(i)
