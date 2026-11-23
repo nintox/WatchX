@@ -1424,6 +1424,9 @@ local function ReadAuras()
             if filter == "HELPFUL" and type(name) == "string" and name:lower():find("campfire", 1, true) then
                 found.campfire = true   -- e.g. Welcoming Campfire: there's a fire close by
             end
+            if filter == "HELPFUL" and (name == "Food" or name == "Food & Drink" or name == "Refreshment") then
+                found.eating = true     -- sitting and eating: the new Well Fed comes after 10 seconds
+            end
             local id = (AURA_NAMES[sid] and sid) or (type(name) == "string" and byName[name])
             if filter == "HELPFUL" and AuraIsXP and id ~= WELL_RESTED and sid ~= WELL_FED then
                 local xp = AuraIsXP(i, sid, name)
@@ -1687,7 +1690,7 @@ ns.ItemIcon = ItemIcon
 
 -- Warnings when a boost has run out (or a wait is over): a raid-warning line mid-screen, a sound and chat.
 -- Not in combat (it waits until the fight is over) and not when you've just died.
-local lastBoost, pendingWarn = nil, {}
+local lastBoost, pendingWarn, fedGone = nil, {}, nil
 local function Warn(msg)
     Print("|cffffd100" .. msg .. "|r")
     if RaidNotice_AddMessage and RaidWarningFrame then
@@ -1702,11 +1705,19 @@ local function CheckBoosts(now)
     if not was or db.levelWarn == false then return end
     if Plain(UnitIsDeadOrGhost("player")) == true then return end
     local function gone(k) return was[k] and not now[k] end
+    -- Well Fed gone: eating a new dish takes the old one away and gives the new one 10 seconds later, so wait 20
+    -- seconds (and while you're eating) before saying it's run out.
     if gone("fed") then
+        fedGone = GetTime()
+        if C_Timer then C_Timer.After(21, function() statusCache.dirty = true; if ns.LevelStatus then ns.Safe("xp boosts", ns.LevelStatus) end end) end
+    end
+    if now.fed or now.eating then fedGone = nil end
+    if fedGone and GetTime() - fedGone >= 20 then
+        fedGone = nil
         pendingWarn.fed = now.food and now.food > 0 and ("Well Fed has run out – eat " .. (now.foodName or "XP food") .. ".")
             or "Well Fed has run out – and you have no XP food in your bags!"
     end
-    if (was.food or 0) > 0 and now.food == 0 and not pendingWarn.fed then
+    if (was.food or 0) > 0 and now.food == 0 and not pendingWarn.fed and not now.eating then
         pendingWarn.food = "You've used your last XP food – cook or buy more."
     end
     if gone("rested") then pendingWarn.bag = "Well-Rested (Sleeping Bag) has run out." end
@@ -2008,6 +2019,7 @@ ComputeLevelStatus = function()
         return { left = left, stacks = a.stacks }
     end
     local rows, seen = {}, {}
+    seen.eating = auraCache.found and auraCache.found.eating or nil
     local name, icon, slot, use, options
     local function add(state, text, tip, timer, count)
         rows[#rows + 1] = { state = state, name = name, icon = icon, text = text, tip = tip, timer = timer,
