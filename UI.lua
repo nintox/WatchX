@@ -372,7 +372,11 @@ function ns.ShowMenu(anchor, title, items)
     for i, it in ipairs(items) do
         local b = menu.buttons[i]
         if not b then
-            b = MenuRow(menu, 180, function(self) menu:Hide(); if self.fn then self.fn() end end)
+            b = MenuRow(menu, 180, function(self)
+                menu:Hide()
+                if self.fn then self.fn() end
+                if ns.RefreshHistory then ns.RefreshHistory() end   -- the list behind it shows the change at once
+            end)
             menu.buttons[i] = b
         end
         b:SetText(it[1])

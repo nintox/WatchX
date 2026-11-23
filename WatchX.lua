@@ -972,9 +972,11 @@ function ns.SetNote(key, text)
     text = Trim(text or "")
     r.note = text ~= "" and text or nil
     Refresh()
+    if ns.RefreshHistory then ns.RefreshHistory() end
 end
 
 function ns.ForgetEnemy(key)
+    if ns.RemoveWanted and db.enemies[key] and db.enemies[key].wanted then ns.RemoveWanted(key) end   -- yours: down for all
     db.enemies[key] = nil
     if ns.AvoidChanged then ns.AvoidChanged() end
     ns.enemyCount = nil
@@ -2553,6 +2555,10 @@ do
             r.wantedHide = w.t
         end
         r.wanted = nil
+        -- only here for the bounty (never seen, nothing else on it): gone from History too
+        if not (r.kos or r.avoid or r.note or (r.seen or 0) > 0 or (r.kills or 0) > 0 or (r.deaths or 0) > 0) and not r.wantedHide then
+            db.enemies[key] = nil
+        end
         Print("Bounty taken down: " .. (r.name or key))
         if ns.RefreshUI then ns.RefreshUI() end; if ns.RefreshHistory then ns.RefreshHistory() end
     end
