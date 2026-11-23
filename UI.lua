@@ -4663,13 +4663,52 @@ end
         t:Hide()
         return t
     end
-    local function Place(t, x0, x1)
+    local function Place(t, x0, x1, bar)
         if x1 - x0 < 0.5 then t:Hide() return end
+        bar = bar or xb.bar
         t:ClearAllPoints()
-        t:SetPoint("TOPLEFT", xb.bar, "TOPLEFT", x0, 0)
-        t:SetPoint("BOTTOMLEFT", xb.bar, "BOTTOMLEFT", x0, 0)
+        t:SetPoint("TOPLEFT", bar, "TOPLEFT", x0, 0)
+        t:SetPoint("BOTTOMLEFT", bar, "BOTTOMLEFT", x0, 0)
         t:SetWidth(x1 - x0)
         t:Show()
+    end
+    -- Blizzard's XP colours: blue while you have rested, purple without; rested a darker blue. Quests in soft gold.
+    local XP_RESTED, XP_NORMAL = { 0.0, 0.39, 0.88 }, { 0.58, 0.0, 0.55 }
+    local function Ticks(parent, layer)   -- the nine marks every 10 %, like Blizzard's bar
+        local t = {}
+        for i = 1, 9 do
+            local tex = parent:CreateTexture(nil, layer or "OVERLAY")
+            tex:SetColorTexture(0, 0, 0, 0.55)
+            tex:SetWidth(1)
+            t[i] = tex
+        end
+        return t
+    end
+    local function PlaceTicks(ticks, bar, w)
+        for i, tex in ipairs(ticks) do
+            tex:ClearAllPoints()
+            tex:SetPoint("TOPLEFT", bar, "TOPLEFT", math.floor(w * i / 10 + 0.5), 0)
+            tex:SetPoint("BOTTOMLEFT", bar, "BOTTOMLEFT", math.floor(w * i / 10 + 0.5), 0)
+        end
+    end
+    local function ShowXPTip(owner, d, settingsLine)
+        if not d then return end
+        GameTooltip:SetOwner(owner, "ANCHOR_TOP")
+        GameTooltip:SetText("XP – level " .. d.level)
+        GameTooltip:AddDoubleLine("XP", Num(d.cur) .. " / " .. Num(d.max) .. ("  (%.1f%%, "):format(d.cur / d.max * 100) .. Num(d.max - d.cur) .. " to go)", 1, 0.82, 0, 1, 1, 1)
+        GameTooltip:AddDoubleLine("Rested", Num(d.rested) .. ("  (%.1f%%)"):format(d.rested / d.max * 100), 0.3, 0.6, 1, 1, 1, 1)
+        GameTooltip:AddDoubleLine("Finished quests", Num(quests.done) .. ("  (with them: %.1f%%)"):format(math.min(100, (d.cur + quests.done) / d.max * 100)), 1, 0.82, 0, 1, 1, 1)
+        GameTooltip:AddDoubleLine("Unfinished quests", Num(quests.todo), 1, 0.82, 0, 1, 1, 1)
+        GameTooltip:AddLine(" ")
+        GameTooltip:AddDoubleLine("Time this level", played.level and Dur(played.level + time() - played.at) or "–", 1, 0.82, 0, 1, 1, 1)
+        GameTooltip:AddDoubleLine("This session", Num(session.xp) .. " XP in " .. Dur(time() - session.start), 1, 0.82, 0, 1, 1, 1)
+        GameTooltip:AddDoubleLine("XP an hour", d.rate and Num(d.rate) or "–", 1, 0.82, 0, 1, 1, 1)
+        GameTooltip:AddDoubleLine("Level in", d.rate and Dur((d.max - d.cur) / d.rate * 3600) or "– (kill something first)", 1, 0.82, 0, 1, 1, 1)
+        if settingsLine then
+            GameTooltip:AddLine(" ")
+            GameTooltip:AddLine("|cffffd100Right-click:|r settings", 1, 1, 1)
+        end
+        GameTooltip:Show()
     end
 
     local function Build()
@@ -4691,11 +4730,13 @@ end
         local back = f.bar:CreateTexture(nil, "BACKGROUND")
         back:SetAllPoints()
         back:SetColorTexture(0.08, 0.06, 0.04, 0.9)
-        f.rest = Seg(f.bar, "BORDER", 0.0, 0.39, 0.88, 0.55)     -- rested: Blizzard's blue
-        f.todo = Seg(f.bar, "ARTWORK", 1, 0.85, 0.35, 0.55)       -- unfinished quests
-        f.done = Seg(f.bar, "ARTWORK", 1, 0.55, 0.05, 0.9)        -- finished quests
-        f.cur = Seg(f.bar, "ARTWORK", 0.58, 0.0, 0.55, 1)         -- your XP: Blizzard's purple
+        f.rest = Seg(f.bar, "BORDER", 0.0, 0.25, 0.6, 0.6)       -- rested: the darker blue
+        f.todo = Seg(f.bar, "ARTWORK", 1, 0.82, 0, 0.18)          -- unfinished quests
+        f.done = Seg(f.bar, "ARTWORK", 1, 0.82, 0, 0.5)           -- finished quests
+        f.cur = Seg(f.bar, "ARTWORK", XP_RESTED[1], XP_RESTED[2], XP_RESTED[3], 1)   -- your XP
         f.cur:SetDrawLayer("ARTWORK", 2)
+        f.ticks = Ticks(f.bar, "ARTWORK")
+        for _, t in ipairs(f.ticks) do t:SetDrawLayer("ARTWORK", 3) end
         local edge = CreateFrame("Frame", nil, f.bar)
         edge:SetAllPoints()
         edge:SetFrameLevel(f.bar:GetFrameLevel() + 1)
@@ -4730,24 +4771,7 @@ end
             if moving then ns.ResetXPBar() elseif ns.OpenLevelSettings then ns.OpenLevelSettings() end
         end)
         f:SetScript("OnEnter", function(self)
-            if moving then return end
-            local d = self.data
-            if not d then return end
-            GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
-            GameTooltip:SetText("XP – level " .. d.level)
-            GameTooltip:AddDoubleLine("XP", Num(d.cur) .. " / " .. Num(d.max) .. "  (" .. Num(d.max - d.cur) .. " to go)", 1, 0.82, 0, 1, 1, 1)
-            GameTooltip:AddDoubleLine("Rested", Num(d.rested) .. ("  (%.1f%%)"):format(d.rested / d.max * 100), 0.3, 0.6, 1, 1, 1, 1)
-            GameTooltip:AddDoubleLine("Finished quests", Num(quests.done), 1, 0.55, 0.05, 1, 1, 1)
-            GameTooltip:AddDoubleLine("Unfinished quests", Num(quests.todo), 1, 0.85, 0.35, 1, 1, 1)
-            GameTooltip:AddDoubleLine("With finished quests", ("%.1f%%"):format(math.min(100, (d.cur + quests.done) / d.max * 100)), 1, 0.55, 0.05, 1, 1, 1)
-            GameTooltip:AddLine(" ")
-            GameTooltip:AddDoubleLine("Time this level", played.level and Dur(played.level + time() - played.at) or "–", 1, 0.82, 0, 1, 1, 1)
-            GameTooltip:AddDoubleLine("This session", Num(session.xp) .. " XP in " .. Dur(time() - session.start), 1, 0.82, 0, 1, 1, 1)
-            GameTooltip:AddDoubleLine("XP an hour", d.rate and Num(d.rate) or "–", 1, 0.82, 0, 1, 1, 1)
-            GameTooltip:AddDoubleLine("Level in", d.rate and Dur((d.max - d.cur) / d.rate * 3600) or "– (kill something first)", 1, 0.82, 0, 1, 1, 1)
-            GameTooltip:AddLine(" ")
-            GameTooltip:AddLine("|cffffd100Right-click:|r settings", 1, 1, 1)
-            GameTooltip:Show()
+            if not moving then ShowXPTip(self, self.data, true) end
         end)
         f:SetScript("OnLeave", GameTooltip_Hide)
         AddGrips(f, function(self, st, cx, cy)
@@ -4755,13 +4779,68 @@ end
             self:SetWidth(db().xpBarWidth or XB_W)
             ns.RefreshXPBar()
         end, function(self) SavePoint(self, "xpBarPoint") end)
-        local tick = 0
-        f:SetScript("OnUpdate", function(self, elapsed)
-            tick = tick + elapsed
-            if tick >= 1 then tick = 0; ns.Safe("xp bar", ns.RefreshXPBar) end
-        end)
         f:Hide()
         return f
+    end
+
+    -- On Blizzard's own XP bar: found by what it shows (a status bar with your XP as value and max), so it works
+    -- whatever the frame is called. Our marks sit on a frame of our own laid over it (nothing is added to theirs).
+    local blizz, ov, lastLook = nil, nil, 0
+    local function IsXPBar(f, cur, max)
+        if not (f and f.GetObjectType and f:GetObjectType() == "StatusBar" and f:IsVisible()) then return false end
+        local ok, _, hi = pcall(f.GetMinMaxValues, f)
+        local okv, v = pcall(f.GetValue, f)
+        return ok and okv and N(hi) == max and N(v) == cur
+    end
+    local function FindBlizzBar(cur, max)
+        if MainMenuExpBar and IsXPBar(MainMenuExpBar, cur, max) then return MainMenuExpBar end
+        local function walk(f, depth)
+            if IsXPBar(f, cur, max) then return f end
+            if depth >= 5 or not f.GetChildren then return end
+            for _, c in ipairs({ f:GetChildren() }) do
+                local r = walk(c, depth + 1)
+                if r then return r end
+            end
+        end
+        for _, name in ipairs({ "MainStatusTrackingBarContainer", "SecondaryStatusTrackingBarContainer",
+                                "StatusTrackingBarManager", "MainMenuBar", "MainActionBar" }) do
+            local f = _G[name]
+            if f then
+                local r = walk(f, 0)
+                if r then return r end
+            end
+        end
+    end
+    local function BlizzBar(cur, max)
+        if blizz and blizz:IsVisible() then return blizz end
+        if GetTime() - lastLook < 10 then return nil end   -- not every second
+        lastLook = GetTime()
+        blizz = FindBlizzBar(cur, max)
+        return blizz
+    end
+    local function Overlay(bar)
+        if ov then
+            if ov.bar ~= bar then ov:ClearAllPoints(); ov:SetAllPoints(bar); ov.bar = bar end
+            return ov
+        end
+        ov = CreateFrame("Frame", "WatchXXPOverlay", UIParent)
+        ov:SetAllPoints(bar)
+        ov.bar = bar
+        ov:SetFrameStrata(bar:GetFrameStrata() or "MEDIUM")
+        ov:SetFrameLevel((bar:GetFrameLevel() or 1) + 5)
+        ov.done = Seg(ov, "ARTWORK", 1, 0.82, 0, 0.45)
+        ov.todo = Seg(ov, "ARTWORK", 1, 0.82, 0, 0.15)
+        ov.text = ov:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        if TextStatusBarText then pcall(ov.text.SetFontObject, ov.text, "TextStatusBarText") end
+        ov.text:SetPoint("CENTER", ov, "CENTER", 0, 1)
+        ov.text:SetShadowOffset(1, -1)
+        ov:EnableMouse(true)
+        ov:SetScript("OnEnter", function(self) ShowXPTip(self, self.data, true) end)
+        ov:SetScript("OnLeave", GameTooltip_Hide)
+        ov:SetScript("OnMouseUp", function(_, button)
+            if button == "RightButton" and ns.OpenLevelSettings then ns.OpenLevelSettings() end
+        end)
+        return ov
     end
 
     -- Compact (under the Nearby list): just the bar; the rest is in the tooltip.
@@ -4813,14 +4892,48 @@ end
             local inside, kind = IsInInstance()
             if inside and (kind == "party" or kind == "raid") then show = false end
         end
-        if not show then
+        local function HideOwn()
             if xb and xb:IsShown() then
                 xb:Hide()
                 if xb.compact and ns.AttachNearby then ns.AttachNearby() end
             end
             if xbLabel then xbLabel:Hide() end
+        end
+        if not show then
+            HideOwn()
+            if ov then ov:Hide() end
             return
         end
+        local cur, max = N(UnitXP("player")) or 0, N(UnitXPMax("player")) or 1
+        if max <= 0 then max = 1 end
+        local rested = N(GetXPExhaustion and GetXPExhaustion()) or 0
+        if GetTime() - quests.at > 30 then ScanQuests() end
+        local now = time()
+        local spent = now - session.start
+        local rate = (session.xp > 0 and spent > 60) and (session.xp / spent * 3600) or nil
+        local data = { level = level, cur = cur, max = max, rested = rested, rate = rate }
+        if d.xpBarBlizz ~= false and not moving and blizz and not blizz:IsVisible() then
+            HideOwn()   -- the game hid its bar (a vehicle, a cutscene): so do we, rather than pop ours up
+            if ov then ov:Hide() end
+            return
+        end
+        local bar = d.xpBarBlizz ~= false and not moving and BlizzBar(cur, max)
+        if bar then
+            HideOwn()
+            local o = Overlay(bar)
+            local w = bar:GetWidth() or 0
+            local function X(v) return math.min(w, math.max(0, v / max * w)) end
+            Place(o.done, X(cur), X(cur + quests.done), o)
+            Place(o.todo, X(cur + quests.done), X(cur + quests.done + quests.todo), o)
+            o.data = data
+            o.text:SetText(("Level %d  ·  %s / %s  (%.1f%%)"):format(level, Num(cur), Num(max), cur / max * 100)
+                .. (rested > 0 and ("  ·  |cff80b8ffrested %s|r"):format(Num(rested)) or "")
+                .. (quests.done > 0 and ("  ·  |cffffd100quests to hand in +%s|r"):format(Num(quests.done)) or "")
+                .. (rate and ("  ·  level in " .. Dur((max - cur) / rate * 3600)) or ""))
+            o:Show()
+            return
+        end
+        if ov then ov:Hide() end
         if not xb then xb = Build() end
         local compact = d.xpBarAttach and true or false
         Layout(compact)
@@ -4830,20 +4943,16 @@ end
             xb.placedKey = key
             Position()
         end
-        local cur, max = N(UnitXP("player")) or 0, N(UnitXPMax("player")) or 1
-        if max <= 0 then max = 1 end
-        local rested = N(GetXPExhaustion and GetXPExhaustion()) or 0
-        if GetTime() - quests.at > 30 then ScanQuests() end
         local w = xb.bar:GetWidth() or 300
         local function X(v) return math.min(w, math.max(0, v / max * w)) end
+        local c = rested > 0 and XP_RESTED or XP_NORMAL
+        xb.cur:SetVertexColor(c[1], c[2], c[3], 1)
+        PlaceTicks(xb.ticks, xb.bar, w)
         Place(xb.cur, 0, X(cur))
         Place(xb.done, X(cur), X(cur + quests.done))
         Place(xb.todo, X(cur + quests.done), X(cur + quests.done + quests.todo))
         Place(xb.rest, X(cur), X(cur + rested))
-        local now = time()
-        local spent = now - session.start
-        local rate = (session.xp > 0 and spent > 60) and (session.xp / spent * 3600) or nil
-        xb.data = { level = level, cur = cur, max = max, rested = rested, rate = rate }
+        xb.data = data
         xb.lvl:SetText(compact and ("Lvl " .. level) or ("Level " .. level))
         xb.mid:SetText(Num(cur) .. " / " .. Num(max) .. "  |cffffd100(" .. Num(max - cur) .. ")|r")
         xb.pct:SetText(("%.1f%%"):format(cur / max * 100)
@@ -4852,7 +4961,7 @@ end
         xb.top2:SetText("Session: |cffffd100" .. Dur(spent) .. "|r  ·  +" .. Num(session.xp) .. " XP"
             .. (rate and ("  ·  " .. Num(rate) .. "/h") or ""))
         xb.bot1:SetText("Level in: |cffffd100" .. (rate and Dur((max - cur) / rate * 3600) or "–") .. "|r")
-        xb.bot2:SetText(("|cffff9020Done %s|r  ·  |cffffd860Quests %s|r  ·  |cff4d9fffRested %s (%.0f%%)|r"):format(
+        xb.bot2:SetText(("|cffffd100Done %s|r  ·  |cffbfa060Quests %s|r  ·  |cff80b8ffRested %s (%.0f%%)|r"):format(
             Num(quests.done), Num(quests.todo), Num(rested), rested / max * 100))
         xb:EnableMouse(true)
         xb:Show()
@@ -4890,6 +4999,12 @@ end
         pcall(ev.RegisterEvent, ev, e)
     end
     local asked
+    -- the clocks on it, once a second (cheap: quests every 30 s, looking for Blizzard's bar every 10 s until found)
+    local tick = 0
+    ev:SetScript("OnUpdate", function(_, elapsed)
+        tick = tick + elapsed
+        if tick >= 1 then tick = 0; ns.Safe("xp bar", ns.RefreshXPBar) end
+    end)
     ev:SetScript("OnEvent", function(_, event, a1, a2) ns.Safe("xp bar", function()
         if event == "PLAYER_XP_UPDATE" or event == "PLAYER_LEVEL_UP" or event == "PLAYER_ENTERING_WORLD" then
             local cur, max = N(UnitXP("player")) or 0, N(UnitXPMax("player")) or 0
@@ -4970,6 +5085,9 @@ function ns.BuildLevelSettings()
         function() return db().levelWarn ~= false end, function(v) db().levelWarn = v end)
     check("XP bar", "under the icons: XP, rested, quests, time this level, when you'll level",
         function() return db().xpBar ~= false end, function(v) db().xpBar = v; ns.RefreshXPBar() end)
+    check("On Blizzard's own XP bar", "the text and the quest marks on the game's bar (off, or not found: WatchX's own)",
+        function() return db().xpBarBlizz ~= false end,
+        function(v) db().xpBarBlizz = v; ns.RefreshXPBar(); if ns.AttachNearby then ns.AttachNearby() end end)
     check("XP bar between the mini bar and Nearby", "just level and %, same width – the rest when you hover it",
         function() return db().xpBarAttach == true end,
         function(v) db().xpBarAttach = v; ns.RefreshXPBar(); if ns.AttachNearby then ns.AttachNearby() end end)
