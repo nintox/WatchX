@@ -3057,7 +3057,7 @@ local function BuildNearby()
     f.count:SetTextColor(ACCENT[1], ACCENT[2], ACCENT[3])
     -- ms and fps after the title, once a second (two cheap calls): green / yellow / red by how good it is
     f.stats = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    f.stats:SetPoint("LEFT", f.title, "RIGHT", 8, 0)
+    f.stats:SetPoint("RIGHT", f.count, "LEFT", -8, 0)   -- left of the count, so the two never overlap
     local statsT = 1
     f:HookScript("OnUpdate", function(self, elapsed)
         statsT = statsT + elapsed
@@ -3069,7 +3069,10 @@ local function BuildNearby()
         local fps = math.floor((tonumber(GetFramerate()) or 0) + 0.5)
         local mc = ms < 100 and "|cff40ff40" or ms < 250 and "|cffffd100" or "|cffff4040"
         local fc = fps >= 50 and "|cff40ff40" or fps >= 25 and "|cffffd100" or "|cffff4040"
-        self.stats:SetText(mc .. ms .. "|r|cff999999 ms|r  " .. fc .. fps .. "|r|cff999999 fps|r")
+        self.stats:SetText(mc .. ms .. "|r|cff999999ms|r " .. fc .. fps .. "|r|cff999999fps|r")
+        -- no room next to the title: leave it out rather than write over it
+        local tr, sl = self.title:GetRight(), self.stats:GetLeft()
+        if tr and sl and sl < tr + 4 then self.stats:SetText("") end
     end)
     f.empty = f:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
     f.empty:SetPoint("TOPLEFT", f, "TOPLEFT", 9, -26)

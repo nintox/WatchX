@@ -2538,7 +2538,7 @@ do
         SendAdd(key, r)
         Print("|cffffa000WANTED|r posted: " .. r.name .. " – " .. Money(copper)
             .. (r.wanted.note and (" (" .. r.wanted.note .. ")") or "") .. " |cffaaaaaa– sent to your guild and friends|r")
-        if ns.RefreshUI then ns.RefreshUI() end
+        if ns.RefreshUI then ns.RefreshUI() end; if ns.RefreshHistory then ns.RefreshHistory() end
         return true
     end
 
@@ -2554,7 +2554,7 @@ do
         end
         r.wanted = nil
         Print("Bounty taken down: " .. (r.name or key))
-        if ns.RefreshUI then ns.RefreshUI() end
+        if ns.RefreshUI then ns.RefreshUI() end; if ns.RefreshHistory then ns.RefreshHistory() end
     end
 
     -- A kill by you or your group (ns.OnPlayerKill): the bounty is yours.
@@ -2591,7 +2591,7 @@ do
             if f[8] and f[8] ~= "" then r.wanted.claimed = { by = Clean(f[8], 40), t = tt(f[9]) or t } end
             recent[key .. t] = time()
             if time() - t < 600 and not r.wanted.claimed then
-                Print("|cffffa000WANTED|r from " .. (r.wanted.by or "?") .. ": " .. (r.name or key)
+                Warn("WANTED from " .. (r.wanted.by or "?") .. ": " .. (r.name or key)
                     .. (ns.WantedReward(r.wanted) and (" – " .. ns.WantedReward(r.wanted)) or "") .. (r.wanted.note and (" (" .. r.wanted.note .. ")") or ""))
             end
         elseif op == "D" then
@@ -2604,11 +2604,11 @@ do
             local w = r and r.wanted
             if w and not w.claimed and (tt(f[4]) or 0) == (w.t or 0) then
                 w.claimed = { by = Clean(f[2], 40) or from, t = tt(f[3]) or time() }
-                Print("|cffffa000Bounty claimed|r: " .. (r.name or key) .. " by " .. w.claimed.by
+                Warn("Bounty claimed: " .. (r.name or key) .. " by " .. w.claimed.by
                     .. (ns.WantedReward(w) and (" – " .. ns.WantedReward(w)) or "") .. (w.by and (", from " .. w.by) or ""))
             end
         end
-        if ns.RefreshUI then ns.RefreshUI() end
+        if ns.RefreshUI then ns.RefreshUI() end; if ns.RefreshHistory then ns.RefreshHistory() end
     end
 
     -- Someone logged in: everyone sends what they know, a few seconds apart, skipping what was just sent.
