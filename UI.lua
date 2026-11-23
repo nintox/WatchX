@@ -823,6 +823,8 @@ local function BuildSettings()
     module("Buff warnings", "before and when a buff runs out",
         function() return db().buffWarn ~= false end, function(v) db().buffWarn = v end,
         function() ns.OpenBuffSettings() end)
+    module("Eating & drinking timer", "time left and how much health / mana you'll get, mid-screen",
+        function() return db().eatTimer ~= false end, function(v) db().eatTimer = v; if ns.RefreshEating then ns.RefreshEating() end end)
     module("Spots on the map", "where to stand for the rares you watch",
         function() return db().mapSpots ~= false end,
         function(v) db().mapSpots = v; ns.Safe("map pins", ns.UpdateMapPins) end)
@@ -3031,6 +3033,7 @@ function ns.StartMove()
     ns.UpdateTargetButton()
     if ns.NearbyMove then ns.NearbyMove(true) end
     if ns.LevelMove then ns.LevelMove(true) end
+    if ns.EatingMove then ns.EatingMove(true) end
 end
 
 function ns.ToggleUnlock()
@@ -3052,6 +3055,7 @@ function ns.StopMove()
     if lockBar then lockBar:Hide() end
     if ns.NearbyMove then ns.NearbyMove(false) end
     if ns.LevelMove then ns.LevelMove(false) end
+    if ns.EatingMove then ns.EatingMove(false) end
     ns.Print("Locked.")
     ns.RefreshUI()
     ns.UpdateTargetButton()
@@ -5188,6 +5192,173 @@ end
         ns.RefreshXPBar()
     end) end)
 end)()
+
+-- ---------------------------------------------------------------- eating & drinking timer
+-- While you eat or drink: the buff's icon and the seconds left in the middle of the screen, and how much more health
+-- or mana you'll get – and whether you'll be full. The rate comes from the buff's text ("... mana per second"), or is
+-- measured while you sit. Moves with the other bars (Unlock). Its own function: the main chunk is at the locals limit.
+do (function()
+    local f, ft
+    local KINDS = { Food = "hp", Drink = "mp", ["Food & Drink"] = "both", Refreshment = "both" }
+    local seen = {}   -- kind -> { start value, start time } while it's up
+
+    local function N(v) if issecretvalue and v ~= nil and issecretvalue(v) then return nil end return tonumber(v) end
+    local function Short(n)
+        n = math.floor(n + 0.5)
+        if n >= 10000 then return ("%.1fk"):format(n / 1000) end
+        return tostring(n):reverse():gsub("(%d%d%d)", "%1,"):reverse():gsub("^,", "")
+    end
+    -- "Restores 151 mana per second." / "Restoring 4410 mana over 30 sec." / "... 45 health every 3 sec."
+    local function RateFromText(i, what)
+        if not (C_TooltipInfo and C_TooltipInfo.GetUnitAura) then return nil end
+        local ok, data = pcall(C_TooltipInfo.GetUnitAura, "player", i, "HELPFUL")
+        if not ok or type(data) ~= "table" then return nil end
+        for _, line in ipairs(data.lines or {}) do
+            local t = line.leftText
+            if type(t) == "string" and not (issecretvalue and issecretvalue(t)) then
+                t = t:lower():gsub(",", "")
+                local n = tonumber(t:match("(%d+) " .. what .. " per second"))
+                if n then return n end
+                local m, sec = t:match("(%d+) " .. what .. " every (%d+%.?%d*) sec")
+                if m then return tonumber(m) / math.max(1, tonumber(sec)) end
+                local tot, over = t:match("(%d+) " .. what .. " over (%d+%.?%d*) sec")
+                if tot then return tonumber(tot) / math.max(1, tonumber(over)), true end
+            end
+        end
+    end
+
+    local function Find()
+        local out = {}
+        if not (C_UnitAuras and C_UnitAuras.GetAuraDataByIndex) then return out end
+        for i = 1, 40 do
+            local ok, a = pcall(C_UnitAuras.GetAuraDataByIndex, "player", i, "HELPFUL")
+            if not ok or type(a) ~= "table" then break end
+            local name = a.name
+            if issecretvalue and issecretvalue(name) then name = nil end
+            local kind = name and KINDS[name]
+            if kind then
+                local left = N(a.expirationTime) and math.max(0, N(a.expirationTime) - GetTime()) or nil
+                out[#out + 1] = { kind = kind, index = i, icon = a.icon, left = left, dur = N(a.duration) }
+            end
+        end
+        return out
+    end
+
+    local function Row(parent, y)
+        local r = CreateFrame("Frame", nil, parent)
+        r:SetSize(230, 32)
+        r:SetPoint("TOPLEFT", parent, "TOPLEFT", 6, y)
+        r.icon = r:CreateTexture(nil, "ARTWORK")
+        r.icon:SetSize(28, 28)
+        r.icon:SetPoint("LEFT", r, "LEFT", 0, 0)
+        r.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+        r.time = r:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+        r.time:SetPoint("LEFT", r.icon, "RIGHT", 8, 0)
+        r.time:SetWidth(44)
+        r.time:SetJustifyH("LEFT")
+        r.info = r:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        r.info:SetPoint("LEFT", r.time, "RIGHT", 2, 0)
+        r.info:SetPoint("RIGHT", r, "RIGHT", -4, 0)
+        r.info:SetJustifyH("LEFT")
+        r.info:SetWordWrap(false)
+        return r
+    end
+
+    local function Build()
+        f = CreateFrame("Frame", "WatchXEating", UIParent)
+        f:SetFrameStrata("MEDIUM")
+        f:SetSize(242, 44)
+        f:SetClampedToScreen(true)
+        f:SetMovable(true)
+        f:EnableMouse(false)
+        f:RegisterForDrag("LeftButton")
+        LoadPoint(f, "eatPoint", { "CENTER", "CENTER", 0, -170 })
+        Flat(f)
+        f.rows = { Row(f, -6), Row(f, -40) }
+        f:SetScript("OnDragStart", function(self) if moving then self:StartMoving() end end)
+        f:SetScript("OnDragStop", function(self)
+            self:StopMovingOrSizing()
+            if ns.Snap then ns.Snap(self) end
+            SavePoint(self, "eatPoint")
+        end)
+        local t = 0
+        f:SetScript("OnUpdate", ns.Timed(function(self, elapsed)
+            t = t + elapsed
+            if t < 0.25 then return end
+            t = 0
+            ns.RefreshEating()
+        end, "eating timer"))
+        f:Hide()
+    end
+
+    -- One line: the power it restores (0 health, 0 mana), what's left of the buff, and how far it'll get you.
+    local function Paint(r, a, what, label, color)
+        local cur = what == "mp" and N(UnitPower("player", 0)) or N(UnitHealth("player"))
+        local max = what == "mp" and N(UnitPowerMax("player", 0)) or N(UnitHealthMax("player"))
+        r.icon:SetTexture(a.icon or (what == "mp" and "Interface\\Icons\\INV_Drink_07" or "Interface\\Icons\\INV_Misc_Food_15"))
+        r.time:SetText(a.left and (math.ceil(a.left) .. "s") or "")
+        if not (cur and max and max > 0) then r.info:SetText("") return end
+        local s = seen[what]
+        if not s then s = { v = cur, t = GetTime() }; seen[what] = s end
+        if cur < s.v then s.v, s.t = cur, GetTime() end   -- took damage / cast: measure from here
+        local rate = a.index and RateFromText(a.index, label)   -- per second ("X over Y sec" is divided already)
+        if not rate and GetTime() - s.t >= 2 then rate = (cur - s.v) / (GetTime() - s.t) end
+        local missing = max - cur
+        if missing <= 0 then
+            r.info:SetText(color .. "full|r")
+        elseif rate and rate > 0 and a.left then
+            local more = math.min(missing, rate * a.left)
+            local fullIn = missing / rate
+            r.info:SetText(color .. "+" .. Short(more) .. " " .. label .. "|r  " .. (fullIn <= a.left
+                and ("|cff40ff40full in " .. math.ceil(fullIn) .. "s|r") or ("|cffaaaaaa" .. Short(missing - more) .. " short|r")))
+        else
+            r.info:SetText("|cffaaaaaa" .. Short(missing) .. " " .. label .. " to go|r")
+        end
+    end
+
+    function ns.RefreshEating()
+        if not ns.db then return end
+        if db().eatTimer == false and not moving then
+            if f then f:Hide() end
+            return
+        end
+        local list = Find()
+        if #list == 0 and not moving then
+            wipe(seen)
+            if f then f:Hide() end
+            return
+        end
+        if not f then Build() end
+        local lines = {}
+        for _, a in ipairs(list) do
+            if a.kind == "hp" or a.kind == "both" then lines[#lines + 1] = { a, "hp", "health", "|cff40ff40" } end
+            if a.kind == "mp" or a.kind == "both" then lines[#lines + 1] = { a, "mp", "mana", "|cff60a0ff" } end
+        end
+        if #lines == 0 and moving then   -- unlocked: an example to place it by
+            lines[1] = { { icon = "Interface\\Icons\\INV_Drink_07", left = 18 }, "mp", "mana", "|cff60a0ff" }
+        end
+        for i, r in ipairs(f.rows) do
+            local l = lines[i]
+            if l then Paint(r, l[1], l[2], l[3], l[4]); r:Show() else r:Hide() end
+        end
+        f:SetHeight(12 + math.min(2, #lines) * 34)
+        f:EnableMouse(moving and true or false)
+        f:Show()
+        if moving then
+            ft = ft or MakeLabel("WatchXEatingLabel")
+            ft:Set(f, "|cffffd100Eating & drinking|r · drag to move")
+        elseif ft then
+            ft:Hide()
+        end
+    end
+    function ns.EatingMove() ns.RefreshEating() end
+
+    local ev = CreateFrame("Frame")
+    if not pcall(ev.RegisterUnitEvent, ev, "UNIT_AURA", "player") then ev:RegisterEvent("UNIT_AURA") end
+    ev:SetScript("OnEvent", function(_, _, unit)
+        if unit == "player" then ns.Safe("eating timer", ns.RefreshEating) end
+    end)
+end)() end
 
 -- Settings > WatchX > XP boosts
 local levelPage, levelCategory
