@@ -1612,12 +1612,17 @@ function ns.RefreshHistory()
                     it.reward, it.by, it.posted = w.copper or 0, (w.by or "~"):lower(), w.t or 0
                     it.status = w.paid and "4" or w.claimed and "3" or "1"
                     it.note = (w.note or "~"):lower()
+                    local mine = ns.WantedMine(w)
+                    it.group = (w.claimed and not w.paid and mine) and 1
+                        or (w.claimed and not w.paid and w.claimed.by == (ns.MyName and ns.MyName())) and 2
+                        or (not w.claimed) and 3 or (not w.paid) and 4 or 5
                 end
             end
         end
     end
     local sk, desc = srt[1], srt[2]
     table.sort(items, function(a, b)
+        if wantedTab and a.group ~= b.group then return (a.group or 9) < (b.group or 9) end   -- what you owe first
         local va, vb = a[sk], b[sk]
         if type(va) == "string" then va, vb = va:lower(), tostring(vb or ""):lower() end
         if va == vb then return (a.lastSeen or 0) > (b.lastSeen or 0) end
@@ -1669,6 +1674,15 @@ function ns.RefreshHistory()
                 end
                 local v = { r.name or it.key, ns.WantedReward(w) or "?",
                     mine and "|cffffd100you|r" or (w.by or "?"), w.t and ns.AgoLong(now - w.t) or "-", status, w.note or "" }
+                if it.group == 1 then        -- you owe it: orange row, can't be missed
+                    row.bar:SetColorTexture(0.45, 0.18, 0.04, 0.95)
+                    row.edge:SetColorTexture(1, 0.5, 0.1, 1)
+                    v[5] = "|cffff9040YOU OWE|r  " .. ns.WantedReward(w) .. " to " .. (w.claimed.by or "?") .. "  |cffffd100– pay at a mailbox|r"
+                elseif it.group == 2 then    -- owed to you
+                    row.bar:SetColorTexture(0.32, 0.26, 0.05, 0.95)
+                    row.edge:SetColorTexture(1, 0.82, 0, 1)
+                    v[5] = "|cffffd100OWED TO YOU|r  by " .. (w.by or "?") .. (w.claimed.zone and ("  |cffaaaaaa" .. w.claimed.zone .. "|r") or "")
+                end
                 for c = 1, #WCOLS do row.cells[c]:SetText(v[c]); row.cells[c]:SetTextColor(1, 1, 1) end
                 for c = #WCOLS + 1, #row.cells do row.cells[c]:SetText("") end
                 row.cells[1]:SetTextColor(cr, cg, cb)
@@ -1684,7 +1698,15 @@ function ns.RefreshHistory()
     end
     for i = n + 1, #f.rows do f.rows[i]:Hide() end
     f.child:SetHeight(math.max(10, n * HIST_ROW_H))
-    f.count:SetText("Showing " .. #items .. " of " .. total .. (guildsTab and " guilds" or " players")
+    local owe, oweC = 0, 0
+    if wantedTab then
+        for _, it in ipairs(items) do
+            if it.group == 1 then owe, oweC = owe + 1, oweC + (it.r.wanted.copper or 0) end
+        end
+    end
+    f.count:SetText((owe > 0 and ("|cffff9040You owe " .. owe .. (owe == 1 and " bounty" or " bounties") .. ": "
+            .. (ns.Money and ns.Money(oweC) or oweC) .. "|r   ") or "")
+        .. "Showing " .. #items .. " of " .. total .. (guildsTab and " guilds" or " players")
         .. (#items > HIST_MAX and (" (first " .. HIST_MAX .. ")") or ""))
 end
 

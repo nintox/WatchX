@@ -2637,6 +2637,8 @@ end
         return true
     end
 
+    ns.MyName = Me
+
     -- Is this bounty yours? Only the one who put it up can change it or take it down.
     function ns.WantedMine(w) return w and (w.by == nil or w.by == Me()) end
 
