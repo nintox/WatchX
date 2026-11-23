@@ -85,7 +85,8 @@ if ! launchctl bootstrap "gui/$(id -u)" "$PLIST" 2>/dev/null; then
 fi
 sleep 2
 
-if launchctl list | grep -q "$LABEL"; then
+# loaded and really running (a loaded job that stopped would pass "launchctl list")
+if launchctl print "gui/$(id -u)/$LABEL" 2>/dev/null | grep -q "state = running"; then
     echo "✅ The bridge is installed and running in the background."
     echo "   It starts automatically when you log in to your Mac."
 else

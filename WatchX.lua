@@ -2183,6 +2183,7 @@ function ns.LevelStatus()
     if since < 1 and not (statusCache.dirty and since >= 0.3) then return statusCache.rows end
     statusCache.rows = ComputeLevelStatus()
     statusCache.at, statusCache.dirty = GetTime(), false
+    ns.levelVersion = (ns.levelVersion or 0) + 1   -- the icons repaint when this changes
     return statusCache.rows
 end
 

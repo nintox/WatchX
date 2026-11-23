@@ -93,17 +93,43 @@ urlencode() {  # byte by byte (bash 3.2 on macOS can't do UTF-8 bytes itself)
 }
 
 curl_code() {  # <curl args...>  -> prints HTTP status, retries on network errors / 429 / 5xx
-    local code i
+    local code i wait hdr="$WORK/headers.$$"
     for i in 1 2; do
-        code="$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 15 -A "$UA" "$@")"
+        code="$(curl -s -o /dev/null -D "$hdr" -w '%{http_code}' --connect-timeout 5 --max-time 15 -A "$UA" "$@")"
         case "$code" in
             2*) break ;;
-            429) ;;
-            4*) break ;;
+            4*) [ "$code" = 429 ] || break ;;
         esac
-        sleep "$i"
+        [ "$i" = 2 ] && break
+        wait="$i"
+        if [ "$code" = 429 ]; then   # too many: wait as long as the server says (up to 10 s)
+            wait="$(tr -d '\r' < "$hdr" 2>/dev/null | sed -n 's/^[Rr]etry-[Aa]fter: *\([0-9][0-9]*\).*/\1/p' | head -n 1)"
+            [ -n "$wait" ] || wait=1
+            [ "$wait" -gt 10 ] && wait=10
+            wait=$((wait + 1))
+        fi
+        sleep "$wait"
     done
+    rm -f "$hdr"
     echo "$code"
+}
+
+# The address and token go to curl in a small file only you can read, not on its command line (where any user's
+# `ps` would show the webhook, the topic or the token while it sends).
+cfg_escape() { local s="${1//\\/\\\\}"; printf '%s' "${s//\"/\\\"}"; }
+secret_cfg() {  # <url> [bearer token] -> prints the file's path (remove it after)
+    local f="$WORK/req.$$.$RANDOM"
+    ( umask 077
+      printf 'url = "%s"\n' "$(cfg_escape "$1")" > "$f"
+      [ -n "$2" ] && printf 'header = "Authorization: Bearer %s"\n' "$(cfg_escape "$2")" >> "$f" )
+    printf '%s' "$f"
+}
+
+late_note() {  # <id>  -> " (late: N min)" when the alert is over 2 minutes old (the id starts with its time)
+    local id="$1" age
+    [ ${#id} -ge 4 ] && [ ${#id} -le 16 ] || return
+    age=$(( $(date +%s) - 10#${id:0:${#id}-3} ))
+    [ "$age" -gt 120 ] && printf ' (late: %d min)' $((age / 60))
 }
 
 already_sent() { grep -qx "$1" "$SENT_FILE" 2>/dev/null; }
@@ -142,24 +168,28 @@ notify() {  # <kind> <subject> <text> [image]
     local mention=""
     case "$kind" in SPAWN|LOOT|ENEMY|PLAYER|ATTACK|AFK|LOGOUT|OFFLINE) mention="$DISCORD_MENTION " ;; esac
 
+    local cfg
     if [ -n "$NTFY_URL" ]; then
-        local url="${NTFY_URL%/}" auth=()
-        [ -n "$NTFY_TOKEN" ] && auth=(-H "Authorization: Bearer $NTFY_TOKEN")
+        local url="${NTFY_URL%/}"
         code=""
         if [ -n "$image" ]; then
             # the picture as the body, the rest as query parameters (UTF-8 safe)
             local q="title=$(urlencode "$title")&message=$(urlencode "$text")&priority=$prio&tags=$(urlencode "$tags")&filename=watchx.jpg"
-            code="$(curl_code -T "$image" "${auth[@]}" "$url?$q")"
+            cfg="$(secret_cfg "$url?$q" "$NTFY_TOKEN")"
+            code="$(curl_code -T "$image" -K "$cfg")"; rm -f "$cfg"
             log "  ntfy (with screenshot) -> $code"
         fi
         case "$code" in
             2*) ;;
-            *)
+            429) log "  ntfy: too many requests – not sent again" ;;
+            ""|4*)   # no picture, or the picture refused (too big…): the text alone
                 local server="${url%/*}" topic="${url##*/}" jtags
                 jtags="\"${tags//,/\",\"}\""
                 local json="{\"topic\":\"$(json_escape "$topic")\",\"title\":\"$(json_escape "$title")\",\"message\":\"$(json_escape "$text")\",\"priority\":$prio,\"tags\":[$jtags]}"
-                log "  ntfy -> $(curl_code -H 'Content-Type: application/json' --data-binary "$json" "${auth[@]}" "$server/")"
+                cfg="$(secret_cfg "$server/" "$NTFY_TOKEN")"
+                log "  ntfy -> $(curl_code -H 'Content-Type: application/json' --data-binary "$json" -K "$cfg")"; rm -f "$cfg"
                 ;;
+            *) log "  ntfy: not sent again without the picture (it may have arrived; or no network)" ;;
         esac
     fi
     if [ -n "$DISCORD_WEBHOOK" ]; then
@@ -167,12 +197,16 @@ notify() {  # <kind> <subject> <text> [image]
         local payload="{\"content\":\"$(json_escape "$content")\"}"
         code=""
         if [ -n "$image" ]; then
-            code="$(curl_code --form-string "payload_json=$payload" -F "files[0]=@$image;filename=watchx.jpg;type=image/jpeg" "$DISCORD_WEBHOOK")"
+            cfg="$(secret_cfg "$DISCORD_WEBHOOK")"
+            code="$(curl_code --form-string "payload_json=$payload" -F "files[0]=@$image;filename=watchx.jpg;type=image/jpeg" -K "$cfg")"; rm -f "$cfg"
             log "  discord (with screenshot) -> $code"
         fi
         case "$code" in
             2*) ;;
-            *) log "  discord -> $(curl_code -H 'Content-Type: application/json' --data-binary "$payload" "$DISCORD_WEBHOOK")" ;;
+            429) log "  discord: too many requests – not sent again" ;;
+            ""|4*) cfg="$(secret_cfg "$DISCORD_WEBHOOK")"
+                   log "  discord -> $(curl_code -H 'Content-Type: application/json' --data-binary "$payload" -K "$cfg")"; rm -f "$cfg" ;;
+            *) log "  discord: not sent again without the picture (it may have arrived; or no network)" ;;
         esac
     fi
 }
@@ -197,6 +231,7 @@ process_shot() {  # <file>
     IFS=$'\t' read -r _ kind id subject text <<< "$out"
     already_sent "$id" && return
     mark_sent "$id"
+    text="$text$(late_note "$id")"
     log "$kind (instant): $subject – $text"
     # wait until WoW has finished writing the file, then a smaller copy for the phone
     s1=""
@@ -331,10 +366,10 @@ watch_chatlog() {
         # the id is the time + 3 digits: an old line (or a strange id) is skipped
         { [ ${#id} -ge 4 ] && [ ${#id} -le 16 ]; } || continue
         now="$(date +%s)"
-        [ $((now - 10#${id:0:${#id}-3})) -gt 600 ] && continue
+        [ $((now - 10#${id:0:${#id}-3})) -gt 1800 ] && continue   # (WoW writes this file late: up to 30 min is kept)
         already_sent "$id" && continue   # sent instantly already (or a whisper logged twice)
         mark_sent "$id"
-        subject="${rest%%::*}" text="${rest#*::}"
+        subject="${rest%%::*}" text="${rest#*::}$(late_note "$id")"
         log "$kind (chat log): $text"
         notify "$kind" "$subject" "$text"
     done < <(exec tail -n 0 -F "$CHATLOG" 2>/dev/null)

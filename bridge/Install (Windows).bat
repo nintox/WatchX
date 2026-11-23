@@ -25,7 +25,8 @@ echo The bridge is installed and running in the background (%LOCALAPPDATA%\Watch
 echo It starts automatically when you log in to Windows.
 echo.
 echo --- Status ---
-type "%LOCALAPPDATA%\WatchX-bridge.log" 2>nul
+rem the last lines only (the log keeps every alert)
+powershell -NoProfile -Command "Get-Content -LiteralPath (Join-Path $env:LOCALAPPDATA 'WatchX-bridge.log') -Tail 15 -ErrorAction SilentlyContinue"
 echo --------------
 echo.
 echo Next step in game: type /wx and press Settings, paste your

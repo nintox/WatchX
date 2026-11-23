@@ -14,16 +14,25 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
-    env:
-      CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
-      GH_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
+      - name: The tag matches the version in WatchX.toc
+        run: |
+          v="$(sed -n 's/^## Version: *//p' WatchX.toc | tr -d '\r')"
+          if [ "v$v" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::The tag is $GITHUB_REF_NAME but WatchX.toc says $v"
+            exit 1
+          fi
+
+      # pinned to a commit (it gets the upload tokens; a moved tag can't change what runs), the tokens for this step only
       - name: Package the addon (CurseForge + GitHub release)
-        uses: BigWigsMods/packager@v2
+        uses: BigWigsMods/packager@01e8631a69c69d7654c788d152630d5fed9e3812   # v2 (2026-11-05)
+        env:
+          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          GH_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Add WatchX-Bridge.zip to the release
         env:

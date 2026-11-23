@@ -176,13 +176,21 @@ function Send-Request([string]$url, [string]$method, [byte[]]$body, [string]$con
             return [int]$r.StatusCode
         } catch {
             $code = 0
-            if ($_.Exception.Response) { $code = [int]$_.Exception.Response.StatusCode }
+            $wait = $i
+            if ($_.Exception.Response) {
+                $code = [int]$_.Exception.Response.StatusCode
+                if ($code -eq 429) {   # too many: wait as long as the server says (up to 10 s)
+                    $ra = 0
+                    try { $ra = [int][double]$_.Exception.Response.Headers['Retry-After'] } catch {}
+                    $wait = [math]::Min([math]::Max($ra, 1), 10) + 1
+                }
+            }
             Log "  Error ($code): $($_.Exception.Message)"
             if ($code -ge 400 -and $code -lt 500 -and $code -ne 429) { return $code }
         }
-        Start-Sleep -Seconds $i
+        if ($i -lt 2) { Start-Sleep -Seconds $wait }
     }
-    return 0
+    return $code
 }
 
 function Send-Json([string]$url, $obj, [string]$token) {
@@ -232,7 +240,8 @@ function Send-Notification([string]$kind, [string]$subject, [string]$text, [stri
             $code = Send-Request "${url}?$q" 'Put' $bytes 'image/jpeg' $headers
             Log "  ntfy (with screenshot) -> $code"
         }
-        if ($code -lt 200 -or $code -ge 300) {
+        # the text alone: no picture, or the picture refused (too big…) – not after a time-out (it may have arrived)
+        if (-not $bytes -or ($code -ge 400 -and $code -lt 500 -and $code -ne 429)) {
             $cut = $url.LastIndexOf('/')
             $obj = [ordered]@{ topic = $url.Substring($cut + 1); title = $title; message = $text; priority = $prio; tags = $tags }
             Log "  ntfy -> $(Send-Json "$($url.Substring(0, $cut))/" $obj $s.ntfyToken)"
@@ -257,7 +266,7 @@ function Send-Notification([string]$kind, [string]$subject, [string]$text, [stri
             $code = Send-Request $s.discordWebhook 'Post' $ms.ToArray() "multipart/form-data; boundary=$b" @{}
             Log "  discord (with screenshot) -> $code"
         }
-        if ($code -lt 200 -or $code -ge 300) {
+        if (-not $bytes -or ($code -ge 400 -and $code -lt 500 -and $code -ne 429)) {
             Log "  discord -> $(Send-Json $s.discordWebhook @{ content = $content } '')"
         }
     }
@@ -387,6 +396,11 @@ function Process-Shot([string]$path) {
     if (-not ($res -is [hashtable])) { return }
     if ($script:Sent.Contains($res.id)) { return }
     Mark-Sent $res.id
+    # held up (a slow network before it): over 2 minutes late, it says so
+    try {
+        $age = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - [long]$res.id.Substring(0, $res.id.Length - 3)
+        if ($age -gt 120) { $res.text += " (late: $([math]::Floor($age / 60)) min)" }
+    } catch {}
     Log "$($res.kind) (instant): $($res.subject) – $($res.text)"
     # wait until WoW has finished writing the file
     $s1 = -2
@@ -531,12 +545,14 @@ function Check-ChatLog {
             }
             # the id is the time + 3 digits: an old line (or a strange id) is skipped
             if ($id.Length -lt 4 -or $id.Length -gt 16) { continue }
-            if (([DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - [long]$id.Substring(0, $id.Length - 3)) -gt 600) { continue }
+            $age = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - [long]$id.Substring(0, $id.Length - 3)
+            if ($age -gt 1800) { continue }   # (WoW writes this file late: up to 30 min is kept)
             if ($script:Sent.Contains($id)) { continue }   # sent instantly already (or a whisper logged twice)
             Mark-Sent $id
             $cut = $rest.IndexOf('::')
             if ($cut -ge 0) { $subject = $rest.Substring(0, $cut); $text = $rest.Substring($cut + 2) }
             else { $subject = 'WatchX'; $text = $rest }
+            if ($age -gt 120) { $text += " (late: $([math]::Floor($age / 60)) min)" }
             Log "$kind (chat log): $text"
             Send-Notification $kind $subject $text
         }

@@ -877,7 +877,18 @@ local function BuildSettings()
         function() return not db().minimap.hide end, function(v) ns.SetMinimapShown(v) end)
 
     section("PHONE")
-    field("ntfyUrl", "ntfy link", "From the ntfy app, e.g. ntfy.sh/your-secret-topic")
+    -- (a bit shorter: room for the "New topic" button – anyone who knows a topic can read it, screenshots too)
+    local ntfyBox = field("ntfyUrl", "ntfy link", "From the ntfy app, e.g. ntfy.sh/your-secret-topic. Anyone who knows the "
+        .. "topic can read its alerts (screenshots too): make it long and secret – \"New topic\" picks one.", nil, nil, W - 130 - 96)
+    local newTopic = Button(o, "New topic", 90, 20, function()
+        local chars, t = "abcdefghijkmnpqrstuvwxyz23456789", {}
+        for i = 1, 16 do local n = math.random(1, #chars); t[i] = chars:sub(n, n) end
+        ntfyBox:SetText("ntfy.sh/wx-" .. table.concat(t))
+        ntfyBox:Store()
+        ns.Print("New ntfy topic: |cffffd100" .. ntfyBox:GetText() .. "|r – subscribe to it in the ntfy app (+, the part "
+            .. "after ntfy.sh/), then Save & reload.")
+    end)
+    newTopic:SetPoint("LEFT", ntfyBox, "RIGHT", 6, 0)
     y = y - 28
     field("discordWebhook", "Discord webhook", "Server Settings > Integrations > Webhooks > Copy Webhook URL")
     y = y - 28
@@ -2630,7 +2641,10 @@ local alertSpot   -- the stand-in shown while moving the alert's own spot
 local function ClampScale(v) return math.floor(math.min(2.5, math.max(0.6, v or 1)) * 100 + 0.5) / 100 end
 local function MiniScale() return ClampScale(db().miniScale) end
 local function AlertScale() return OwnSpot() and ClampScale(db().alertScale) or MiniScale() end
-local function AlertWidth() return (OwnSpot() and db().alertWidth or db().miniWidth) or 0 end
+local function AlertWidth()   -- its own spot: its own width (as the unlock preview shows it); else the mini bar's
+    if OwnSpot() then return db().alertWidth or 0 end
+    return db().miniWidth or 0
+end
 local function Pct(sc) return math.floor(sc * 100 + 0.5) .. "%" end
 -- The mini bar's centre x, top and bottom in UIParent units (it may be scaled).
 local function MiniRect()
@@ -4046,10 +4060,14 @@ function ns.UpdateTargetButton()
             if not x then x, top = UIParent:GetWidth() / 2, UIParent:GetHeight() - 100 end
         end
         local sc = AlertScale()
-        targetBtn:SetScale(sc)
-        targetBtn:ClearAllPoints()
-        targetBtn:SetPoint("TOP", UIParent, "BOTTOMLEFT", x / sc, top / sc)
-        targetBtn:Show()
+        local spot = math.floor(x + 0.5) .. ":" .. math.floor(top + 0.5) .. ":" .. sc
+        if targetBtn.spot ~= spot or not targetBtn:IsShown() then   -- placed again only when its spot moved
+            targetBtn.spot = spot
+            targetBtn:SetScale(sc)
+            targetBtn:ClearAllPoints()
+            targetBtn:SetPoint("TOP", UIParent, "BOTTOMLEFT", x / sc, top / sc)
+            targetBtn:Show()
+        end
     else
         targetBtn:Hide()
     end
@@ -4319,15 +4337,19 @@ do   -- (its own block: UI.lua is near Lua's 200-locals limit)
 local spotPins = {}
 
 local function ZoneMapID(preset)
+    if preset.mapFound then return preset.mapFound end   -- looked up once, found or not (a miss isn't searched again)
+    local id = preset.mapID
     if C_Map and C_Map.GetMapInfo then
         local info = C_Map.GetMapInfo(preset.mapID)
-        if info and info.name == preset.zone then return preset.mapID end
-        for id = 1, 2500 do   -- another client: find the zone by name (once)
-            local i = C_Map.GetMapInfo(id)
-            if i and i.name == preset.zone and (i.mapType == 3 or i.mapType == nil) then preset.mapID = id; return id end
+        if not (info and info.name == preset.zone) then
+            for i = 1, 2500 do   -- another client: find the zone by name
+                local m = C_Map.GetMapInfo(i)
+                if m and m.name == preset.zone and (m.mapType == 3 or m.mapType == nil) then id = i; break end
+            end
         end
     end
-    return preset.mapID
+    preset.mapFound = id
+    return id
 end
 
 local function SpotPin(preset, i, spot, mini)
@@ -5011,7 +5033,7 @@ function ns.RefreshLevel()
         return
     end
     -- nothing new since last time (the list is worked out once a second): leave it be
-    local key = tostring(all) .. tostring(moving) .. tostring(d.levelMissing)
+    local key = tostring(ns.levelVersion) .. tostring(moving) .. tostring(d.levelMissing)   -- (a count: never a reused table)
     if lv.painted == key and lv:IsShown() then return end
     lv.painted = key
     for i, b in ipairs(lv.icons) do
