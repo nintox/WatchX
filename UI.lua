@@ -4675,22 +4675,24 @@ local function BuildLevel()
         SavePoint(self, "levelPoint")
         LevelLabel()
     end)
-    -- the missing ones pulse (a red glow and the icon), about once a second
-    local t = 0
-    f:SetScript("OnUpdate", ns.Timed(function(self, elapsed)
-        t = t + elapsed
-        local on = db().levelFlash ~= false and not moving
-        local wave = (math.sin(t * 5) + 1) / 2   -- 0..1
-        for _, b in ipairs(self.icons) do
-            if b.flashing and on then
-                b.flash:SetAlpha(0.05 + wave * 0.35)
-                b.border:SetAlpha(0.4 + wave * 0.6)
-            elseif b.flash:GetAlpha() ~= 0 then
-                b.flash:SetAlpha(0)
-                b.border:SetAlpha(1)
-            end
+    -- the missing ones pulse (a red glow and the edge), about once a second: the game's own animation, so it
+    -- costs no Lua time at all (it used to be an OnUpdate every frame)
+    for _, b in ipairs(f.icons) do
+        local function Pulse(tex, from, to)
+            if not tex.CreateAnimationGroup then return nil end
+            local ag = tex:CreateAnimationGroup()
+            if not ag then return nil end
+            ag:SetLooping("BOUNCE")
+            local an = ag:CreateAnimation("Alpha")
+            an:SetFromAlpha(from)
+            an:SetToAlpha(to)
+            an:SetDuration(0.63)
+            if an.SetSmoothing then an:SetSmoothing("IN_OUT") end
+            return ag
         end
-    end, "XP icons pulse"))
+        b.pulse1 = Pulse(b.flash, 0.05, 0.4)
+        b.pulse2 = Pulse(b.border, 0.4, 1)
+    end
     -- any edge only changes the size (the icons keep their shape); the top-left corner stays put
     AddGrips(f, function(self, st, cx, cy)
         local sc
@@ -4726,6 +4728,12 @@ local function PaintLevelIcon(b, r)
         b.timer:SetText("")
     end
     b.flashing = r.state == "todo"
+    local pulse = b.flashing and db().levelFlash ~= false and not moving
+    for _, ag in ipairs({ b.pulse1 or false, b.pulse2 or false }) do
+        if ag then
+            if pulse and not ag:IsPlaying() then ag:Play() elseif not pulse and ag:IsPlaying() then ag:Stop() end
+        end
+    end
     if lvMenu and lvMenu:IsShown() and lvMenu.owner == b then OpenLevelMenu(b) end   -- keep the column current
 end
 
@@ -4776,6 +4784,8 @@ function ns.RefreshLevel()
             b:Show()
         else
             b.row, b.flashing = nil, false
+            if b.pulse1 then b.pulse1:Stop() end
+            if b.pulse2 then b.pulse2:Stop() end
             b:SetAttribute("macrotext1", "")
             b:Hide()
         end
@@ -5307,12 +5317,13 @@ do (function()
             SavePoint(self, "eatPoint")
         end)
         local t = 0
-        f:SetScript("OnUpdate", ns.Timed(function(self, elapsed)
+        local work = ns.Timed(function() ns.RefreshEating() end, "eating timer")
+        f:SetScript("OnUpdate", function(_, elapsed)
             t = t + elapsed
             if t < 0.1 then return end   -- the tenths tick
             t = 0
-            ns.RefreshEating()
-        end, "eating timer"))
+            work()
+        end)
         f:Hide()
     end
 
@@ -5448,6 +5459,8 @@ function ns.BuildLevelSettings()
         function() return db().levelFlash ~= false end, function(v) db().levelFlash = v end)
     check("Warn when a boost runs out", "mid-screen + sound: Well Fed, Well-Rested, tent and bag ready again",
         function() return db().levelWarn ~= false end, function(v) db().levelWarn = v end)
+    check("Warnings in cities and inns too", "off: quiet while you're resting in town",
+        function() return db().warnInCity == true end, function(v) db().warnInCity = v end)
     check("XP bar", "under the icons: XP, rested, quests, time this level, when you'll level",
         function() return db().xpBar ~= false end, function(v) db().xpBar = v; ns.RefreshXPBar() end)
     check("XP bar between the mini bar and Nearby", "just level and %, same width – the rest when you hover it",
@@ -5564,6 +5577,8 @@ function ns.BuildBuffSettings()
 
     check("Buff warnings", "mid-screen + sound + chat, also in combat",
         function() return db().buffWarn ~= false end, function(v) db().buffWarn = v end)
+    check("Also in cities and inns", "off: quiet while you're resting in town (same as on the XP boosts page)",
+        function() return db().warnInCity == true end, function(v) db().warnInCity = v end)
     -- warn [-] 1:00 [+] before it runs out
     local soonLab = page:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
     soonLab:SetPoint("TOPLEFT", page, "TOPLEFT", L + 2, y - 4)
@@ -5922,14 +5937,17 @@ local function InitPlates()
     f:SetScript("OnEvent", function(...) ns.Safe("nameplate icons", OnPlateEvent, ...) end)
     -- friendly players wait their turn for an inspect: one is asked every few seconds
     local wait = 0
-    f:SetScript("OnUpdate", ns.Timed(function(_, elapsed)
-        wait = wait + elapsed
-        if wait < 3 then return end
-        wait = 0
+    local work = ns.Timed(function()
         local d = db()
         if not (d.plateFriendly and d.plateHealer ~= false) or InCombatLockdown() then return end
         for unit in pairs(plateUnits) do ns.Safe("inspect", ns.MaybeInspect, unit) end
-    end, "nameplate icons tick"))
+    end, "nameplate icons tick")
+    f:SetScript("OnUpdate", function(_, elapsed)   -- every 3 s (only the work is timed, not every frame)
+        wait = wait + elapsed
+        if wait < 3 then return end
+        wait = 0
+        work()
+    end)
     if C_NamePlate and C_NamePlate.GetNamePlates then   -- plates already up (after a /reload)
         local ok, plates = pcall(C_NamePlate.GetNamePlates)
         for _, plate in ipairs(ok and type(plates) == "table" and plates or {}) do

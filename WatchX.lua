@@ -182,10 +182,16 @@ ns.Log = Log
 local reportedErrors = {}
 -- WatchX's own CPU time: every handler is timed once at its outermost call (debugprofilestop: microsecond clock,
 -- costs next to nothing). /wx mem shows it.
-ns.cpu = { ms = 0, by = {}, depth = 0, clock = debugprofilestop }   -- one table: the main chunk is at Lua's 200-locals limit
-function ns.cpu.Spent(label, dt)
-    ns.cpu.ms = ns.cpu.ms + dt
-    ns.cpu.by[label] = (ns.cpu.by[label] or 0) + dt
+-- Also the longest single call (a lag spike shows there, not in the average), calls over 5 ms, and the memory
+-- WatchX's own code allocates (garbage the game has to clear later).
+ns.cpu = { ms = 0, by = {}, depth = 0, clock = debugprofilestop, max = 0, spikes = 0, kb = 0 }   -- one table: locals limit
+function ns.cpu.Spent(label, dt, kb)
+    local C = ns.cpu
+    C.ms = C.ms + dt
+    C.by[label] = (C.by[label] or 0) + dt
+    if dt > C.max then C.max, C.maxLabel = dt, label end
+    if dt > 5 then C.spikes = C.spikes + 1 end
+    if kb and kb > 0 then C.kb = C.kb + kb end
 end
 function ns.Timed(fn, label)
     label = label or "other"
@@ -193,9 +199,9 @@ function ns.Timed(fn, label)
         local C = ns.cpu
         if not C.clock or C.depth > 0 then return fn(...) end
         C.depth = 1
-        local t0 = C.clock()
+        local t0, m0 = C.clock(), collectgarbage("count")
         local ok, a, b, c = pcall(fn, ...)
-        C.Spent(label, C.clock() - t0)
+        C.Spent(label, C.clock() - t0, collectgarbage("count") - m0)
         C.depth = 0
         if not ok then error(a, 0) end
         return a, b, c
@@ -205,10 +211,10 @@ end
 function ns.Safe(label, fn, ...)
     local C = ns.cpu
     local top = C.clock and C.depth == 0
-    local t0
-    if top then C.depth = 1; t0 = C.clock() end
+    local t0, m0
+    if top then C.depth = 1; t0, m0 = C.clock(), collectgarbage("count") end
     local ok, err = pcall(fn, ...)
-    if top then C.Spent(label or "other", C.clock() - t0); C.depth = 0 end
+    if top then C.Spent(label or "other", C.clock() - t0, collectgarbage("count") - m0); C.depth = 0 end
     if not ok then
         err = tostring(err)
         if Log then Log("error", label, err) end
@@ -1699,6 +1705,11 @@ local function Warn(msg)
     if PlaySound and SOUNDKIT then pcall(PlaySound, SOUNDKIT.RAID_WARNING, "Master") end
 end
 
+-- In a city or an inn (resting) the XP and buff warnings keep quiet: they're for when you're out playing.
+function ns.QuietHere()
+    return db and db.warnInCity ~= true and IsResting and Plain(IsResting()) == true
+end
+
 local function CheckBoosts(now)
     local was = lastBoost
     lastBoost = now
@@ -1724,6 +1735,7 @@ local function CheckBoosts(now)
     if gone("boost") and now.lowRested then pendingWarn.tent = "Camp Tent works again – your rested is under 5%." end
     if gone("bagCd") and not now.rested then pendingWarn.bagReady = "Your Cozy Sleeping Bag is ready again." end
     if InCombatLockdown() then return end
+    if ns.QuietHere() then wipe(pendingWarn) return end   -- in town: nothing to say
     for k, msg in pairs(pendingWarn) do
         Warn(msg)
         pendingWarn[k] = nil
@@ -2289,13 +2301,13 @@ function ns.CheckBuffs()
             if fight then BuffGoneNow(k, t, now) end   -- can't see it in a fight: by the clock it's gone
         elseif not t.soon and soon > 0 and left <= soon and t.dur > soon + 5 and not buffSelfRenew[k] then
             t.soon = true
-            Warn(BuffMsg(t, left))
+            if not ns.QuietHere() then Warn(BuffMsg(t, left)) end
         end
     end
     for k, p in pairs(buffPendingGone) do
         if now - p.at >= BUFF_GRACE then
             buffPendingGone[k] = nil
-            if db.buffGone ~= false then Warn(BuffMsg(p.t)) end
+            if db.buffGone ~= false and not ns.QuietHere() then Warn(BuffMsg(p.t)) end
         end
     end
 end
@@ -3279,18 +3291,22 @@ end
 -- Every second: scan nameplates and refresh the UI.
 local ticker = CreateFrame("Frame")
 local elapsed = 0
-ticker:SetScript("OnUpdate", ns.Timed(function(_, dt)
+local TickWork   -- the once-a-second work (timed); the frame-by-frame part below stays as small as it can be
+ticker:SetScript("OnUpdate", function(_, dt)
     if not db then return end
     elapsed = elapsed + dt
     if elapsed < 1 then return end
     elapsed = 0
+    TickWork()
+end)
+TickWork = ns.Timed(function()
     ns.Safe("scan", ScanNameplates)
     ns.Safe("afk", function() CheckCursor(); CheckAfk(); AfkTick() end)
     -- the XP boost warnings also work with the list switched off (the list reads it every second itself)
     if db.levelHelper == false and db.levelWarn ~= false then ns.Safe("xp boosts", ns.LevelStatus) end
     ns.Safe("buffs", ns.CheckBuffs)
     Refresh()
-end, "1 s ticker"))
+end, "1 s ticker")
 
 -- ---------------------------------------------------------------- events
 
@@ -3498,8 +3514,9 @@ local function OnSlash(input)
             .. ((db.levelHelper and not ns.LevelStatus()) and " (it only shows below level " .. ns.MaxLevel() .. ")" or ""))
         if ns.RefreshUI then ns.RefreshUI() end
     elseif (cmd == "mem" or cmd == "memory" or cmd == "cpu") and rest == "reset" then
-        ns.cpuStart, ns.cpu.ms, ns.cpu.by = GetTime(), 0, {}
-        Print("CPU clock reset – play a while, then type /wx mem.")
+        local C = ns.cpu
+        ns.cpuStart, C.ms, C.by, C.max, C.maxLabel, C.spikes, C.kb = GetTime(), 0, {}, 0, nil, 0, 0
+        Print("CPU clock reset – play a while (best: when it lags), then type /wx mem.")
     elseif cmd == "mem" or cmd == "memory" or cmd == "cpu" then
         -- how much memory WatchX uses right now, and what it keeps between sessions
         local Upd = (C_AddOns and C_AddOns.UpdateAddOnMemoryUsage) or UpdateAddOnMemoryUsage
@@ -3529,6 +3546,11 @@ local function OnSlash(input)
             end
             if #top > 0 then Print("|cffaaaaaaMost of it:|r " .. table.concat(top, "  ·  ")
                 .. "  |cffaaaaaa(/wx mem reset: measure from now, without the login)|r") end
+            local C = ns.cpu
+            local spikeCol = C.max > 16 and "|cffff4040" or C.max > 5 and "|cffffd100" or "|cff40ff40"
+            Print(("Longest single call: %s%.1f ms|r (%s)  ·  calls over 5 ms: %d  ·  garbage made: %.0f KB a second"):format(
+                spikeCol, C.max, C.maxLabel or "-", C.spikes, C.kb / up)
+                .. " |cffaaaaaa(a frame at 60 fps is 16.7 ms)|r")
         end
         local GetCPU = (C_AddOns and C_AddOns.GetAddOnCPUUsage) or GetAddOnCPUUsage
         if GetCVar("scriptProfile") == "1" and GetCPU then
