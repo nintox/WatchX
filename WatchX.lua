@@ -1588,12 +1588,17 @@ end
 local function IsXPFood(itemID, bag, slot)
     local known = xpFoodCache[itemID]
     if known == true then return true end
+    if db and type(db.xpFoods) == "table" and db.xpFoods[itemID] then xpFoodCache[itemID] = true return true end
     if type(known) == "number" and GetTime() < known then return false end
     if NOT_FOOD[itemID] or not IsConsumable(itemID) then xpFoodCache[itemID] = GetTime() + 3600 return false end
     local text = ItemTooltipText(itemID, bag, slot)
     if not text then bagState.pending = true return false end   -- not loaded yet: ask again a bit later
     local yes = IsXPText(text) or IsXPText(ItemSpellText(itemID))
     xpFoodCache[itemID] = yes or (GetTime() + 120)   -- a "no" is checked again in 2 minutes
+    if yes and db then   -- kept: inside instances the item text may not be readable
+        if type(db.xpFoods) ~= "table" then db.xpFoods = {} end
+        db.xpFoods[itemID] = true
+    end
     return yes
 end
 
@@ -1617,8 +1622,10 @@ local function XPFoodInBags()
     if not (C and C.GetContainerNumSlots and C.GetContainerItemInfo) then return nil end
     local total, best, bestN, bestID, byID, list = 0, nil, 0, nil, {}, {}
     local camp, campByID = {}, {}
+    local slots = 0
     for bag = 0, 4 do
         local okN, n = pcall(C.GetContainerNumSlots, bag)
+        slots = slots + (okN and tonumber(Plain(n)) or 0)
         for slot = 1, (okN and tonumber(Plain(n)) or 0) do
             local ok, info = pcall(C.GetContainerItemInfo, bag, slot)
             local id = ok and type(info) == "table" and not Secret(info) and Plain(info.itemID)
@@ -1646,6 +1653,7 @@ local function XPFoodInBags()
         end
     end
     table.sort(list, function(a, b) return a.count > b.count end)
+    if slots == 0 then return nil end   -- the bags aren't there yet (a loading screen): can't tell
     return total, best, bestID, list, camp
 end
 
@@ -1714,11 +1722,14 @@ end
 local foodCache = {}
 local function ReadBags()
     local now = GetTime()
+    if bagState.loadingUntil and now < bagState.loadingUntil then return end   -- just after a loading screen
     local since = now - bagState.at
     if not ((bagState.dirty and since >= 1) or (bagState.pending and since >= 15) or since >= 120) then return end
     bagState.dirty, bagState.pending, bagState.at = false, false, now
     wipe(countCache)
-    foodCache = { XPFoodInBags() }
+    local fresh = { XPFoodInBags() }
+    if fresh[1] == nil and foodCache and foodCache[1] then bagState.pending = true return end   -- keep the last good one
+    foodCache = fresh
 end
 
 function ns.LevelDirty() statusCache.dirty = true; bagState.dirty = true end
@@ -1910,6 +1921,8 @@ if CreateFrame then
         elseif event == "PLAYER_XP_UPDATE" or event == "UPDATE_EXHAUSTION" or event == "PLAYER_LEVEL_UP" then
             statusCache.dirty = true
         else
+            -- after a loading screen (an instance, a /reload) the bags can read empty for a moment: wait a little
+            if event == "PLAYER_ENTERING_WORLD" then bagState.loadingUntil = GetTime() + 5 end
             bagState.dirty, statusCache.dirty = true, true
         end
     end, "bags & XP events"))
