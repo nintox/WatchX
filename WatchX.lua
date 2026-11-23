@@ -2515,6 +2515,31 @@ end
         return s
     end
 
+    -- The whole story, for tooltips: posted (by, when, reward, note), claimed (who, when, where), paid.
+    local function Ago(t)
+        local d = math.max(0, time() - (t or time()))
+        if d < 3600 then return math.max(1, math.floor(d / 60)) .. " min ago" end
+        if d < 86400 then return math.floor(d / 3600) .. " h ago" end
+        return math.floor(d / 86400) .. " d ago"
+    end
+    function ns.AddWantedLines(tip, w)
+        if not (tip and w) then return end
+        local rw = ns.WantedReward(w) or "?"
+        tip:AddLine(" ")
+        tip:AddDoubleLine("|cffffa000WANTED|r " .. rw, (w.by == Me() and "by you" or ("by " .. (w.by or "?"))) .. ", " .. Ago(w.t), 1, 1, 1, 0.7, 0.7, 0.7)
+        if w.note then tip:AddLine("\"" .. w.note .. "\"", 1, 0.85, 0.5, true) end
+        local c = w.claimed
+        if c then
+            tip:AddDoubleLine("|cff40ff40Killed by " .. (c.by == Me() and "you" or (c.by or "?")) .. "|r", Ago(c.t), 1, 1, 1, 0.7, 0.7, 0.7)
+            if c.zone then tip:AddLine("in " .. c.zone, 0.7, 0.7, 0.7) end
+            if c.t then tip:AddLine(date("%d.%m %H:%M", c.t), 0.5, 0.5, 0.5) end
+            if w.paid then tip:AddDoubleLine("|cff40ff40Paid|r", Ago(w.paid), 1, 1, 1, 0.7, 0.7, 0.7)
+            elseif ns.WantedMine(w) then tip:AddLine("You owe " .. rw .. " – a Pay button shows at the mailbox.", 1, 0.5, 0.25, true)
+            elseif c.by == Me() then tip:AddLine((w.by or "?") .. " owes you " .. rw .. ".", 1, 0.82, 0, true)
+            else tip:AddLine("Not paid yet.", 0.7, 0.7, 0.7) end
+        end
+    end
+
     -- Sending: one message every 0.3 s (the game drops a burst), to the guild and to each online friend.
     local queue, sender = {}, CreateFrame("Frame")
     local wait = 0
@@ -2558,7 +2583,8 @@ end
         local w = r.wanted
         recent[key .. (w.t or 0)] = time()
         Send("A", key, r.name or key, r.class or "", (w.copper and tostring(w.copper)) or w.reward or "", w.note or "", w.by or "", w.t or 0,
-            w.claimed and w.claimed.by or "", w.claimed and w.claimed.t or 0, w.claimed and w.claimed.full or "", w.paid and 1 or 0)
+            w.claimed and w.claimed.by or "", w.claimed and w.claimed.t or 0, w.claimed and w.claimed.full or "", w.paid and 1 or 0,
+            w.claimed and w.claimed.zone or "")
     end
 
     -- reward: copper, or text like "50g 20s"; a bounty needs one.
@@ -2610,9 +2636,13 @@ end
     function ns.OnWantedKill(key)
         local w, r = ns.Wanted(key)
         if not w then return end
-        w.claimed = { by = Me(), full = MyFull(), t = time() }
-        Send("C", key, w.claimed.by, w.claimed.t, w.t or 0, w.claimed.full)
-        Warn("Bounty claimed: " .. (r.name or key) .. (ns.WantedReward(w) and (" – " .. ns.WantedReward(w)) or "")
+        local zone = Plain(GetZoneText and GetZoneText())
+        local sub = Plain(GetSubZoneText and GetSubZoneText())
+        zone = type(zone) == "string" and zone ~= "" and zone or nil
+        if zone and type(sub) == "string" and sub ~= "" and sub ~= zone then zone = sub .. ", " .. zone end
+        w.claimed = { by = Me(), full = MyFull(), t = time(), zone = zone }
+        Send("C", key, w.claimed.by, w.claimed.t, w.t or 0, w.claimed.full, zone or "")
+        Warn("Bounty claimed: " .. (r.name or key) .. (zone and (" in " .. zone) or "") .. (ns.WantedReward(w) and (" – " .. ns.WantedReward(w)) or "")
             .. ((w.by and w.by ~= Me()) and (" from " .. w.by .. " (they pay by mail)") or ""))
         if ns.RefreshHistory then ns.RefreshHistory() end
     end
@@ -2651,7 +2681,7 @@ end
                 -- known; a claim or a payment we missed still counts
                 if r.wanted and (r.wanted.t or 0) == t then
                     if not r.wanted.claimed and f[8] and f[8] ~= "" then
-                        r.wanted.claimed = { by = Clean(f[8], 40), t = tt(f[9]) or t, full = Clean(f[10], 60) }
+                        r.wanted.claimed = { by = Clean(f[8], 40), t = tt(f[9]) or t, full = Clean(f[10], 60), zone = Clean(f[12], 60) }
                     end
                     if r.wanted.claimed and not r.wanted.paid and f[11] == "1" then r.wanted.paid = time() end
                 end
@@ -2663,7 +2693,7 @@ end
             local cp = (f[4] or ""):match("^%d+$") and tonumber(f[4]) or nil
             r.wanted = { copper = cp, reward = (not cp) and Clean(f[4], MAX_REWARD) or nil, note = Clean(f[5], MAX_NOTE),
                 by = Clean(f[6], 40) or from, t = t }
-            if f[8] and f[8] ~= "" then r.wanted.claimed = { by = Clean(f[8], 40), t = tt(f[9]) or t, full = Clean(f[10], 60) } end
+            if f[8] and f[8] ~= "" then r.wanted.claimed = { by = Clean(f[8], 40), t = tt(f[9]) or t, full = Clean(f[10], 60), zone = Clean(f[12], 60) } end
             if r.wanted.claimed and f[11] == "1" then r.wanted.paid = time() end
             recent[key .. t] = time()
             if time() - t < 600 and not r.wanted.claimed then
@@ -2679,12 +2709,13 @@ end
             local r = db.enemies[key]
             local w = r and r.wanted
             if w and not w.claimed and (tt(f[4]) or 0) == (w.t or 0) then
-                w.claimed = { by = Clean(f[2], 40) or from, t = tt(f[3]) or time(), full = Clean(f[5], 60) }
+                w.claimed = { by = Clean(f[2], 40) or from, t = tt(f[3]) or time(), full = Clean(f[5], 60), zone = Clean(f[6], 60) }
+                local where = w.claimed.zone and (" in " .. w.claimed.zone) or ""
                 if ns.WantedMine(w) then
-                    Warn(w.claimed.by .. " claimed your bounty on " .. (r.name or key) .. " – you owe "
+                    Warn(w.claimed.by .. " killed " .. (r.name or key) .. where .. " and claimed your bounty – you owe "
                         .. (ns.WantedReward(w) or "the reward") .. ". Pay it at a mailbox.")
                 else
-                    Warn("Bounty claimed: " .. (r.name or key) .. " by " .. w.claimed.by
+                    Warn("Bounty claimed: " .. (r.name or key) .. " by " .. w.claimed.by .. where
                         .. (ns.WantedReward(w) and (" – " .. ns.WantedReward(w)) or "") .. (w.by and (", from " .. w.by) or ""))
                 end
             end

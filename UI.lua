@@ -1480,7 +1480,9 @@ local function HistoryRow(i)
             GameTooltip:AddLine("Last seen " .. ns.AgoLong(time() - rec.lastSeen) .. " ago" .. (rec.zone and (" · " .. rec.zone) or ""), 0.7, 0.7, 0.7)
         end
         ns.AddEnemyHistoryLines(self.key)
-        GameTooltip:AddLine("|cffffd100Click:|r KOS, note, forget", 1, 1, 1)
+        if rec.wanted and ns.AddWantedLines then ns.AddWantedLines(GameTooltip, rec.wanted) end
+        GameTooltip:AddLine(" ")
+        GameTooltip:AddLine("|cffffd100Click:|r KOS, note, bounty, forget", 1, 1, 1)
         GameTooltip:Show()
     end)
     r:SetScript("OnLeave", GameTooltip_Hide)
