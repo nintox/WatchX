@@ -4379,8 +4379,8 @@ end
 -- WatchX.lua). The border says how it stands (green you have it, red missing, yellow soon/running out, grey
 -- worth getting), the time left is under the icon, and the tooltip says the rest.
 -- Moves and resizes with the other bars (Unlock). Plain frames only – nothing protected.
-local LV_MAX, LV_ICON, LV_GAP, LV_PAD, LV_TIME = 5, 30, 5, 5, 13
-local LV_H = LV_PAD + LV_ICON + LV_TIME + 3
+local LV_MAX, LV_ICON, LV_GAP, LV_PAD, LV_TIME = 5, 30, 5, 5, 0   -- the time sits on the icon (no line under it)
+local LV_H = LV_PAD * 2 + LV_ICON
 local LV_BADGES = { ok = "Interface\\RaidFrame\\ReadyCheck-Ready", todo = "Interface\\RaidFrame\\ReadyCheck-NotReady",
     wait = "Interface\\RaidFrame\\ReadyCheck-Waiting" }
 local LV_COLORS = { ok = { 0.25, 0.9, 0.3 }, todo = { 1, 0.2, 0.2 }, wait = { 1, 0.82, 0 }, info = { 0.4, 0.4, 0.4 } }
@@ -4639,7 +4639,10 @@ local function BuildLevel()
         b.count = b:CreateFontString(nil, "OVERLAY", "NumberFontNormalSmall")
         b.count:SetPoint("BOTTOMRIGHT", b, "BOTTOMRIGHT", 0, 1)
         b.timer = b:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-        b.timer:SetPoint("TOP", b, "BOTTOM", 0, -2)
+        b.timer:SetPoint("CENTER", b, "CENTER", 0, 1)   -- on the icon, outlined like a cooldown
+        local tf = b.timer:GetFont()
+        if tf then b.timer:SetFont(tf, 11, "OUTLINE") end
+        b.timer:SetShadowOffset(0, 0)
         local hl = b:CreateTexture(nil, "HIGHLIGHT")
         hl:SetAllPoints()
         hl:SetColorTexture(1, 1, 1, 0.15)
@@ -4720,7 +4723,8 @@ local function PaintLevelIcon(b, r)
     b.badge:SetAlpha(LV_BADGES[r.state] and 1 or 0)
     b.count:SetText(r.count or "")
     if r.timer then
-        b.timer:SetText(ns.Clock(r.timer))
+        local sec = math.max(0, math.floor(r.timer))   -- short, to fit on the icon: 1h / 13m / 45
+        b.timer:SetText(sec >= 3600 and (math.floor(sec / 3600) .. "h") or sec >= 60 and (math.floor(sec / 60) .. "m") or tostring(sec))
         if r.timer < 120 then b.timer:SetTextColor(1, 0.35, 0.35)
         elseif r.state == "wait" then b.timer:SetTextColor(1, 0.82, 0)
         else b.timer:SetTextColor(0.25, 1, 0.25) end
