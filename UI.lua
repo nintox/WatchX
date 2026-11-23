@@ -5248,21 +5248,29 @@ do (function()
         end
     end
 
-    -- The sleeping bag: one Well-Rested stack a minute, up to 3, from when you lay down (ns.bagStart).
-    local bag = { stacks = 0 }
-    local function BagState()
-        if not ns.bagStart then return nil end
+    -- The sleeping bag: one Well-Rested stack a minute, up to 3. You lie down by clicking the bag on the ground (no
+    -- cast to see), so the count starts at a "sleep" buff, a new stack, or using the bag item (ns.bagStart).
+    local bag = {}
+    local function WRStacks()
+        if not (C_UnitAuras and C_UnitAuras.GetPlayerAuraBySpellID) then return 0 end
+        local ok, a = pcall(C_UnitAuras.GetPlayerAuraBySpellID, 429959)
+        return ok and type(a) == "table" and N(a.applications) or 0
+    end
+    local function BagState(lying)
         local now = GetTime()
-        local stacks = 0
-        if C_UnitAuras and C_UnitAuras.GetPlayerAuraBySpellID then
-            local ok, a = pcall(C_UnitAuras.GetPlayerAuraBySpellID, 429959)
-            stacks = ok and type(a) == "table" and N(a.applications) or 0
+        local stacks = WRStacks()
+        if bag.stacks == nil then bag.stacks = stacks end                       -- first look: just the baseline
+        if lying and not ns.bagStart then ns.bagStart = now end
+        if ns.bagStart and bag.start ~= ns.bagStart then bag.start, bag.at = ns.bagStart, ns.bagStart end
+        if stacks > bag.stacks then                                             -- a new stack: you're lying on it
+            if not ns.bagStart then ns.bagStart = now; bag.start = now end
+            bag.at = now
         end
-        if bag.start ~= ns.bagStart then bag.start, bag.stacks, bag.at = ns.bagStart, stacks, ns.bagStart end
-        if stacks > bag.stacks then bag.stacks, bag.at = stacks, now end
-        if stacks >= 3 then ns.bagStart = nil return nil end                  -- full: done
-        local nextAt = bag.at + 60
-        if now > nextAt + 15 then ns.bagStart = nil return nil end           -- no new stack: you got up
+        bag.stacks = stacks
+        if not ns.bagStart then return nil end
+        if stacks >= 3 then ns.bagStart = nil return nil end                    -- full: done
+        local nextAt = (bag.at or now) + 60
+        if now > nextAt + 15 and not lying then ns.bagStart = nil return nil end -- no new stack: you got up
         return { kind = "bag", stacks = stacks, left = math.max(0, nextAt - now), full = math.max(0, nextAt - now) + (2 - stacks) * 60 }
     end
 
@@ -5275,14 +5283,23 @@ do (function()
             local name = a.name
             if issecretvalue and issecretvalue(name) then name = nil end
             local kind = name and KINDS[name]
-            if not kind and name and name:lower():find("campfire", 1, true) then kind = "fire" end
+            local lower = name and name:lower() or ""
+            if not kind and lower:find("campfire", 1, true) then kind = "fire" end
+            if not kind and lower:find("sleep", 1, true) and not lower:find("well", 1, true) then out.lying = true end
             if kind then
                 local left = N(a.expirationTime) and math.max(0, N(a.expirationTime) - GetTime()) or nil
                 out[#out + 1] = { kind = kind, index = i, icon = a.icon, left = left, dur = N(a.duration) }
             end
         end
-        local b = BagState()
+        local b = BagState(out.lying)
         if b then out[#out + 1] = b end
+        -- a fire you lit here, when there's no Campfire buff to show
+        local hasFire = false
+        for _, a in ipairs(out) do if a.kind == "fire" then hasFire = true end end
+        if not hasFire and ns.CampFireLit then
+            local ago = ns.CampFireLit()
+            if ago then out[#out + 1] = { kind = "fire", lit = ago } end
+        end
         return out
     end
 
@@ -5400,9 +5417,14 @@ do (function()
         else
             r.icon:SetTexture(a.icon or FIREICON)
             r.pct:SetText("|cffff9030Campfire|r")
-            local l = a.left or 0
-            r.time:SetText(l >= 60 and (math.floor(l / 60) .. "m") or tostring(math.ceil(l)))
-            r.info:SetText("")
+            if a.lit then   -- one you lit: how long ago
+                r.time:SetText(a.lit >= 60 and (math.floor(a.lit / 60) .. "m") or tostring(math.floor(a.lit)))
+                r.info:SetText("|cffcccccclit " .. (a.lit >= 60 and (math.floor(a.lit / 60) .. " min") or (math.floor(a.lit) .. " s")) .. " ago|r")
+            else
+                local l = a.left or 0
+                r.time:SetText(l >= 60 and (math.floor(l / 60) .. "m") or tostring(math.ceil(l)))
+                r.info:SetText("|cffccccccbuff left|r")
+            end
         end
     end
 

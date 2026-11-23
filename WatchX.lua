@@ -2018,6 +2018,13 @@ local function IsFireSpell(spellID)
     return spellID and (fireSpells[spellID] or fireSpells[SpellName(spellID) or ""]) and true or false
 end
 
+-- Seconds since you lit a fire right here (within 10 minutes), or nil.
+function ns.CampFireLit()
+    if not campFire.at or GetTime() - campFire.at > 600 then return nil end
+    if ns.CampFireNear and not ns.CampFireNear() then return nil end
+    return GetTime() - campFire.at
+end
+
 function ns.OnCampCast(spellID)
     -- the sleeping bag: the stacks come one a minute from now (the meal & camp timer counts them down)
     local get = (C_Item and C_Item.GetItemSpell) or GetItemSpell
