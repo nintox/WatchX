@@ -2415,8 +2415,10 @@ end
 -- Put a bounty (a reward and a note) on a player. It's sent to your guild and your online friends who run
 -- WatchX, and theirs to you: the player gets a WANTED tag in Nearby, History and the tooltip, and a card
 -- when he shows up. A kill by you or your group claims it, and everyone hears who did. The gold itself is
--- paid by hand. Stored on the History records (r.wanted = { reward, note, by, t, claimed = { by, t } }).
-do
+-- paid by mail: at a mailbox WatchX fills in the claimer, a subject and the gold, you press Send, and it's PAID for
+-- everyone. Stored on the History records (r.wanted = { copper, note, by, t, claimed = { by, full, t }, paid }).
+-- Its own function: the main chunk is at Lua's 200-locals limit.
+(function()
     local PREFIX, VER, SEP = "WatchX", "W1", "~"
     local MAX_REWARD, MAX_NOTE = 24, 100
     local OPEN_DAYS, CLAIMED_DAYS = 14, 3
@@ -2431,6 +2433,14 @@ do
         return type(n) == "string" and n or "?"
     end
     local function On() return db and db.wantedOn ~= false end
+    -- Your name as mail takes it: "First-Surname" when the game gives a surname.
+    local function MyFull()
+        local n, r = UnitName("player")
+        n, r = Plain(n), Plain(r)
+        if type(n) ~= "string" then return Me() end
+        if type(r) == "string" and r ~= "" then return n .. "-" .. r end
+        return n
+    end
 
     -- Money: rewards are copper (shown with coin icons); old ones may still be plain text.
     local function Money(c)
@@ -2477,7 +2487,14 @@ do
         local rw = ns.WantedReward(w)
         local s = "|cffffa000WANTED|r" .. (rw and (" |cffffd100" .. rw .. "|r") or "")
             .. (w.by and ("|cffaaaaaa by " .. w.by .. "|r") or "") .. (w.note and (" – " .. w.note) or "")
-        if w.claimed then s = s .. "  |cff40ff40claimed by " .. (w.claimed.by or "?") .. "|r" end
+        if w.claimed then
+            local mine, byMe = ns.WantedMine(w), w.claimed.by == Me()
+            s = s .. "  |cff40ff40claimed by " .. (byMe and "you" or (w.claimed.by or "?")) .. "|r"
+            if w.paid then s = s .. "  |cff40ff40· paid|r"
+            elseif mine then s = s .. "  |cffff8040· you owe " .. (rw or "?") .. " – pay at a mailbox|r"
+            elseif byMe then s = s .. "  |cffffd100· " .. (w.by or "?") .. " owes you " .. (rw or "?") .. "|r"
+            else s = s .. "  |cffaaaaaa· not paid yet|r" end
+        end
         return s
     end
 
@@ -2524,7 +2541,7 @@ do
         local w = r.wanted
         recent[key .. (w.t or 0)] = time()
         Send("A", key, r.name or key, r.class or "", (w.copper and tostring(w.copper)) or w.reward or "", w.note or "", w.by or "", w.t or 0,
-            w.claimed and w.claimed.by or "", w.claimed and w.claimed.t or 0)
+            w.claimed and w.claimed.by or "", w.claimed and w.claimed.t or 0, w.claimed and w.claimed.full or "", w.paid and 1 or 0)
     end
 
     -- reward: copper, or text like "50g 20s"; a bounty needs one.
@@ -2576,10 +2593,33 @@ do
     function ns.OnWantedKill(key)
         local w, r = ns.Wanted(key)
         if not w then return end
-        w.claimed = { by = Me(), t = time() }
-        Send("C", key, w.claimed.by, w.claimed.t, w.t or 0)
+        w.claimed = { by = Me(), full = MyFull(), t = time() }
+        Send("C", key, w.claimed.by, w.claimed.t, w.t or 0, w.claimed.full)
         Warn("Bounty claimed: " .. (r.name or key) .. (ns.WantedReward(w) and (" – " .. ns.WantedReward(w)) or "")
-            .. (w.by ~= Me() and (" from " .. w.by) or ""))
+            .. ((w.by and w.by ~= Me()) and (" from " .. w.by .. " (they pay by mail)") or ""))
+        if ns.RefreshHistory then ns.RefreshHistory() end
+    end
+
+    -- Paid (by mail, or "Mark paid" after a trade): only the one who put it up.
+    function ns.MarkPaid(key)
+        local r = key and db.enemies[key]
+        local w = r and r.wanted
+        if not (w and w.claimed and not w.paid and ns.WantedMine(w)) then return false end
+        w.paid = time()
+        Send("P", key, w.by or Me(), w.t or 0)
+        Print("|cff40ff40Bounty paid|r: " .. (w.claimed.by or "?") .. " got " .. (ns.WantedReward(w) or "it") .. " for " .. (r.name or key) .. ".")
+        if ns.RefreshUI then ns.RefreshUI() end; if ns.RefreshHistory then ns.RefreshHistory() end
+        return true
+    end
+    -- The claimed bounties you still owe: { key, r, w }.
+    function ns.OwedBounties()
+        local out = {}
+        for key, r in pairs(db and db.enemies or {}) do
+            local w = r.wanted
+            if w and w.claimed and not w.paid and ns.WantedMine(w) and w.claimed.by ~= Me() then out[#out + 1] = { key = key, r = r, w = w } end
+        end
+        table.sort(out, function(a, b) return (a.w.claimed.t or 0) < (b.w.claimed.t or 0) end)
+        return out
     end
 
     local function Apply(op, f, from)
@@ -2591,9 +2631,12 @@ do
             if t <= 0 or time() - t > OPEN_DAYS * 86400 then return end
             local r = db.enemies[key]
             if r and ((r.wanted and (r.wanted.t or 0) >= t) or (r.wantedHide and r.wantedHide >= t)) then
-                -- known; a claim we missed still counts
-                if r.wanted and not r.wanted.claimed and f[8] and f[8] ~= "" and (r.wanted.t or 0) == t then
-                    r.wanted.claimed = { by = Clean(f[8], 40), t = tt(f[9]) or t }
+                -- known; a claim or a payment we missed still counts
+                if r.wanted and (r.wanted.t or 0) == t then
+                    if not r.wanted.claimed and f[8] and f[8] ~= "" then
+                        r.wanted.claimed = { by = Clean(f[8], 40), t = tt(f[9]) or t, full = Clean(f[10], 60) }
+                    end
+                    if r.wanted.claimed and not r.wanted.paid and f[11] == "1" then r.wanted.paid = time() end
                 end
                 recent[key .. t] = time()
                 return
@@ -2603,7 +2646,8 @@ do
             local cp = (f[4] or ""):match("^%d+$") and tonumber(f[4]) or nil
             r.wanted = { copper = cp, reward = (not cp) and Clean(f[4], MAX_REWARD) or nil, note = Clean(f[5], MAX_NOTE),
                 by = Clean(f[6], 40) or from, t = t }
-            if f[8] and f[8] ~= "" then r.wanted.claimed = { by = Clean(f[8], 40), t = tt(f[9]) or t } end
+            if f[8] and f[8] ~= "" then r.wanted.claimed = { by = Clean(f[8], 40), t = tt(f[9]) or t, full = Clean(f[10], 60) } end
+            if r.wanted.claimed and f[11] == "1" then r.wanted.paid = time() end
             recent[key .. t] = time()
             if time() - t < 600 and not r.wanted.claimed then
                 Warn("WANTED from " .. (r.wanted.by or "?") .. ": " .. (r.name or key)
@@ -2618,9 +2662,23 @@ do
             local r = db.enemies[key]
             local w = r and r.wanted
             if w and not w.claimed and (tt(f[4]) or 0) == (w.t or 0) then
-                w.claimed = { by = Clean(f[2], 40) or from, t = tt(f[3]) or time() }
-                Warn("Bounty claimed: " .. (r.name or key) .. " by " .. w.claimed.by
-                    .. (ns.WantedReward(w) and (" – " .. ns.WantedReward(w)) or "") .. (w.by and (", from " .. w.by) or ""))
+                w.claimed = { by = Clean(f[2], 40) or from, t = tt(f[3]) or time(), full = Clean(f[5], 60) }
+                if ns.WantedMine(w) then
+                    Warn(w.claimed.by .. " claimed your bounty on " .. (r.name or key) .. " – you owe "
+                        .. (ns.WantedReward(w) or "the reward") .. ". Pay it at a mailbox.")
+                else
+                    Warn("Bounty claimed: " .. (r.name or key) .. " by " .. w.claimed.by
+                        .. (ns.WantedReward(w) and (" – " .. ns.WantedReward(w)) or "") .. (w.by and (", from " .. w.by) or ""))
+                end
+            end
+        elseif op == "P" then
+            local r = db.enemies[key]
+            local w = r and r.wanted
+            if w and w.claimed and not w.paid and w.by == Clean(f[2], 40) and (tt(f[3]) or 0) == (w.t or 0) then
+                w.paid = time()
+                if w.claimed.by == Me() then
+                    Warn((w.by or "?") .. " paid you " .. (ns.WantedReward(w) or "the bounty") .. " for " .. (r.name or key) .. " – check your mail.")
+                end
             end
         end
         if ns.RefreshUI then ns.RefreshUI() end; if ns.RefreshHistory then ns.RefreshHistory() end
@@ -2663,37 +2721,94 @@ do
         end
     end
 
-    -- Old ones go: open bounties after two weeks, claimed ones after three days.
+    -- Old ones go: open bounties after two weeks, paid ones after three days, claimed-not-paid after two weeks.
     local function Expire()
         local now = time()
         for _, r in pairs(db.enemies) do
             local w = r.wanted
-            if w and ((w.claimed and now - (w.claimed.t or 0) > CLAIMED_DAYS * 86400)
+            if w and ((w.paid and now - w.paid > CLAIMED_DAYS * 86400)
+                    or (w.claimed and not w.paid and now - (w.claimed.t or 0) > OPEN_DAYS * 86400)
                     or (not w.claimed and now - (w.t or 0) > OPEN_DAYS * 86400)) then
                 r.wanted = nil
             end
         end
     end
 
+    -- Paying by mail: at a mailbox a "Pay bounty" button under the mail window; it fills in the claimer, a subject
+    -- and the gold on the Send Mail tab, you press Send yourself. The mail that goes out with that subject and at
+    -- least that gold marks it paid. Nothing of Blizzard's is called or changed but the boxes' text.
+    local payBtn, pending, sentFor
+    local function Subject(key) return "Bounty: " .. ((db.enemies[key] and db.enemies[key].name) or key) end
+    local function Fill()
+        local o = pending and db.enemies[pending] and db.enemies[pending].wanted
+        if not (o and SendMailFrame and SendMailFrame:IsShown()) then return end
+        if SendMailNameEditBox then SendMailNameEditBox:SetText(o.claimed.full or o.claimed.by or "") end
+        if SendMailSubjectEditBox then SendMailSubjectEditBox:SetText(Subject(pending)) end
+        if SendMailRadioButton_OnClick then pcall(SendMailRadioButton_OnClick, 1) end   -- send money, not COD
+        if SendMailMoney and MoneyInputFrame_SetCopper then pcall(MoneyInputFrame_SetCopper, SendMailMoney, o.copper or 0) end
+    end
+    local function UpdatePayButton()
+        if not (MailFrame and MailFrame:IsShown()) then if payBtn then payBtn:Hide() end return end
+        local owed = ns.OwedBounties()
+        if #owed == 0 or not On() then if payBtn then payBtn:Hide() end return end
+        if not payBtn then
+            payBtn = CreateFrame("Button", "WatchXPayBounty", MailFrame, "UIPanelButtonTemplate")
+            payBtn:SetSize(300, 24)
+            payBtn:SetPoint("TOP", MailFrame, "BOTTOM", 0, -4)
+            payBtn:SetScript("OnClick", function(self)
+                pending = self.key
+                if SendMailFrame and SendMailFrame:IsShown() then Fill()
+                else Print("Open the |cffffd100Send Mail|r tab – WatchX fills in the bounty, then press Send.") end
+            end)
+            if SendMailFrame and SendMailFrame.HookScript then SendMailFrame:HookScript("OnShow", function() ns.Safe("wanted", Fill) end) end
+        end
+        local o = owed[1]
+        payBtn.key = o.key
+        payBtn:SetText("Pay bounty: " .. (o.w.claimed.by or "?") .. " – " .. (ns.WantedReward(o.w) or "?")
+            .. (#owed > 1 and ("  (+" .. (#owed - 1) .. ")") or ""))
+        payBtn:Show()
+    end
+    if hooksecurefunc and SendMail then
+        hooksecurefunc("SendMail", function(_, subject)
+            sentFor = nil
+            local o = pending and db and db.enemies[pending] and db.enemies[pending].wanted
+            local money = GetSendMailMoney and tonumber(Plain(GetSendMailMoney())) or 0
+            if o and Plain(subject) == Subject(pending) and money >= (o.copper or 0) then sentFor = pending end
+        end)
+    end
+
     local ev = CreateFrame("Frame")
     ev:RegisterEvent("PLAYER_LOGIN")
     ev:RegisterEvent("CHAT_MSG_ADDON")
     ev:RegisterEvent("FRIENDLIST_UPDATE")
+    for _, e in ipairs({ "MAIL_SHOW", "MAIL_CLOSED", "MAIL_SEND_SUCCESS" }) do pcall(ev.RegisterEvent, ev, e) end
     ev:SetScript("OnEvent", function(_, event, ...)
         if event == "PLAYER_LOGIN" then
             if C_ChatInfo and C_ChatInfo.RegisterAddonMessagePrefix then pcall(C_ChatInfo.RegisterAddonMessagePrefix, PREFIX) end
             C_Timer.After(12, function() ns.Safe("wanted", function()
                 if not db then return end
                 Expire()
-                if On() then Send("H") end
+                if On() then
+                    Send("H")
+                    local owed = ns.OwedBounties()
+                    if #owed > 0 then
+                        Print("|cffff8040You owe " .. #owed .. (#owed == 1 and " bounty" or " bounties") .. "|r – a Pay button shows at the mailbox.")
+                    end
+                end
             end) end)
         elseif event == "FRIENDLIST_UPDATE" then
             wipe(friends)
+        elseif event == "MAIL_SHOW" or event == "MAIL_CLOSED" then
+            if event == "MAIL_CLOSED" then pending = nil end
+            ns.Safe("wanted", UpdatePayButton)
+        elseif event == "MAIL_SEND_SUCCESS" then
+            if sentFor then ns.MarkPaid(sentFor); sentFor, pending = nil, nil end
+            ns.Safe("wanted", UpdatePayButton)
         elseif db then
             ns.Safe("wanted", OnMessage, ...)
         end
     end)
-end
+end)()
 
 function ns.BuffTest()
     Warn("Water Breathing runs out in 0:30 – head for air!  |cff808080(a test)|r")

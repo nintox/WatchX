@@ -414,6 +414,11 @@ function ns.EnemyMenu(anchor, key)
     end
     if r.wanted and not r.wanted.claimed and not ns.WantedMine(r.wanted) then
         items[#items + 1] = { "|cff909090Bounty by " .. (r.wanted.by or "?") .. " – only they can change it|r", nil }
+    elseif r.wanted and r.wanted.claimed then
+        if not r.wanted.paid and ns.WantedMine(r.wanted) then
+            items[#items + 1] = { "|cff40ff40Mark paid|r (paid by trade)", function() ns.MarkPaid(key) end }
+        end
+        items[#items + 1] = { "Take the bounty down", function() ns.RemoveWanted(key) end }
     elseif r.wanted then
         items[#items + 1] = { "|cffffa000Edit bounty|r", function() ns.ShowBounty(key) end }
         items[#items + 1] = { "Take the bounty down", function() ns.RemoveWanted(key) end }
@@ -1593,7 +1598,8 @@ function ns.RefreshHistory()
             row.key, row.guild = it.key, nil
             row.bar:SetColorTexture(0.11 + alt, 0.09 + alt, 0.06 + alt, 0.9)
             row.edge:SetColorTexture(cr, cg, cb, 1)
-            local v = { (it.kos and "|cffff3030KOS|r " or "") .. (r.wanted and (r.wanted.claimed and "|cff40ff40CLAIMED|r " or "|cffffa000WANTED|r ") or "")
+            local v = { (it.kos and "|cffff3030KOS|r " or "") .. (r.wanted and (r.wanted.paid and "|cff40ff40PAID|r "
+                    or r.wanted.claimed and (ns.WantedMine(r.wanted) and "|cffff8040OWED|r " or "|cffffd100CLAIMED|r ") or "|cffffa000WANTED|r ") or "")
                 .. (r.avoid and "|cffff8040AVOID|r " or "") .. (r.name or it.key),
                 (r.level and r.level > 0) and r.level or "??", ClassName(r.class), r.guild or "|cff606060-|r",
                 (r.kills or 0) > 0 and ("|cffffd100" .. r.kills .. "|r") or "0",
