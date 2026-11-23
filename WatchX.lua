@@ -69,6 +69,10 @@ local defaults = {
     kosGuilds = {},       -- lower-case guild name -> guild name, KOS
     avoidGroup = true,    -- ... a warning when one of them invites you or is in your group
     avoidChat = true,     -- ... a red [Avoid] before their chat lines
+    wantedOn = true,      -- WANTED: bounties shared with your guild and friends
+    wantedGuild = true,   -- ... sent to and taken from the guild
+    wantedFriends = true, -- ... and your online friends
+    wantedAlert = true,   -- ... a card + sound when a wanted player shows up
     nearbyShowEmpty = false, -- Nearby: show the list even when no enemy is around
     nearbyKeep = 5,       -- Nearby: minutes a player stays in the list after he was last seen
     plateIcons = false,   -- a class icon over enemy players' nameplates
@@ -857,7 +861,9 @@ local function NoteNearby(unit)
     if type(guid) == "string" then ns.playerGuids[guid] = key end
     e.kos = ns.IsKOS(key, first, e.guild)
     if isNew then
+        local w = ns.Wanted and ns.Wanted(key)
         if e.kos and db.kosAlert ~= false and ns.OnKOS then ns.OnKOS(e)
+        elseif w and db.wantedAlert ~= false and ns.OnWantedSeen then ns.OnWantedSeen(e, w)
         elseif ns.OnNewEnemy then ns.OnNewEnemy(e) end
     end
     return key
@@ -884,7 +890,7 @@ end
 function ns.PruneEnemies()
     local list = {}
     for k, r in pairs(db.enemies) do
-        if not (r.kos or r.avoid or r.note or (r.kills or 0) > 0 or (r.deaths or 0) > 0) then list[#list + 1] = { k, r.lastSeen or 0 } end
+        if not (r.kos or r.avoid or r.wanted or r.note or (r.kills or 0) > 0 or (r.deaths or 0) > 0) then list[#list + 1] = { k, r.lastSeen or 0 } end
     end
     table.sort(list, function(a, b) return a[2] < b[2] end)
     for i = 1, math.floor(#list / 4) do db.enemies[list[i][1]] = nil end
@@ -957,6 +963,7 @@ function ns.OnPlayerKill(targetGuid)
     r.lastKill = time()
     Log("kill", r.name)
     Print("Killed " .. r.name .. " |cffaaaaaa(" .. r.kills .. " kill" .. (r.kills == 1 and "" or "s") .. ")|r")
+    if ns.OnWantedKill then ns.Safe("wanted", ns.OnWantedKill, key) end
     Refresh()
 end
 
@@ -2183,6 +2190,235 @@ if CreateFrame then
     end
 end
 
+-- ---------------------------------------------------------------- WANTED: bounties shared with guild and friends
+-- Put a bounty (a reward and a note) on a player. It's sent to your guild and your online friends who run
+-- WatchX, and theirs to you: the player gets a WANTED tag in Nearby, History and the tooltip, and a card
+-- when he shows up. A kill by you or your group claims it, and everyone hears who did. The gold itself is
+-- paid by hand. Stored on the History records (r.wanted = { reward, note, by, t, claimed = { by, t } }).
+do
+    local PREFIX, VER, SEP = "WatchX", "W1", "~"
+    local MAX_REWARD, MAX_NOTE = 24, 100
+    local OPEN_DAYS, CLAIMED_DAYS = 14, 3
+
+    local function Clean(s, n)
+        s = Trim((tostring(s or "")):gsub("[%c|~]", " "))
+        if s == "" then return nil end
+        return s:sub(1, n)
+    end
+    local function Me()
+        local n = Plain(UnitName("player"))
+        return type(n) == "string" and n or "?"
+    end
+    local function On() return db and db.wantedOn ~= false end
+
+    -- The bounty on this player (still open), or nil.
+    function ns.Wanted(key)
+        local r = key and db and db.enemies[key]
+        local w = r and r.wanted
+        if w and not w.claimed and On() then return w, r end
+    end
+    -- A line for tooltips and lists.
+    function ns.WantedLine(w)
+        if not w then return "" end
+        local s = "|cffffa000WANTED|r" .. (w.reward and (" |cffffd100" .. w.reward .. "|r") or "")
+            .. (w.by and ("|cffaaaaaa by " .. w.by .. "|r") or "") .. (w.note and (" – " .. w.note) or "")
+        if w.claimed then s = s .. "  |cff40ff40claimed by " .. (w.claimed.by or "?") .. "|r" end
+        return s
+    end
+
+    -- Sending: one message every 0.3 s (the game drops a burst), to the guild and to each online friend.
+    local queue, sender = {}, CreateFrame("Frame")
+    local wait = 0
+    sender:Hide()
+    sender:SetScript("OnUpdate", function(self, elapsed)
+        wait = wait - elapsed
+        if wait > 0 then return end
+        local m = table.remove(queue, 1)
+        if not m then self:Hide() return end
+        wait = 0.3
+        pcall(C_ChatInfo.SendAddonMessage, PREFIX, m[1], m[2], m[3])
+    end)
+    local friends = {}   -- lower-case name -> true (online friends, rebuilt when sending)
+    local function Friends()
+        wipe(friends)
+        local list = {}
+        if not (C_FriendList and C_FriendList.GetNumFriends) then return list end
+        for i = 1, (Plain(C_FriendList.GetNumFriends()) or 0) do
+            local ok, info = pcall(C_FriendList.GetFriendInfoByIndex, i)
+            local name = ok and info and Plain(info.name)
+            if type(name) == "string" and name ~= "" then
+                friends[name:lower()] = true
+                friends[(name:match("^[^%-]+") or name):lower()] = true
+                if Plain(info.connected) == true then list[#list + 1] = name end
+            end
+        end
+        return list
+    end
+    local function Send(...)
+        if not (C_ChatInfo and C_ChatInfo.SendAddonMessage) then return end
+        local msg = table.concat({ VER, ... }, SEP)
+        if #msg > 250 then msg = msg:sub(1, 250) end
+        if db.wantedGuild ~= false and Plain(IsInGuild and IsInGuild()) == true then queue[#queue + 1] = { msg, "GUILD" } end
+        if db.wantedFriends ~= false then
+            for _, name in ipairs(Friends()) do queue[#queue + 1] = { msg, "WHISPER", name } end
+        end
+        sender:Show()
+    end
+    local recent = {}   -- key..t -> time it was last sent or heard (no echo storms when syncing)
+    local function SendAdd(key, r)
+        local w = r.wanted
+        recent[key .. (w.t or 0)] = time()
+        Send("A", key, r.name or key, r.class or "", w.reward or "", w.note or "", w.by or "", w.t or 0,
+            w.claimed and w.claimed.by or "", w.claimed and w.claimed.t or 0)
+    end
+
+    function ns.SetWanted(key, name, reward, note)
+        if not key then return end
+        local r = ns.EnemyRecord(key, name)
+        r.wanted = { reward = Clean(reward, MAX_REWARD), note = Clean(note, MAX_NOTE), by = Me(), t = time() }
+        r.wantedHide = nil
+        SendAdd(key, r)
+        Print("|cffffa000WANTED|r posted: " .. r.name .. (r.wanted.reward and (" – " .. r.wanted.reward) or "")
+            .. (r.wanted.note and (" (" .. r.wanted.note .. ")") or "") .. " |cffaaaaaa– sent to your guild and friends|r")
+        if ns.RefreshUI then ns.RefreshUI() end
+    end
+
+    -- Your own bounty: taken down for everyone. Someone else's: hidden here only.
+    function ns.RemoveWanted(key)
+        local r = key and db.enemies[key]
+        if not (r and r.wanted) then return end
+        local w = r.wanted
+        if w.by == Me() then
+            Send("D", key, w.by, w.t or 0)
+        else
+            r.wantedHide = w.t
+        end
+        r.wanted = nil
+        Print("Bounty taken down: " .. (r.name or key))
+        if ns.RefreshUI then ns.RefreshUI() end
+    end
+
+    -- A kill by you or your group (ns.OnPlayerKill): the bounty is yours.
+    function ns.OnWantedKill(key)
+        local w, r = ns.Wanted(key)
+        if not w then return end
+        w.claimed = { by = Me(), t = time() }
+        Send("C", key, w.claimed.by, w.claimed.t, w.t or 0)
+        Warn("Bounty claimed: " .. (r.name or key) .. (w.reward and (" – " .. w.reward) or "")
+            .. (w.by ~= Me() and (" from " .. w.by) or ""))
+    end
+
+    local function Apply(op, f, from)
+        local key = f[1]
+        if type(key) ~= "string" or key == "" or #key > 60 then return end
+        local tt = tonumber
+        if op == "A" then
+            local t = tt(f[7]) or 0
+            if t <= 0 or time() - t > OPEN_DAYS * 86400 then return end
+            local r = db.enemies[key]
+            if r and ((r.wanted and (r.wanted.t or 0) >= t) or (r.wantedHide and r.wantedHide >= t)) then
+                -- known; a claim we missed still counts
+                if r.wanted and not r.wanted.claimed and f[8] and f[8] ~= "" and (r.wanted.t or 0) == t then
+                    r.wanted.claimed = { by = Clean(f[8], 40), t = tt(f[9]) or t }
+                end
+                recent[key .. t] = time()
+                return
+            end
+            r = ns.EnemyRecord(key, Clean(f[2], 60))
+            if (not r.class) and f[3] ~= "" then r.class = Clean(f[3], 20) end
+            r.wanted = { reward = Clean(f[4], MAX_REWARD), note = Clean(f[5], MAX_NOTE), by = Clean(f[6], 40) or from, t = t }
+            if f[8] and f[8] ~= "" then r.wanted.claimed = { by = Clean(f[8], 40), t = tt(f[9]) or t } end
+            recent[key .. t] = time()
+            if time() - t < 600 and not r.wanted.claimed then
+                Print("|cffffa000WANTED|r from " .. (r.wanted.by or "?") .. ": " .. (r.name or key)
+                    .. (r.wanted.reward and (" – " .. r.wanted.reward) or "") .. (r.wanted.note and (" (" .. r.wanted.note .. ")") or ""))
+            end
+        elseif op == "D" then
+            local r = db.enemies[key]
+            if r and r.wanted and r.wanted.by == Clean(f[2], 40) and (tt(f[3]) or 0) >= (r.wanted.t or 0) then
+                r.wanted = nil
+            end
+        elseif op == "C" then
+            local r = db.enemies[key]
+            local w = r and r.wanted
+            if w and not w.claimed and (tt(f[4]) or 0) == (w.t or 0) then
+                w.claimed = { by = Clean(f[2], 40) or from, t = tt(f[3]) or time() }
+                Print("|cffffa000Bounty claimed|r: " .. (r.name or key) .. " by " .. w.claimed.by
+                    .. (w.reward and (" – " .. w.reward) or "") .. (w.by and (", from " .. w.by) or ""))
+            end
+        end
+        if ns.RefreshUI then ns.RefreshUI() end
+    end
+
+    -- Someone logged in: everyone sends what they know, a few seconds apart, skipping what was just sent.
+    local replyAt
+    local function Reply()
+        replyAt = nil
+        local now = time()
+        for key, r in pairs(db.enemies) do
+            local w = r.wanted
+            if w and w.t and not (recent[key .. w.t] and now - recent[key .. w.t] < 60) then SendAdd(key, r) end
+        end
+    end
+
+    local function OnMessage(prefix, text, channel, from)
+        if Plain(prefix) ~= PREFIX or not On() then return end
+        text, channel, from = Plain(text), Plain(channel), Plain(from)
+        if type(text) ~= "string" or type(from) ~= "string" then return end
+        local short = from:match("^[^%-]+") or from
+        if short == Me() then return end
+        if channel == "WHISPER" then   -- only from your friends
+            if not next(friends) then Friends() end
+            if not (friends[from:lower()] or friends[short:lower()]) then return end
+        elseif channel ~= "GUILD" then
+            return
+        end
+        local f = {}
+        for part in (text .. SEP):gmatch("(.-)" .. SEP) do f[#f + 1] = part end
+        if f[1] ~= VER then return end
+        local op = table.remove(f, 1) and table.remove(f, 1)
+        if op == "H" then
+            if not replyAt then
+                replyAt = true
+                C_Timer.After(2 + math.random() * 4, function() ns.Safe("wanted", Reply) end)
+            end
+        else
+            Apply(op, f, short)
+        end
+    end
+
+    -- Old ones go: open bounties after two weeks, claimed ones after three days.
+    local function Expire()
+        local now = time()
+        for _, r in pairs(db.enemies) do
+            local w = r.wanted
+            if w and ((w.claimed and now - (w.claimed.t or 0) > CLAIMED_DAYS * 86400)
+                    or (not w.claimed and now - (w.t or 0) > OPEN_DAYS * 86400)) then
+                r.wanted = nil
+            end
+        end
+    end
+
+    local ev = CreateFrame("Frame")
+    ev:RegisterEvent("PLAYER_LOGIN")
+    ev:RegisterEvent("CHAT_MSG_ADDON")
+    ev:RegisterEvent("FRIENDLIST_UPDATE")
+    ev:SetScript("OnEvent", function(_, event, ...)
+        if event == "PLAYER_LOGIN" then
+            if C_ChatInfo and C_ChatInfo.RegisterAddonMessagePrefix then pcall(C_ChatInfo.RegisterAddonMessagePrefix, PREFIX) end
+            C_Timer.After(12, function() ns.Safe("wanted", function()
+                if not db then return end
+                Expire()
+                if On() then Send("H") end
+            end) end)
+        elseif event == "FRIENDLIST_UPDATE" then
+            wipe(friends)
+        elseif db then
+            ns.Safe("wanted", OnMessage, ...)
+        end
+    end)
+end
+
 function ns.BuffTest()
     Warn("Water Breathing runs out in 0:30 – head for air!  |cff808080(a test)|r")
 end
@@ -2381,7 +2617,7 @@ local PROFILE_KEYS = { "enemyPlayers", "friendlyPlayers", "attackAlert", "whispe
     "stealthWarn", "stealthSound", "nearbyShowEmpty", "nearbyKeep", "newEnemyCard", "warnDock", "nearbyAttach", "nearbyMax", "nearbyNoBG", "nearbyHideDungeon", "nearbyHideRaid",
     "plateIcons", "plateFriendly", "plateHealer", "plateSize", "plateKOS",
     "levelHelper", "levelMissing", "levelFlash", "levelWarn", "levelHideCombat", "levelHideInstance", "levelPoint", "levelScale", "levelWidth",
-    "buffWarn", "buffSoon", "buffGone", "buffGroups", "avoidGroup", "avoidChat", "scanOn" }
+    "buffWarn", "buffSoon", "buffGone", "buffGroups", "avoidGroup", "avoidChat", "scanOn", "wantedOn", "wantedGuild", "wantedFriends", "wantedAlert" }
 local PROFILE_MAX_NAME = 16
 
 local function Copy(v)
@@ -2767,6 +3003,14 @@ local function OnSlash(input)
         Print("XP boosts list: " .. (db.levelHelper and "|cff40ff40on|r" or "off")
             .. ((db.levelHelper and not ns.LevelStatus()) and " (it only shows below level " .. ns.MaxLevel() .. ")" or ""))
         if ns.RefreshUI then ns.RefreshUI() end
+    elseif cmd == "wanted" or cmd == "bounty" then
+        -- /wx wanted Name Surname: 50g ninja looter   (or just /wx wanted for the list)
+        local name, after = rest:match("^([^:]+):%s*(.*)$")
+        name = Trim(name or rest)
+        if name ~= "" then
+            local reward, note = (after or ""):match("^(%d+%s*[gGsS]%S*)%s*(.*)$")
+            ns.SetWanted(ns.KeyFromName(name), name, reward, reward and note or after)
+        elseif ns.ShowHistory then ns.ShowHistory("wanted") end
     elseif cmd == "avoid" or cmd == "blacklist" then
         -- /wx avoid Name Surname: note   (or just /wx avoid to open the list)
         local name, note = rest:match("^([^:]+):%s*(.*)$")
@@ -2836,7 +3080,7 @@ local function OnSlash(input)
         for i = math.max(1, #lines - 24), #lines do DEFAULT_CHAT_FRAME:AddMessage("  " .. lines[i]) end
     else
         Print("Made by " .. ns.AUTHOR .. ". Commands: /wx (panel) | settings | guide | test | add <name> | "
-            .. "remove <name> | profile [name] | enemy | friend | nearby [on|off|test] | xp | buffs [name|test] | avoid [name: note] | attack | afk [minutes] | instant | list | mini | quiet | alert | move | lock | unlock | minimap | sound | "
+            .. "remove <name> | profile [name] | enemy | friend | nearby [on|off|test] | xp | buffs [name|test] | avoid [name: note] | wanted [name: reward note] | attack | afk [minutes] | instant | list | mini | quiet | alert | move | lock | unlock | minimap | sound | "
             .. "whisper | dead [name] | "
             .. "respawn <min> [name] | reset | log [previous]")
     end

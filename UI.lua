@@ -10,8 +10,8 @@ local _, ns = ...
 local PAD = 12
 local PANEL_W = 250
 local MINI_H, TARGET_H = 26, 42   -- the mini bar, and the bar it grows into when something is up
-local BG = { 0.06, 0.06, 0.10, 0.92 }      -- tooltip blue-black
-local EDGE = { 0.62, 0.62, 0.66, 1 }       -- tooltip silver
+local BG = { 0.05, 0.045, 0.04, 0.92 }     -- warm near-black
+local EDGE = { 0.80, 0.64, 0.30, 1 }       -- WoW Forever's gold (the unit frame rings)
 local ACCENT = { 1, 0.82, 0 }              -- Blizzard gold
 local LOGO = "Interface\\AddOns\\WatchX\\Media\\logo"   -- Media/logo.tga (made by Media/make_logo.py)
 
@@ -401,9 +401,110 @@ function ns.EnemyMenu(anchor, key)
         local gk = ns.db.kosGuilds[r.guild:lower()]
         items[#items + 1] = { (gk and "Guild off KOS: " or "KOS the guild: ") .. r.guild, function() ns.SetGuildKOS(r.guild, not gk) end }
     end
+    if r.wanted then
+        items[#items + 1] = { "|cffffa000Edit bounty|r", function() ns.ShowBounty(key) end }
+        items[#items + 1] = { "Take the bounty down", function() ns.RemoveWanted(key) end }
+    else
+        items[#items + 1] = { "|cffffa000WANTED|r – put a bounty on them", function() ns.ShowBounty(key) end }
+    end
     items[#items + 1] = { r.note and "Edit note" or "Add note", function() StaticPopup_Show("WATCHX_NOTE", r.name, nil, key) end }
     items[#items + 1] = { "|cff909090Forget this player|r", function() ns.ForgetEnemy(key) end }
     ns.ShowMenu(anchor, r.name, items)
+end
+
+-- A close button of our own (Blizzard's UIPanelCloseButton calls HideUIPanel, which taints – see above).
+local function CloseX(parent, onClick)
+    local b = CreateFrame("Button", nil, parent)
+    b:SetSize(24, 24)
+    b:SetPoint("TOPRIGHT", parent, "TOPRIGHT", -4, -4)
+    b:SetNormalTexture("Interface\\Buttons\\UI-Panel-MinimizeButton-Up")
+    b:SetPushedTexture("Interface\\Buttons\\UI-Panel-MinimizeButton-Down")
+    b:SetHighlightTexture("Interface\\Buttons\\UI-Panel-MinimizeButton-Highlight", "ADD")
+    b:SetScript("OnClick", onClick or function() parent:Hide() end)
+    return b
+end
+
+-- The bounty window: a reward and a note, sent to your guild and friends (ns.SetWanted in WatchX.lua).
+do
+    local bw
+    local function Box(parent, w, maxLetters, hint)
+        local e = CreateFrame("EditBox", nil, parent, "InputBoxTemplate")
+        e:SetSize(w, 20)
+        e:SetAutoFocus(false)
+        e:SetMaxLetters(maxLetters)
+        e.hint = e:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+        e.hint:SetPoint("LEFT", e, "LEFT", 2, 0)
+        e.hint:SetText(hint)
+        e:SetScript("OnTextChanged", function(self) self.hint:SetShown(self:GetText() == "" and not self:HasFocus()) end)
+        e:SetScript("OnEditFocusGained", function(self) self.hint:Hide() end)
+        e:SetScript("OnEditFocusLost", function(self) self.hint:SetShown(self:GetText() == "") end)
+        e:SetScript("OnEscapePressed", function() parent:Hide() end)
+        return e
+    end
+    local function Build()
+        local f = CreateFrame("Frame", "WatchXBounty", UIParent)
+        f:SetSize(320, 150)
+        f:SetPoint("CENTER", 0, 120)
+        f:SetFrameStrata("DIALOG")
+        f:SetToplevel(true)
+        f:EnableMouse(true)
+        f:SetMovable(true)
+        f:RegisterForDrag("LeftButton")
+        f:SetScript("OnDragStart", f.StartMoving)
+        f:SetScript("OnDragStop", f.StopMovingOrSizing)
+        f:SetClampedToScreen(true)
+        f.title = Window(f, "WANTED", 160)
+        tinsert(UISpecialFrames, "WatchXBounty")
+        CloseX(f)
+        f.who = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightLarge")
+        f.who:SetPoint("TOP", f, "TOP", 0, -26)
+        local lr = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        lr:SetPoint("TOPLEFT", f, "TOPLEFT", 18, -56)
+        lr:SetText("Reward")
+        f.reward = Box(f, 100, 24, "e.g. 50g")
+        f.reward:SetPoint("TOPLEFT", f, "TOPLEFT", 80, -52)
+        local ln = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        ln:SetPoint("TOPLEFT", f, "TOPLEFT", 18, -82)
+        ln:SetText("Note")
+        f.note = Box(f, 216, 100, "why – ninja looter, camps the flight path...")
+        f.note:SetPoint("TOPLEFT", f, "TOPLEFT", 80, -78)
+        local function post()
+            ns.SetWanted(f.key, f.name, f.reward:GetText(), f.note:GetText())
+            f:Hide()
+        end
+        f.reward:SetScript("OnEnterPressed", function() f.note:SetFocus() end)
+        f.reward:SetScript("OnTabPressed", function() f.note:SetFocus() end)
+        f.note:SetScript("OnEnterPressed", post)
+        f.note:SetScript("OnTabPressed", function() f.reward:SetFocus() end)
+        f.post = Button(f, "Post bounty", 110, 22, post)
+        f.post:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 16, 14)
+        f.down = Button(f, "Take down", 90, 22, function() ns.RemoveWanted(f.key); f:Hide() end)
+        f.down:SetPoint("LEFT", f.post, "RIGHT", 6, 0)
+        local cancel = Button(f, CANCEL or "Cancel", 80, 22, function() f:Hide() end)
+        cancel:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -16, 14)
+        f.shareHint = f:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+        f.shareHint:SetPoint("BOTTOM", f, "BOTTOM", 0, 40)
+        f:Hide()
+        return f
+    end
+    function ns.ShowBounty(key, name)
+        if not key then return end
+        bw = bw or Build()
+        local r = db().enemies[key]
+        local w = r and r.wanted
+        bw.key, bw.name = key, name or (r and r.name) or key
+        bw.who:SetText(bw.name)
+        bw.reward:SetText(w and w.reward or "")
+        bw.note:SetText(w and w.note or "")
+        bw.down:SetShown(w and true or false)
+        local d = db()
+        local to = (d.wantedGuild ~= false and d.wantedFriends ~= false) and "your guild and online friends"
+            or d.wantedGuild ~= false and "your guild" or d.wantedFriends ~= false and "your online friends" or "nobody (sharing is off)"
+        bw.shareHint:SetText("Sent to " .. to .. " who run WatchX.")
+        bw:Show()
+        bw:Raise()
+        bw.reward:SetFocus()
+    end
 end
 
 local profileLabels = {}   -- fn(name) for each place that shows the active profile
@@ -460,17 +561,6 @@ local function HideBlizzardMenus()
     end
 end
 
--- A close button of our own (Blizzard's UIPanelCloseButton calls HideUIPanel, which taints – see above).
-local function CloseX(parent, onClick)
-    local b = CreateFrame("Button", nil, parent)
-    b:SetSize(24, 24)
-    b:SetPoint("TOPRIGHT", parent, "TOPRIGHT", -4, -4)
-    b:SetNormalTexture("Interface\\Buttons\\UI-Panel-MinimizeButton-Up")
-    b:SetPushedTexture("Interface\\Buttons\\UI-Panel-MinimizeButton-Down")
-    b:SetHighlightTexture("Interface\\Buttons\\UI-Panel-MinimizeButton-Highlight", "ADD")
-    b:SetScript("OnClick", onClick or function() parent:Hide() end)
-    return b
-end
 
 local function BuildSettings()
     -- Two pages here: the main one (the modules – PvP first – phone links, general things) and "Alerts & scan"
@@ -599,6 +689,9 @@ local function BuildSettings()
         function() return db().nearby end, function(v) ns.SetNearby(v) end, function() ns.OpenNearbySettings() end)
     module("Class icons on nameplates", "class, healers and KOS over enemy players",
         function() return db().plateIcons == true end, function(v) db().plateIcons = v; ns.UpdatePlates() end,
+        function() ns.OpenNearbySettings() end)
+    module("WANTED bounties", "shared with your guild and friends – reward and note",
+        function() return db().wantedOn ~= false end, function(v) db().wantedOn = v end,
         function() ns.OpenNearbySettings() end)
     module("Alert on any enemy player", "phone + the red bar, outside instances",
         function() return db().enemyPlayers end, function(v) ns.SetEnemyPlayers(v) end, openAlerts)
@@ -913,7 +1006,7 @@ local function BuildHistory()
     f.tab, f.sort = "all", { all = { "lastSeen", true }, guilds = { "lastSeen", true } }
     f.tabs = {}
     local prev
-    for _, t in ipairs({ { "all", "All players" }, { "kos", "KOS" }, { "avoid", "Avoid" }, { "notes", "Notes" }, { "guilds", "Guilds" } }) do
+    for _, t in ipairs({ { "all", "All players" }, { "kos", "KOS" }, { "avoid", "Avoid" }, { "wanted", "Wanted" }, { "notes", "Notes" }, { "guilds", "Guilds" } }) do
         local b = FlatButton(f, t[2], 84, 22, function()
             f.tab = t[1]
             ns.RefreshHistory()
@@ -1129,7 +1222,7 @@ function ns.RefreshHistory()
         for key, r in pairs(d.enemies) do
             total = total + 1
             local kos = ns.IsKOS(key, nil, r.guild)
-            local ok = f.tab == "all" or (f.tab == "kos" and kos) or (f.tab == "avoid" and r.avoid) or (f.tab == "notes" and r.note)
+            local ok = f.tab == "all" or (f.tab == "kos" and kos) or (f.tab == "avoid" and r.avoid) or (f.tab == "wanted" and r.wanted) or (f.tab == "notes" and r.note)
             if ok and match(r.name, key, r.guild, r.zone, r.note, r.class) then
                 items[#items + 1] = { key = key, r = r, kos = kos, name = (r.name or key):lower(), level = r.level or 0,
                     class = r.class or "", guild = (r.guild or "~"):lower(), kills = r.kills or 0, deaths = r.deaths or 0,
@@ -1165,7 +1258,8 @@ function ns.RefreshHistory()
             row.key, row.guild = it.key, nil
             row.bar:SetColorTexture(0.10 + alt, 0.11 + alt, 0.14 + alt, 0.9)
             row.edge:SetColorTexture(cr, cg, cb, 1)
-            local v = { (it.kos and "|cffff3030KOS|r " or "") .. (r.avoid and "|cffff8040AVOID|r " or "") .. (r.name or it.key),
+            local v = { (it.kos and "|cffff3030KOS|r " or "") .. (r.wanted and (r.wanted.claimed and "|cff40ff40CLAIMED|r " or "|cffffa000WANTED|r ") or "")
+                .. (r.avoid and "|cffff8040AVOID|r " or "") .. (r.name or it.key),
                 (r.level and r.level > 0) and r.level or "??", ClassName(r.class), r.guild or "|cff606060-|r",
                 (r.kills or 0) > 0 and ("|cffffd100" .. r.kills .. "|r") or "0",
                 (r.deaths or 0) > 0 and ("|cffff6060" .. r.deaths .. "|r") or "0",
@@ -1207,6 +1301,7 @@ local function TooltipUnit(tip)
     local role, how = ns.Role(key, unit)
     local avoid = rec and rec.avoid
     if not rec and not kos and not role then return end
+    if rec and rec.wanted and ns.db.wantedOn ~= false then tip:AddLine("WatchX: " .. ns.WantedLine(rec.wanted), 1, 1, 1, true) end
     if avoid then tip:AddLine(ns.AvoidLine(rec), 1, 0.5, 0.25, true) end
     if role == "healer" then tip:AddLine("WatchX: healer (" .. tostring(how) .. ")", 0.3, 1, 0.4)
     elseif role == "dps" then tip:AddLine("WatchX: not a healer (" .. tostring(how) .. ")", 0.7, 0.7, 0.7) end
@@ -1518,6 +1613,36 @@ function ns.BuildNearbySettings()
     end
     ns.RefreshKOSChips = function() if page:IsShown() then RefreshKOS() end end
     y = chipTop - math.ceil(CHIP_MAX / 3) * CH - 12
+
+    -- WANTED: bounties shared with the guild and friends
+    y = y - 6
+    heading("WANTED – BOUNTIES")
+    check("Share with my guild", "send and get bounties in guild",
+        function() return db().wantedGuild ~= false end, function(v) db().wantedGuild = v end)
+    check("Share with my friends", "online friends who run WatchX",
+        function() return db().wantedFriends ~= false end, function(v) db().wantedFriends = v end)
+    check("Card + sound when one shows up", nil,
+        function() return db().wantedAlert ~= false end, function(v) db().wantedAlert = v end)
+    addRow("Bounty", "Name: 50g note", function(t)
+        local name, rest = t:match("^([^:]+):%s*(.*)$")
+        name = ns.Trim(name or t)
+        local reward, note = (rest or ""):match("^(%d+%s*[gGsS]%S*)%s*(.*)$")
+        ns.SetWanted(ns.KeyFromName(name), name, reward, reward and note or rest)
+    end, "Bounty on target", function()
+        local key, full
+        if UnitExists("target") and UnitIsPlayer("target") then key, full = ns.PlayerKey("target") end
+        if not key then ns.Print("Target a player first.") return end
+        ns.EnemyRecord(key, full)
+        ns.ShowBounty(key, full)
+    end)
+    local wantedList = Button(o, "Wanted list...", 110, 22, function() ns.ShowHistory("wanted") end)
+    wantedList:SetPoint("TOPLEFT", o, "TOPLEFT", L + W - 110, y)
+    local wantedHelp = o:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    wantedHelp:SetPoint("TOPLEFT", o, "TOPLEFT", L + 2, y - 4)
+    wantedHelp:SetWidth(W - 130)
+    wantedHelp:SetJustifyH("LEFT")
+    wantedHelp:SetText("A kill by you or your group claims it, and everyone hears who did. Pay the gold by hand.")
+    y = y - 34
 
     -- avoid list: a mark on the same players (and the same notes) as KOS – any player, not just enemies
     y = y - 6
@@ -2034,7 +2159,15 @@ local function AddGrips(f, apply, finish)
         local g = CreateFrame("Frame", nil, f)
         g:SetFrameLevel((f:GetFrameLevel() or 1) + 10)
         local t = g:CreateTexture(nil, "OVERLAY")
-        t:SetAllPoints()
+        if mode == "R" then
+            t:SetPoint("TOPRIGHT", g, "TOPRIGHT", -1, -3); t:SetPoint("BOTTOMRIGHT", g, "BOTTOMRIGHT", -1, 0)
+            t:SetWidth(2)
+        elseif mode == "B" then
+            t:SetPoint("BOTTOMLEFT", g, "BOTTOMLEFT", 3, 1); t:SetPoint("BOTTOMRIGHT", g, "BOTTOMRIGHT", 0, 1)
+            t:SetHeight(2)
+        else
+            t:SetAllPoints()
+        end
         if mode == "R" then
             g:SetPoint("TOPRIGHT", f, "TOPRIGHT", 0, 0)
             g:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", 0, GRIP * 2)
@@ -2052,10 +2185,10 @@ local function AddGrips(f, apply, finish)
         else
             t:SetColorTexture(ACCENT[1], ACCENT[2], ACCENT[3], 1)
         end
-        t:SetAlpha(mode == "BR" and 0.9 or 0.35)
+        t:SetAlpha(mode == "BR" and 0.9 or 0.7)
         g:EnableMouse(true)
         g:SetScript("OnEnter", function() t:SetAlpha(1) end)
-        g:SetScript("OnLeave", function() if not f.sizing then t:SetAlpha(mode == "BR" and 0.9 or 0.35) end end)
+        g:SetScript("OnLeave", function() if not f.sizing then t:SetAlpha(mode == "BR" and 0.9 or 0.7) end end)
         g:SetScript("OnMouseDown", function(_, button)
             if button ~= "LeftButton" then return end
             local sc = f:GetScale() or 1
@@ -2069,7 +2202,7 @@ local function AddGrips(f, apply, finish)
             g:SetScript("OnUpdate", nil)
             if not f.sizing then return end
             f.sizing = nil
-            t:SetAlpha(mode == "BR" and 0.9 or 0.35)
+            t:SetAlpha(mode == "BR" and 0.9 or 0.7)
             finish(f)
         end)
         g:Hide()
@@ -2101,10 +2234,19 @@ local function MakeLabel(name)
     bg:SetAllPoints()
     bg:SetColorTexture(0, 0, 0, 0.75)
     l.text = l:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    l.text:SetPoint("LEFT", l, "LEFT", 6, 0)
+    l.text:SetPoint("TOPLEFT", l, "TOPLEFT", 6, -3)
+    l.text:SetJustifyH("LEFT")
+    l.text:SetWordWrap(true)
+    l.text:SetSpacing(2)
+    -- never wider than the bar it sits on: a long hint wraps onto more lines instead
     l.Set = function(self, anchor, text)
+        local barW = (anchor:GetWidth() or 200) * (anchor:GetEffectiveScale() or 1) / (self:GetEffectiveScale() or 1)
+        self.text:SetWidth(2000)
         self.text:SetText(text)
-        self:SetWidth(self.text:GetStringWidth() + 12)
+        local w = math.min(self.text:GetStringWidth() + 2, math.max(120, barW - 12))
+        self.text:SetWidth(w)
+        self:SetWidth(w + 12)
+        self:SetHeight((self.text:GetStringHeight() or 12) + 6)
         self:ClearAllPoints()
         self:SetPoint("BOTTOMLEFT", anchor, "TOPLEFT", 0, 3)
         self:Show()
@@ -2558,11 +2700,16 @@ local function BuildNearby()
     f.title:SetPoint("TOPLEFT", f, "TOPLEFT", 8, -6)
     f.title:SetText("Nearby")
     -- History: the big list of everyone you've met
-    f.hist = FlatButton(f, "", 20, 18, function() ns.ShowHistory() end)   -- a flat button with a list icon
-    f.hist:SetPoint("TOPRIGHT", f, "TOPRIGHT", -6, -4)
+    f.hist = CreateFrame("Button", nil, f)   -- a small list icon (≡), on the title's line
+    f.hist:SetSize(18, 16)
+    f.hist:SetPoint("TOPRIGHT", f, "TOPRIGHT", -7, -5)
+    f.hist:SetScript("OnClick", function() ns.ShowHistory() end)
+    local hhl = f.hist:CreateTexture(nil, "HIGHLIGHT")
+    hhl:SetAllPoints()
+    hhl:SetColorTexture(1, 0.82, 0, 0.2)
     for i = 0, 2 do   -- three short lines: ≡
         local ln = f.hist:CreateTexture(nil, "ARTWORK")
-        ln:SetColorTexture(0.85, 0.88, 0.9, 1)
+        ln:SetColorTexture(EDGE[1], EDGE[2], EDGE[3], 1)
         ln:SetSize(10, 2)
         ln:SetPoint("CENTER", f.hist, "CENTER", 0, 4 - i * 4)
     end
@@ -2681,7 +2828,9 @@ local function PaintNearbyRow(r, e, now)
     r.bar:SetColorTexture(cr * 0.6, cg * 0.6, cb * 0.6, near and 0.9 or 0.35)
     local rec = ns.db.enemies[e.key]
     local healer = ns.db.plateHealer ~= false and ns.IsHealer(e.key)
-    r.name:SetText((e.kos and "|cffff3030KOS|r " or "") .. ((rec and rec.avoid) and "|cffff8040AVOID|r " or "")
+    local wanted = rec and rec.wanted and not rec.wanted.claimed and ns.db.wantedOn ~= false
+    r.name:SetText((e.kos and "|cffff3030KOS|r " or "") .. (wanted and "|cffffa000WANTED|r " or "")
+        .. ((rec and rec.avoid) and "|cffff8040AVOID|r " or "")
         .. (healer and "|cff40ff60+|r " or "") .. e.name
         .. ((rec and rec.note) and " |cffffd100*|r" or ""))
     r.name:SetTextColor(near and 1 or 0.7, near and 1 or 0.7, near and 1 or 0.7)
@@ -2753,6 +2902,7 @@ local TOAST_KINDS = {
     stealth = { head = "Stealthed player detected!", r = 0.8, g = 0.55, b = 1, icon = "Interface\\Icons\\Ability_Stealth" },
     enemy = { head = "Enemy player detected!", r = 1, g = 0.35, b = 0.35, icon = "Interface\\Icons\\Ability_DualWield" },
     kos = { head = "Kill on sight!", r = 1, g = 0.15, b = 0.15, icon = "Interface\\TargetingFrame\\UI-RaidTargetingIcon_8" },
+    wanted = { head = "WANTED!", r = 1, g = 0.63, b = 0, icon = "Interface\\Icons\\INV_Misc_Coin_02" },
 }
 
 local function ToastDocked()
@@ -2902,12 +3052,22 @@ function ns.OnKOS(e)
     ns.ShowStealthToast(e, "kos")
 end
 
+-- A wanted player showed up: the WANTED card with the reward, and a sound.
+function ns.OnWantedSeen(e, w)
+    if not db().nearby then return end
+    ns.Print("|cffffa000WANTED|r nearby: " .. e.name .. (w.reward and (" – " .. w.reward) or "") .. (w.by and (" (from " .. w.by .. ")") or ""))
+    if db().stealthSound ~= false then PlaySound(SOUNDKIT.RAID_WARNING, "Master") end
+    ns.ShowStealthToast(e, "wanted")
+    if toast and w.reward then toast.head:SetText("WANTED!  |cffffd100" .. w.reward .. "|r") end
+end
+
 -- A new enemy in the list: the red card (not more often than every few seconds).
 local lastEnemyToast = 0
 function ns.OnNewEnemy(e)
     if db().newEnemyCard ~= true or not db().nearby then return end
     local shownHead = toast and toast:IsShown() and toast.head:GetText()
-    if GetTime() - lastEnemyToast < 3 or shownHead == TOAST_KINDS.stealth.head or shownHead == TOAST_KINDS.kos.head then
+    if GetTime() - lastEnemyToast < 3 or shownHead == TOAST_KINDS.stealth.head or shownHead == TOAST_KINDS.kos.head
+            or (shownHead and shownHead:find("WANTED", 1, true)) then
         return   -- a stealth or KOS card is more important: let it stay
     end
     lastEnemyToast = GetTime()
