@@ -5257,8 +5257,18 @@ do (function()
     -- The sleeping bag: one Well-Rested stack a minute, up to 3. You lie down by clicking the bag on the ground (no
     -- cast to see), so the count starts at a "sleep" buff, a new stack, or using the bag item (ns.bagStart).
     local bag = {}
+    -- The bag was put down within the last 10 minutes (its 1-hour cooldown just started): "Resting" is the bag then,
+    -- not an inn.
+    local function BagUsedLately()
+        local f = C_Container and C_Container.GetItemCooldown
+        if not f then return true end
+        local ok, start, dur = pcall(f, 211527)
+        start, dur = ok and N(start), ok and N(dur)
+        return start and dur and start > 0 and dur > 60 and GetTime() - start < 600 or false
+    end
     local function BagState(lying, wr)
         local now = GetTime()
+        lying = lying and BagUsedLately()
         local stacks = wr or 0   -- Well-Rested's stacks, found by name in Find (its spell ID differs between clients)
         if bag.stacks == nil then bag.stacks = stacks end                       -- first look: just the baseline
         if lying and not ns.bagStart then ns.bagStart = now end
@@ -5286,7 +5296,9 @@ do (function()
             local kind = name and KINDS[name]
             local lower = name and name:lower() or ""
             if not kind and lower:find("campfire", 1, true) then kind = "fire" end
-            if not kind and lower:find("sleep", 1, true) and not lower:find("well", 1, true) then out.lying = true end
+            -- lying on the bag: Forever gives "Resting" (no end); a "sleep" buff counts too
+            if not kind and (lower == "resting" or N(a.spellId) == 1331671
+                    or (lower:find("sleep", 1, true) and not lower:find("well", 1, true))) then out.lying = true end
             if lower == "well-rested" or lower == "well rested" or N(a.spellId) == 429959 then
                 out.wr = math.max(out.wr or 0, N(a.applications) or 1)
             end
