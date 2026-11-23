@@ -3061,20 +3061,35 @@ function ns.NearbyAttachWidth()   -- what the mini bar should be at least, so th
     return NearbyWidth()
 end
 
+-- The stack under the mini bar (1 px apart): the compact XP bar, then the Nearby list. below: the room the frames
+-- above it take. Under the big red bar when that's up in the mini bar's spot; in the mini bar's spot when it's hidden.
+local STACK_GAP = 1
+function ns.UnderMini(f, below)
+    if not mini then return end
+    local sc = mini:GetScale() or 1
+    below = below or 0
+    f:ClearAllPoints()
+    if mini.visible then
+        f:SetPoint("TOPLEFT", mini, "BOTTOMLEFT", 0, -STACK_GAP - below)
+    elseif TargetShown() and not OwnSpot() then
+        f:SetPoint("TOPLEFT", mini, "TOPLEFT", 0, -(TARGET_H * AlertScale() / sc) - STACK_GAP - below)
+    else
+        f:SetPoint("TOPLEFT", mini, "TOPLEFT", 0, -below)
+    end
+end
+function ns.StackWidth() return mini and math.max(mini:GetWidth() or 0, NearbyWidth()) or NearbyWidth() end
+function ns.StackKey()
+    return mini and (tostring(mini.visible) .. tostring(TargetShown() and not OwnSpot())) or ""
+end
+
 function ns.AttachNearby()
+    if ns.PlaceXPBar then ns.PlaceXPBar() end
     if not nb or InCombatLockdown() then return end
     if Attached() then
         local sc = mini:GetScale() or 1
         nb:SetScale(sc)
-        nb:SetWidth(math.max(mini:GetWidth() or 0, NearbyWidth()))
-        nb:ClearAllPoints()
-        if mini.visible then
-            nb:SetPoint("TOPLEFT", mini, "BOTTOMLEFT", 0, -2)
-        elseif TargetShown() and not OwnSpot() then
-            nb:SetPoint("TOPLEFT", mini, "TOPLEFT", 0, -(TARGET_H * AlertScale() / sc) - 2)   -- under the big bar
-        else
-            nb:SetPoint("TOPLEFT", mini, "TOPLEFT", 0, 0)   -- the mini bar is hidden: take its spot
-        end
+        nb:SetWidth(ns.StackWidth())
+        ns.UnderMini(nb, ns.XPBarSlot and ns.XPBarSlot() or 0)
         nb.attached = true
         mini.holdsSecure = true
     elseif nb.attached then
@@ -4750,28 +4765,33 @@ end
     end
 
     -- Compact (under the Nearby list): just the bar; the rest is in the tooltip.
+    local XB_SMALL = 12   -- the bar's height in the compact one
     local function Layout(compact)
         if xb.compact == compact then return end
         xb.compact = compact
-        for _, fs in ipairs({ xb.top1, xb.top2, xb.bot1, xb.bot2 }) do fs:SetShown(not compact) end
+        for _, fs in ipairs({ xb.top1, xb.top2, xb.bot1, xb.bot2, xb.mid }) do fs:SetShown(not compact) end
+        for _, fs in ipairs({ xb.lvl, xb.pct }) do fs:SetFontObject(compact and "GameFontHighlightSmall" or "GameFontHighlight") end
         xb.bar:ClearAllPoints()
         local y = compact and -4 or -18
         xb.bar:SetPoint("TOPLEFT", xb, "TOPLEFT", compact and 4 or 6, y)
         xb.bar:SetPoint("TOPRIGHT", xb, "TOPRIGHT", compact and -4 or -6, y)
-        xb:SetHeight(compact and (XB_BAR + 8) or XB_H)
+        xb.bar:SetHeight(compact and XB_SMALL or XB_BAR)
+        xb:SetHeight(compact and (XB_SMALL + 8) or XB_H)
+    end
+    -- the room it takes in the stack under the mini bar (for the Nearby list under it)
+    function ns.XPBarSlot()
+        if xb and xb.compact and xb:IsShown() then return (xb:GetHeight() or 0) + 1 end
+        return 0
     end
     local function Position()
         xb:ClearAllPoints()
         xb.attachedTo = nil
-        if db().xpBarAttach then
-            local host = (nb and nb:IsShown()) and nb or mini
-            if host then
-                xb.attachedTo = host
-                xb:SetScale(host:GetScale() or 1)
-                xb:SetWidth(host:GetWidth() or XB_W)
-                xb:SetPoint("TOPLEFT", host, "BOTTOMLEFT", 0, -2)
-                return
-            end
+        if db().xpBarAttach and mini and ns.UnderMini then   -- between the mini bar and the Nearby list
+            xb.attachedTo = mini
+            xb:SetScale(mini:GetScale() or 1)
+            xb:SetWidth(ns.StackWidth())
+            ns.UnderMini(xb, 0)
+            return
         end
         xb:SetScale(ClampScale(db().xpBarScale))
         xb:SetWidth(db().xpBarWidth or XB_W)
@@ -4794,16 +4814,20 @@ end
             if inside and (kind == "party" or kind == "raid") then show = false end
         end
         if not show then
-            if xb then xb:Hide() end
+            if xb and xb:IsShown() then
+                xb:Hide()
+                if xb.compact and ns.AttachNearby then ns.AttachNearby() end
+            end
             if xbLabel then xbLabel:Hide() end
             return
         end
         if not xb then xb = Build() end
         local compact = d.xpBarAttach and true or false
         Layout(compact)
-        local host = compact and ((nb and nb:IsShown()) and nb or mini) or nil
-        if xb.attachedTo ~= host or (host and math.abs((xb:GetWidth() or 0) - (host:GetWidth() or 0)) > 0.5) or not xb.placed then
-            xb.placed = true
+        local key = compact and (ns.StackKey() .. math.floor(ns.StackWidth() + 0.5) .. tostring(mini and mini:GetScale())) or "own"
+        local wasShown = xb:IsShown()
+        if xb.placedKey ~= key then
+            xb.placedKey = key
             Position()
         end
         local cur, max = N(UnitXP("player")) or 0, N(UnitXPMax("player")) or 1
@@ -4820,10 +4844,10 @@ end
         local spent = now - session.start
         local rate = (session.xp > 0 and spent > 60) and (session.xp / spent * 3600) or nil
         xb.data = { level = level, cur = cur, max = max, rested = rested, rate = rate }
-        xb.lvl:SetText("Level " .. level)
+        xb.lvl:SetText(compact and ("Lvl " .. level) or ("Level " .. level))
         xb.mid:SetText(Num(cur) .. " / " .. Num(max) .. "  |cffffd100(" .. Num(max - cur) .. ")|r")
         xb.pct:SetText(("%.1f%%"):format(cur / max * 100)
-            .. (quests.done > 0 and ("  |cffffa020(%.1f%%)|r"):format(math.min(100, (cur + quests.done) / max * 100)) or ""))
+            .. ((quests.done > 0 and not compact) and ("  |cffffa020(%.1f%%)|r"):format(math.min(100, (cur + quests.done) / max * 100)) or ""))
         xb.top1:SetText("This level: |cffffd100" .. (played.level and Dur(played.level + now - played.at) or "–") .. "|r")
         xb.top2:SetText("Session: |cffffd100" .. Dur(spent) .. "|r  ·  +" .. Num(session.xp) .. " XP"
             .. (rate and ("  ·  " .. Num(rate) .. "/h") or ""))
@@ -4832,12 +4856,18 @@ end
             Num(quests.done), Num(quests.todo), Num(rested), rested / max * 100))
         xb:EnableMouse(true)
         xb:Show()
+        if compact and not wasShown and ns.AttachNearby then ns.AttachNearby() end   -- make room under it
         if moving and not compact then
             xbLabel = xbLabel or MakeLabel("WatchXXPBarLabel")
             xbLabel:Set(xb, "|cffffd100XP bar|r · drag to move · right edge: width · bottom edge: text size · right-click: back under the icons")
         elseif xbLabel then
             xbLabel:Hide()
         end
+    end
+
+    -- the mini bar or the red bar changed: the compact one moves with them at once (not on its next tick)
+    function ns.PlaceXPBar()
+        if xb and xb.compact and xb:IsShown() then Position() end
     end
 
     function ns.XPBarMove(on)
@@ -4940,8 +4970,9 @@ function ns.BuildLevelSettings()
         function() return db().levelWarn ~= false end, function(v) db().levelWarn = v end)
     check("XP bar", "under the icons: XP, rested, quests, time this level, when you'll level",
         function() return db().xpBar ~= false end, function(v) db().xpBar = v; ns.RefreshXPBar() end)
-    check("XP bar under the Nearby list", "just the bar, same width – the rest is in its tooltip",
-        function() return db().xpBarAttach == true end, function(v) db().xpBarAttach = v; ns.RefreshXPBar() end)
+    check("XP bar between the mini bar and Nearby", "just level and %, same width – the rest when you hover it",
+        function() return db().xpBarAttach == true end,
+        function(v) db().xpBarAttach = v; ns.RefreshXPBar(); if ns.AttachNearby then ns.AttachNearby() end end)
     check("Hide in combat", "the icons (the XP bar stays)",
         function() return db().levelHideCombat ~= false end, function(v) db().levelHideCombat = v end)
     check("Hide in dungeons and raids", nil,
