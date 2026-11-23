@@ -1,0 +1,2556 @@
+-- WatchX – Made by Rikerud
+-- Passive alerts when selected rare mobs spawn (Prince Nazjak built in, custom mobs can be added).
+--
+-- Detection (fully passive, no macro/targeting):
+--   * Nameplates: scans all visible nameplates every second + NAME_PLATE_UNIT_ADDED.
+--     Requires enemy nameplates to be enabled and you to be within nameplate range.
+--   * Mouseover / target.
+--   * Deaths: UNIT_DIED / PARTY_KILL (GUIDs remembered from the nameplate), the "%s dies." /
+--     "You have slain %s!" chat lines, and corpses seen on nameplates.
+--   Not the combat log: WoW Forever closes COMBAT_LOG_EVENT_* to addons (registering it is
+--   blocked – that was the "blocked from an action" popup). Secret values are skipped.
+--
+-- Phone alerts: WoW addons cannot make HTTP requests. The addon takes a screenshot with a small code
+-- block in the corner (see "instant alerts"); the bridge (bridge/ in the source, WatchX-Bridge.zip on
+-- GitHub; set up once with its "Install" file, which copies it out of the game folder) sees the new file, reads the code and sends the alert to ntfy and Discord at once.
+-- Fallback when screenshots don't work: a tagged line in the chat log (/chatlog), which WoW writes in
+-- big chunks (slow): [WatchX]#<id> <TYPE> <subject>::<text>
+-- AFK: a warning 5 min before the AFK logout; the logout itself is seen by the bridge (exitWhy).
+--
+-- This file: data, detection, alerts, chat log state, session log, slash commands.
+-- UI.lua: panel, mini bar, settings page, guide, minimap button.
+
+local ADDON, ns = ...
+
+ns.AUTHOR = "Rikerud"
+ns.BRIDGE_URL = "github.com/nintox/WatchX/releases"   -- WatchX-Bridge.zip (the phone bridge isn't in the CurseForge download)
+ns.MAX_CUSTOM = 9
+
+-- Built-in presets. Add more here: name must match the in-game name exactly.
+ns.PRESETS = {
+    { name = "Prince Nazjak", note = "Tidal Charm", loot = { [1404] = "Tidal Charm" },
+      -- where to stand (Arathi Highlands): 24 known spawn points, 41 yd nameplates – no single spot
+      -- sees them all; these two see the most (from Questie's spawn data)
+      zone = "Arathi Highlands", mapID = 1417,
+      spots = {
+          { x = 21.9, y = 84.4, text = "Spot 1 – north group: sees 8 of 24 spawn points" },
+          { x = 22.3, y = 89.2, text = "Spot 2 – south group: sees 6 more (14 of 24 with both)" },
+      },
+      spawns = { { 19.8, 88.8 }, { 20.2, 82.4 }, { 20.6, 83.4 }, { 20.8, 84 }, { 21.2, 84.6 }, { 21.2, 89.2 },
+          { 21.2, 89.6 }, { 21.6, 82.8 }, { 21.6, 86 }, { 21.6, 89 }, { 21.8, 83.6 }, { 21.8, 84.8 },
+          { 22.4, 89.6 }, { 22.8, 84.4 }, { 23, 84.8 }, { 23, 86.2 }, { 23, 88 }, { 23.2, 82.2 },
+          { 23.2, 83.2 }, { 23.4, 89 }, { 23.6, 83.8 }, { 23.6, 89.4 }, { 23.6, 89.8 }, { 24, 88.4 } } },
+}
+
+local TAG = "[WatchX]"
+local REALERT_AFTER = 180   -- seconds without seeing the mob before a new sighting counts as a new spawn
+local DEATH_GRACE = 30      -- seconds after a death during which new sightings are ignored
+local ENEMY_COOLDOWN = 600  -- seconds before the same enemy player is announced again
+local LOG_MAX = 80
+
+local defaults = {
+    whisper = true,       -- send tagged whisper to yourself (for the bridge)
+    sound = true,
+    enemyPlayers = false, -- alert on any hostile player (PvP), outside instances
+    friendlyPlayers = false, -- alert on any friendly player, outside instances, cities/inns and your group
+    attackAlert = true,   -- alert when something attacks you while you're idle or AFK
+    nearby = false,       -- the Nearby list of enemy players + stealth warnings (in game only, like Spy)
+    stealthWarn = true,   -- Nearby: the "Stealthed player detected!" card
+    stealthSound = true,  -- Nearby: a sound with it
+    newEnemyCard = false, -- Nearby: an "Enemy player detected!" card for every new enemy (stealth/KOS always)
+    warnDock = false,     -- Nearby: the cards sit on top of the list (off: top of the screen, movable)
+    nearbyAttach = true,  -- Nearby: the list hangs under the mini bar, same width
+    nearbyMax = 10,       -- Nearby: how many players the list shows
+    nearbyNoBG = true,    -- Nearby: off in battlegrounds and arenas
+    nearbyHideDungeon = false, -- Nearby: hidden in dungeons (else faded)
+    nearbyHideRaid = false,    -- Nearby: hidden in raids (else faded)
+    kosAlert = true,      -- Nearby: a "Kill on sight!" card + sound when a KOS player shows up
+    enemies = {},         -- Nearby history: key -> { name, class, level, guild, firstSeen, lastSeen, zone, seen, kills, deaths, kos, note }
+    kosGuilds = {},       -- lower-case guild name -> guild name, KOS
+    nearbyShowEmpty = false, -- Nearby: show the list even when no enemy is around
+    nearbyKeep = 5,       -- Nearby: minutes a player stays in the list after he was last seen
+    plateIcons = false,   -- a class icon over enemy players' nameplates
+    plateFriendly = false, -- ... and over friendly players'
+    plateSize = 22,       -- the nameplate icon's size (12 - 40)
+    plateHealer = true,
+    plateKOS = true,
+    levelHelper = true,   -- the XP boosts list (until max level)
+    levelMissing = false, -- ... only what's missing
+    levelFlash = true,    -- ... the missing lines pulse
+    levelWarn = true,     -- ... a warning when a boost runs out
+    levelHideCombat = true,
+    levelHideInstance = false,
+    buffWarn = true,      -- buff warnings: before / when a watched buff runs out
+    buffSoon = 60,        -- ... seconds before (0: only when it's gone)
+    buffGone = true,      -- ... when it has run out
+    buffGroups = { breath = true, consumables = true, own = false, others = false },
+    buffCustom = {},      -- ... your own list: buff names or spell IDs (shared by all profiles)      -- ... with a red ring and a skull on KOS players   -- ... with a green + on proven healers (talents, group role, healing-talent spells)
+    notifyDeath = true,   -- send death alerts to phone
+    show = true,          -- mini bar shown
+    locked = false,       -- mini bar locked
+    miniQuiet = false,    -- mini bar only shows when something is up (the alert spot stays)
+    hideIdle = false,     -- mini bar hidden while nothing is watched
+    mapSpots = true,      -- the best places to stand, as pins on the world map and minimap
+    alertSame = true,     -- the big alert pops up in the mini bar's spot (false: alertPoint)
+    minimap = { hide = false },
+    watch = { ["Prince Nazjak"] = true },  -- name -> watched (on/off)
+    custom = {},                           -- custom mob names, in order
+    mobs = {},                             -- name -> state (see MobState)
+    log = {},                              -- this session's log (/wx log)
+    -- Read by the bridge from SavedVariables:
+    ntfyUrl = "",
+    ntfyToken = "",
+    discordWebhook = "",
+    discordMention = "@here",
+    instant = true,       -- instant alerts by screenshot (falls back to the chat log if that doesn't work)
+    afkWarn = true,       -- alert 5 min before the AFK logout, and when you get logged out
+    afkLogoutMin = 25,    -- minutes from the AFK flag to the logout (learned when it happens)
+    -- Runtime, read by the bridge: exitAt (time()), exitWhy ("reload", "logout", "quit", "afk", "disconnect")
+}
+
+local db
+local counter = 0
+local lastLootAlert = 0
+local watchByLower = {}   -- lower(name) -> name, enabled only
+local activeLoot = {}     -- itemID -> { item = name, mob = name }
+local ev = CreateFrame("Frame")
+
+-- ---------------------------------------------------------------- helpers
+
+local function Print(msg)
+    DEFAULT_CHAT_FRAME:AddMessage("|cff4d85b3WatchX|r: " .. msg)
+end
+ns.Print = Print
+
+local function Fmt(sec)
+    sec = math.max(0, math.floor(sec))
+    local h, m, s = math.floor(sec / 3600), math.floor(sec % 3600 / 60), sec % 60
+    if h > 0 then return string.format("%d:%02d:%02d", h, m, s) end
+    return string.format("%d:%02d", m, s)
+end
+ns.Fmt = Fmt
+
+local function Trim(s) return (s or ""):match("^%s*(.-)%s*$") end
+ns.Trim = Trim
+
+-- Forever can hand over secret values (unit names, GUIDs, health); those are skipped.
+local function Plain(v)
+    if type(issecretvalue) == "function" then
+        local ok, s = pcall(issecretvalue, v)
+        if ok and s then return nil end
+    end
+    return v
+end
+
+-- An enemy player: one you can attack, or of the other faction even when they aren't PvP flagged (then the
+-- game doesn't call them hostile, but they're still Horde to your Alliance).
+function ns.IsHostilePlayer(unit)
+    if Plain(UnitIsEnemy("player", unit)) == true or Plain(UnitCanAttack("player", unit)) == true then return true end
+    if Plain(UnitIsPlayer(unit)) ~= true or not UnitFactionGroup then return false end
+    local mine, theirs = Plain((UnitFactionGroup("player"))), Plain((UnitFactionGroup(unit)))
+    return type(mine) == "string" and type(theirs) == "string" and mine ~= "Neutral" and theirs ~= "Neutral"
+        and mine ~= theirs
+end
+
+-- A Lua pattern from one of the game's format strings ("%s dies." -> "^(.+) dies%.$").
+local function MakePattern(fmt)
+    if type(fmt) ~= "string" then return nil end
+    local p = fmt:gsub("[%^%$%(%)%.%[%]%*%+%-%?%%]", "%%%0")
+    p = p:gsub("%%%%%d%%%$s", "(.+)"):gsub("%%%%s", "(.+)"):gsub("%%%%%d%%%$d", "(%%d+)"):gsub("%%%%d", "(%%d+)")
+    return "^" .. p .. "$"
+end
+ns.MakePattern = MakePattern
+
+-- Session log (as in LayerSwap): kept in SavedVariables so a problem can be read afterwards.
+local function Log(...)
+    if not db then return end
+    local parts = { date("%H:%M:%S") }
+    for i = 1, select("#", ...) do parts[#parts + 1] = tostring((select(i, ...))) end
+    table.insert(db.log, table.concat(parts, " "))
+    while #db.log > LOG_MAX do table.remove(db.log, 1) end
+end
+ns.Log = Log
+
+-- Runs fn; an error is logged and said once in chat instead of breaking WatchX for the session.
+local reportedErrors = {}
+function ns.Safe(label, fn, ...)
+    local ok, err = pcall(fn, ...)
+    if not ok then
+        err = tostring(err)
+        if Log then Log("error", label, err) end
+        if not reportedErrors[err] then
+            reportedErrors[err] = true
+            DEFAULT_CHAT_FRAME:AddMessage("|cff4d85b3WatchX|r: |cffff4040error (" .. label .. "):|r " .. err
+                .. " |cffaaaaaa– please send a screenshot of this to " .. tostring(ns.AUTHOR) .. ".|r")
+        end
+    end
+    return ok
+end
+
+local function Refresh()
+    if ns.RefreshUI then ns.RefreshUI() end
+end
+
+local function MobState(name)
+    local m = db.mobs[name]
+    if not m then
+        m = { alive = false, samples = {}, kills = {} }
+        db.mobs[name] = m
+    end
+    return m
+end
+ns.MobState = MobState
+
+local function PresetFor(name)
+    for _, p in ipairs(ns.PRESETS) do
+        if p.name:lower() == name:lower() then return p end
+    end
+end
+
+-- All mobs: presets first, then custom ones.
+function ns.GetMobList()
+    local list = {}
+    for _, p in ipairs(ns.PRESETS) do
+        list[#list + 1] = { name = p.name, preset = true, note = p.note, enabled = db.watch[p.name] and true or false }
+    end
+    for _, name in ipairs(db.custom) do
+        list[#list + 1] = { name = name, preset = false, enabled = db.watch[name] and true or false }
+    end
+    return list
+end
+
+function ns.RebuildWatch()
+    wipe(watchByLower)
+    wipe(activeLoot)
+    for _, mob in ipairs(ns.GetMobList()) do
+        if mob.enabled then
+            watchByLower[mob.name:lower()] = mob.name
+            local p = PresetFor(mob.name)
+            if p and p.loot then
+                for id, item in pairs(p.loot) do activeLoot[id] = { item = item, mob = p.name } end
+            end
+        end
+    end
+end
+
+local function Resolve(name)
+    return name and watchByLower[name:lower()]
+end
+
+local function FindAny(name)
+    name = Trim(name):lower()
+    for _, mob in ipairs(ns.GetMobList()) do
+        if mob.name:lower() == name then return mob.name end
+    end
+end
+ns.FindAny = FindAny
+
+function ns.SetWatched(name, on)
+    db.watch[name] = on and true or nil
+    ns.RebuildWatch()
+    if ns.UpdateMapPins then ns.Safe("map pins", ns.UpdateMapPins) end
+    Refresh()
+end
+
+function ns.AddCustom(name)
+    name = Trim(name)
+    if name == "" then return false, "Enter a name." end
+    if FindAny(name) then return false, "'" .. name .. "' is already in the list." end
+    if #db.custom >= ns.MAX_CUSTOM then return false, "Max " .. ns.MAX_CUSTOM .. " custom mobs." end
+    table.insert(db.custom, name)
+    ns.SetWatched(name, true)
+    Print("Added '" .. name .. "'.")
+    return true
+end
+
+function ns.RemoveCustom(name)
+    for i, n in ipairs(db.custom) do
+        if n == name then
+            table.remove(db.custom, i)
+            db.watch[name] = nil
+            ns.RebuildWatch()
+            Print("Removed '" .. name .. "'.")
+            Refresh()
+            return true
+        end
+    end
+end
+
+local function EstimatedRespawn(name)
+    local m = MobState(name)
+    if m.manualRespawn then return m.manualRespawn, "manual" end
+    local best
+    for _, v in ipairs(m.samples) do
+        if not best or v < best then best = v end
+    end
+    if best then return best, string.format("fastest of %d seen", #m.samples) end
+end
+ns.EstimatedRespawn = EstimatedRespawn
+
+function ns.SetManualRespawn(name, minutes)
+    local n = tonumber(minutes)
+    MobState(name).manualRespawn = (n and n > 0) and math.floor(n * 60) or nil
+    Refresh()
+end
+
+-- Status of one mob: state ("up"/"dead"/"unknown"), short colored text, detail text,
+-- and seconds until the estimated respawn (nil if unknown).
+-- A name on the watch list that turned out to be a player (shown as FOUND instead of UP).
+function ns.IsPlayerEntry(name) return MobState(name).isPlayer == true end
+
+function ns.GetMobStatus(name)
+    local m, now = MobState(name), time()
+    if m.alive and m.lastSeen and now - m.lastSeen < REALERT_AFTER then
+        return "up", "|cff40ff40UP|r", "seen " .. Fmt(now - m.lastSeen) .. " ago"
+    elseif m.lastDeath then
+        local since = now - m.lastDeath
+        local est = EstimatedRespawn(name)
+        if est then
+            local left = est - since
+            if left > 0 then
+                return "dead", "|cffff6060dead|r " .. Fmt(since), "respawn ~" .. Fmt(left), left
+            end
+            return "dead", "|cffffd100due|r", "can spawn any moment", 0
+        end
+        return "dead", "|cffff6060dead|r " .. Fmt(since), "learning respawn"
+    end
+    return "unknown", "|cff808080not seen|r", ""
+end
+
+-- ---------------------------------------------------------------- chat log
+-- LoggingChat() is protected in this client (even just reading it), so the addon never calls it.
+-- The chat log is toggled with /chatlog – typed by the player or via the secure bar in UI.lua –
+-- and the state is tracked from the message /chatlog prints.
+
+function ns.HasTargets()
+    return db and db.whisper and (db.ntfyUrl ~= "" or db.discordWebhook ~= "")
+end
+
+function ns.ChatLogText()
+    if db.chatlogOn == true then return "|cff40ff40on|r" end
+    if db.chatlogOn == false then return "|cffff6060OFF|r" end
+    return "|cffffd100unknown|r"
+end
+
+local chatLogJustSet = false
+local function SetChatLogState(on)
+    chatLogJustSet = true
+    db.chatlogOn = on
+    Log("chatlog", on and "on" or "off")
+    if on then Print("Chat log is |cff40ff40on|r – phone alerts can be delivered.") end
+    if ns.UpdateChatLogPrompt then ns.UpdateChatLogPrompt() end
+    Refresh()
+end
+
+local function HookChatLog()
+    local function onMessage(_, msg)
+        if type(msg) ~= "string" then return end
+        if CHATLOGENABLED and msg:find(CHATLOGENABLED, 1, true) then SetChatLogState(true)
+        elseif CHATLOGDISABLED and msg:find(CHATLOGDISABLED, 1, true) then SetChatLogState(false) end
+    end
+    hooksecurefunc(DEFAULT_CHAT_FRAME, "AddMessage", onMessage)
+    if ChatFrame1 and ChatFrame1 ~= DEFAULT_CHAT_FRAME then hooksecurefunc(ChatFrame1, "AddMessage", onMessage) end
+    -- Fallback if the message wasn't seen: flip the known state.
+    if SlashCmdList and SlashCmdList.CHATLOG then
+        hooksecurefunc(SlashCmdList, "CHATLOG", function()
+            if not chatLogJustSet then SetChatLogState(db.chatlogOn ~= true) end
+            chatLogJustSet = false
+        end)
+    end
+end
+
+-- ---------------------------------------------------------------- sending
+-- The alert goes into WoW's chat log through a line only you see. Forever doesn't let you whisper
+-- yourself ("No player named 'X' is currently playing"), so there are three ways, tried in order.
+-- One that fails is remembered (db.methodFailed) and the next one is used – the alert is resent:
+--   whisper  – a whisper to yourself
+--   realm    – a whisper to Name-Realm
+--   dnd      – your Busy message: "You are now Busy: <alert>" is logged; Busy is cleared again
+-- If the game holds back a send (ADDON_ACTION_BLOCKED/FORBIDDEN during it, as LayerSwap measured
+-- for its own sends), the alert is kept and the UI asks for one click to send it.
+
+local METHODS = { "whisper", "realm", "dnd" }
+ns.METHODS = METHODS
+local sendingChat, heldBack = false, false
+local pendingMsg
+local lastSend          -- { msg, method, target, at }: to spot "No player named" right after a whisper
+
+function ns.HasPending() return pendingMsg ~= nil end
+
+local function MyRealm()
+    local r = GetNormalizedRealmName and GetNormalizedRealmName()
+    if (not r or r == "") and GetRealmName then r = (GetRealmName() or ""):gsub("[%s%-']", "") end
+    return (r and r ~= "") and r or nil
+end
+
+local function CurrentMethod()
+    if db.sendMethod and db.sendMethod ~= "auto" then return db.sendMethod end
+    db.methodFailed = db.methodFailed or {}
+    for _, m in ipairs(METHODS) do
+        if not db.methodFailed[m] then return m end
+    end
+    return "dnd"
+end
+ns.CurrentMethod = CurrentMethod
+
+-- One chat send. Returns ok, held back, result.
+local function SendChat(msg, chatType, target)
+    if C_ChatInfo and C_ChatInfo.InChatMessagingLockdown then
+        local ok, locked = pcall(C_ChatInfo.InChatMessagingLockdown)
+        if ok and locked then return false, false, "chat lockdown" end
+    end
+    local send = (C_ChatInfo and C_ChatInfo.SendChatMessage) or SendChatMessage
+    sendingChat, heldBack = true, false
+    local ok, result = pcall(send, msg, chatType, nil, target)
+    sendingChat = false
+    if heldBack then return false, true end
+    local enum = Enum and Enum.SendChatMessageResult
+    return ok and (result == nil or result == true or result == 0 or (enum and result == enum.Success)) or false,
+        false, ok and result or "error"
+end
+
+local function IsBusy()
+    return UnitIsDND and Plain(UnitIsDND("player")) == true
+end
+
+local SendAlertLine
+SendAlertLine = function(msg)
+    local me = UnitName("player")
+    if not me then return false end
+    local method = CurrentMethod()
+    local target, ok, held, res, mine
+    if method == "dnd" then
+        if IsBusy() then SendChat("", "DND") end            -- already Busy: a new message would toggle it off
+        ok, held, res = SendChat(msg, "DND")
+        if ok then
+            C_Timer.After(1.5, function() if IsBusy() then SendChat("", "DND") end end)
+        end
+    else
+        target = me
+        if method == "realm" then
+            local realm = MyRealm()
+            if realm then target = me .. "-" .. realm end
+        end
+        -- set before the send: "No player named" may come back while it is still running
+        mine = { msg = msg, method = method, target = target, at = GetTime() }
+        lastSend = mine
+        ok, held, res = SendChat(msg, "WHISPER", target)
+    end
+    if mine and mine.failed then return true end           -- the next way took over and sent it
+    if held then
+        Log("send", method, "held back by the game")
+        pendingMsg = msg
+        Print("|cffffd100The game held back the phone alert. Click the red bar to send it.|r")
+        if ns.ShowSendBar then ns.ShowSendBar(true) end
+        return false
+    end
+    if ok then
+        Log("send", method, "ok")
+        return true
+    end
+    if lastSend == mine then lastSend = nil end
+    Log("send", method, "failed", tostring(res))
+    Print("|cffffd100The phone alert could not be sent (" .. tostring(res) .. ").|r")
+    return false
+end
+
+-- A system message right after a send: "No player named ..." means that way doesn't work here.
+local notFoundPattern
+local function OnSystemMessage(text)
+    text = Plain(text)
+    if type(text) ~= "string" or not lastSend or not lastSend.target then return end
+    if GetTime() - lastSend.at > 5 then return end
+    notFoundPattern = notFoundPattern or MakePattern(_G.ERR_CHAT_PLAYER_NOT_FOUND_S or "No player named '%s' is currently playing.")
+    local who = notFoundPattern and text:match(notFoundPattern)
+    if not who then return end
+    local me = (UnitName("player") or ""):lower()
+    if who:lower() ~= lastSend.target:lower() and not who:lower():find(me, 1, true) then return end
+    local failed, msg = lastSend.method, lastSend.msg
+    lastSend.failed = true
+    lastSend = nil
+    db.methodFailed = db.methodFailed or {}
+    db.methodFailed[failed] = true
+    Log("method", failed, "does not work here")
+    if db.sendMethod and db.sendMethod ~= "auto" then
+        Print("|cffffd100Sending by '" .. failed .. "' doesn't work here – use /wx method auto.|r")
+        return
+    end
+    Print("|cffaaaaaaThat way of reaching the chat log doesn't work here – trying the next one (" .. CurrentMethod() .. ").|r")
+    SendAlertLine(msg)
+end
+
+function ns.SendPending()
+    local msg = pendingMsg
+    pendingMsg = nil
+    if ns.ShowSendBar then ns.ShowSendBar(false) end
+    if msg and SendAlertLine(msg) then Print("Phone alert sent.") end
+end
+
+-- The slow way (fallback): a tagged line in the chat log. WoW writes that file in big chunks, so it
+-- can take minutes to reach the phone – only used when screenshots don't work.
+local function Signal(kind, subject, text, epoch, ctr)
+    local msg = string.format("%s#%d%03d %s %s::%s", TAG, epoch, ctr, kind, subject, text or "")
+    if SendAlertLine(msg:sub(1, 240)) and ns.HasTargets() and db.chatlogOn ~= true then
+        Print("|cffffd100The chat log may be off – click the yellow bar (or type /chatlog), "
+            .. "otherwise alerts can't reach your phone.|r")
+    end
+end
+
+-- ---------------------------------------------------------------- instant alerts (screenshot)
+-- WoW saves a screenshot to disk at once, and the bridge watches the Screenshots folder. While the
+-- picture is taken, a small black-and-white code block is shown in the top-left corner: it carries the
+-- alert (kind, name, text), so the bridge knows what to send – and ignores your own screenshots.
+-- Layout (in cells): black margin, white border, then the data bits row by row, MSB first.
+-- Data: "W" "X" <length> <payload> <fletcher-16 a> <b>;
+-- payload: <kind letter> <epoch: 4 bytes> <counter> <subject> 0x1F <text>.
+local SHOT_CELL, SHOT_COLS = 7, 48          -- cell size in screen units (the screen is 768 high), data columns
+local SHOT_KINDS = { SPAWN = "S", LOOT = "L", ENEMY = "E", PLAYER = "P", FRIEND = "F", DEATH = "D", TEST = "T",
+                     AFK = "A", LOGOUT = "O", ATTACK = "H" }
+ns.SHOT_CELL, ns.SHOT_COLS = SHOT_CELL, SHOT_COLS
+
+local function CutUtf8(s, n)
+    if #s <= n then return s end
+    s = s:sub(1, n)
+    return (s:gsub("[\192-\255][\128-\191]*$", ""))   -- don't leave half a letter at the end
+end
+
+function ns.ShotBits(kind, epoch, ctr, subject, text)
+    local payload = { (SHOT_KINDS[kind] or "T"):byte() }
+    for i = 3, 0, -1 do payload[#payload + 1] = math.floor(epoch / 256 ^ i) % 256 end
+    payload[#payload + 1] = ctr % 256
+    for c in CutUtf8(subject or "", 32):gmatch(".") do payload[#payload + 1] = c:byte() end
+    payload[#payload + 1] = 31
+    for c in CutUtf8(text or "", 64):gmatch(".") do payload[#payload + 1] = c:byte() end
+    local bytes = { 87, 88, #payload }
+    local a, b = #payload % 255, #payload % 255
+    for _, v in ipairs(payload) do
+        bytes[#bytes + 1] = v
+        a = (a + v) % 255
+        b = (b + a) % 255
+    end
+    bytes[#bytes + 1] = a
+    bytes[#bytes + 1] = b
+    local bits = {}
+    for _, v in ipairs(bytes) do
+        for i = 7, 0, -1 do bits[#bits + 1] = math.floor(v / 2 ^ i) % 2 end
+    end
+    return bits
+end
+
+local marker, markerCells
+local function ShowMarker(bits)
+    if not marker then
+        -- no parent: shown even with the interface hidden (Alt-Z), always in screen units (768 high)
+        marker = CreateFrame("Frame", "WatchXMarker", nil)
+        marker:SetFrameStrata("TOOLTIP")
+        marker:SetFrameLevel(9000)
+        if WorldFrame then marker:SetPoint("TOPLEFT", WorldFrame, "TOPLEFT", 0, 0) else marker:SetPoint("TOPLEFT", 0, 0) end
+        marker.black = marker:CreateTexture(nil, "BACKGROUND")
+        marker.black:SetAllPoints()
+        marker.black:SetColorTexture(0, 0, 0, 1)
+        marker.white = marker:CreateTexture(nil, "BORDER")
+        marker.white:SetColorTexture(1, 1, 1, 1)
+        marker.white:SetPoint("TOPLEFT", SHOT_CELL, -SHOT_CELL)
+        marker.inner = marker:CreateTexture(nil, "ARTWORK")
+        marker.inner:SetColorTexture(0, 0, 0, 1)
+        marker.inner:SetPoint("TOPLEFT", SHOT_CELL * 2, -SHOT_CELL * 2)
+        markerCells = {}
+    end
+    local rows = math.ceil(#bits / SHOT_COLS)
+    marker:SetSize((SHOT_COLS + 4) * SHOT_CELL, (rows + 4) * SHOT_CELL)
+    marker.white:SetSize((SHOT_COLS + 2) * SHOT_CELL, (rows + 2) * SHOT_CELL)
+    marker.inner:SetSize(SHOT_COLS * SHOT_CELL, rows * SHOT_CELL)
+    for i = 1, math.max(#bits, #markerCells) do
+        local t = markerCells[i]
+        if bits[i] == 1 then
+            if not t then
+                t = marker:CreateTexture(nil, "OVERLAY")
+                t:SetColorTexture(1, 1, 1, 1)
+                t:SetSize(SHOT_CELL, SHOT_CELL)
+                local c, r = (i - 1) % SHOT_COLS, math.floor((i - 1) / SHOT_COLS)
+                t:SetPoint("TOPLEFT", (c + 2) * SHOT_CELL, -(r + 2) * SHOT_CELL)
+                markerCells[i] = t
+            end
+            t:Show()
+        elseif t then
+            t:Hide()
+        end
+    end
+    marker:Show()
+end
+
+local function HideMarker() if marker then marker:Hide() end end
+
+local shotQueue, shotBusy, shotWait = {}, false, nil
+local takingShot, shotBlocked = false, false
+ns.shotEvents = false   -- SCREENSHOT_SUCCEEDED/FAILED registered (set below)
+
+local NextShot
+local function ShotDone(item, ok, why)
+    HideMarker()
+    shotWait, shotBusy = nil, false
+    if ok then
+        if db.instantOK ~= true then Log("instant", "screenshot works") end
+        db.instantOK = true
+    else
+        Log("instant", "screenshot failed", why or "?")
+        db.instantOK = false
+        Print("|cffffd100Instant alert failed (" .. (why or "?") .. ") – sending it the slow way (chat log).|r")
+        if ns.UpdateChatLogPrompt then ns.UpdateChatLogPrompt() end
+        Signal(item.kind, item.subject, item.text, item.epoch, item.ctr)
+    end
+    C_Timer.After(0.3, NextShot)
+end
+
+NextShot = function()
+    if shotBusy or #shotQueue == 0 then return end
+    local item = table.remove(shotQueue, 1)
+    shotBusy = true
+    ShowMarker(ns.ShotBits(item.kind, item.epoch, item.ctr, item.subject, item.text))
+    C_Timer.After(0.25, function()   -- let the code block (and the raid warning) be drawn first
+        takingShot, shotBlocked = true, false
+        local ok, err = pcall(Screenshot)
+        takingShot = false
+        if not ok or shotBlocked then
+            ShotDone(item, false, shotBlocked and "blocked by the game" or tostring(err))
+            return
+        end
+        shotWait = item
+        C_Timer.After(ns.shotEvents and 5 or 1.5, function()
+            if shotWait == item then ShotDone(item, not ns.shotEvents, "no picture saved") end
+        end)
+    end)
+end
+
+function ns.OnScreenshot(success)
+    if shotWait then ShotDone(shotWait, success, "the game couldn't save it") end
+end
+
+-- The phone part of an alert: the instant way when it works, the chat log otherwise.
+local function Phone(kind, subject, text)
+    if not db.whisper then return end
+    if kind == "DEATH" and not db.notifyDeath then return end
+    counter = (counter + 1) % 256
+    local epoch = time()
+    if db.instant ~= false and db.instantOK ~= false and Screenshot then
+        shotQueue[#shotQueue + 1] = { kind = kind, subject = subject, text = text, epoch = epoch, ctr = counter }
+        NextShot()
+    else
+        Signal(kind, subject, text, epoch, counter)
+    end
+end
+ns.Phone = Phone
+
+-- msg: shown in game; phoneText (optional): the shorter text for the phone (it carries the name in its title).
+local function Alert(kind, subject, msg, phoneText)
+    Print("|cffff4040" .. msg .. "|r")
+    Log("alert", kind, subject)
+    if db.sound then PlaySound(SOUNDKIT.RAID_WARNING, "Master") end
+    if RaidNotice_AddMessage and RaidWarningFrame then
+        RaidNotice_AddMessage(RaidWarningFrame, msg, ChatTypeInfo["RAID_WARNING"])
+    end
+    if FlashClientIcon then FlashClientIcon() end
+    Phone(kind, subject, phoneText or msg)
+end
+ns.Alert = Alert
+
+-- Delayed so the test travels exactly like a real spawn alert (not straight from a click).
+function ns.SendTest()
+    Print("Sending a test alert in 3 seconds (the same way a real spawn alert is sent)...")
+    C_Timer.After(3, function()
+        Alert("TEST", "WatchX", "Test from WatchX – if you see this on your phone, everything works.",
+            "Test – if you see this on your phone, it works!")
+    end)
+end
+
+local function Location()
+    local sub, zone = GetSubZoneText(), GetZoneText()
+    if sub and sub ~= "" then return sub .. ", " .. (zone or "") end
+    return zone or "?"
+end
+
+-- ---------------------------------------------------------------- state
+
+local function OnDeath(name, source)
+    local m, now = MobState(name), time()
+    if not m.alive and m.lastDeath and now - m.lastDeath < 120 then return end
+    m.alive = false
+    m.lastDeath = now
+    table.insert(m.kills, now)
+    Log("death", name, source)
+
+    local msg = name .. " died (" .. (source or "?") .. ")."
+    local est = EstimatedRespawn(name)
+    if est then
+        msg = msg .. string.format(" Earliest respawn around %s (in %s).", date("%H:%M", now + est), Fmt(est))
+    end
+    Print(msg)
+    Phone("DEATH", name, msg)
+    Refresh()
+end
+ns.OnDeath = OnDeath
+
+-- "60 Rogue, <Guild>, PvP" for a player unit (secret parts are left out).
+local function PlayerInfo(unit)
+    local parts = {}
+    local level = Plain(UnitLevel(unit))
+    local class = Plain((UnitClass(unit)))
+    if type(level) == "number" or type(class) == "string" then
+        parts[#parts + 1] = ((type(level) == "number" and level > 0) and level or "??") .. (class and (" " .. class) or "")
+    end
+    local guild = Plain((GetGuildInfo(unit)))
+    if type(guild) == "string" and guild ~= "" then parts[#parts + 1] = "<" .. guild .. ">" end
+    if Plain(UnitIsPVP(unit)) == true then parts[#parts + 1] = "PvP" end
+    return table.concat(parts, ", ")
+end
+
+local function OnSeen(name, unit, source)
+    local m, now = MobState(name), time()
+    if unit and Plain(UnitIsDead(unit)) == true then
+        OnDeath(name, "corpse seen")
+        return
+    end
+    if m.lastDeath and now - m.lastDeath < DEATH_GRACE then return end
+
+    local stillSameSpawn = m.alive and m.lastSeen and (now - m.lastSeen) < REALERT_AFTER
+    m.lastSeen = now
+    if stillSameSpawn then return end
+
+    m.alive = true
+    -- a player on your watch list: "found" (enemy or friend), no respawn learning. ("spotted" is for
+    -- any enemy player, from "Any enemy player".)
+    if unit and Plain(UnitIsPlayer(unit)) == true then
+        m.isPlayer = true
+        local info = PlayerInfo(unit)
+        local hostile = ns.IsHostilePlayer(unit)
+        local who = (hostile and "enemy" or "") .. ((hostile and info ~= "") and ", " or "") .. info
+        Log("found", name, source)
+        local key, full = ns.PlayerKey(unit)
+        if key and full ~= name then m.full, m.key = full, key end   -- for the target button
+        Alert("PLAYER", name, string.format("%s found! (%s%s)", name, who ~= "" and (who .. " – ") or "", Location()),
+            (who ~= "" and (who .. " · ") or "") .. Location())
+        Refresh()
+        return
+    end
+    m.isPlayer = nil
+    local extra = ""
+    if m.lastDeath and m.sampledDeath ~= m.lastDeath then
+        local gap = now - m.lastDeath
+        m.sampledDeath = m.lastDeath
+        if gap < 12 * 3600 then
+            table.insert(m.samples, gap)
+            extra = string.format(" %s after last kill.", Fmt(gap))
+        end
+    end
+    local hp = ""
+    local cur, max = unit and Plain(UnitHealth(unit)), unit and Plain(UnitHealthMax(unit))
+    if type(cur) == "number" and type(max) == "number" and max > 0 then
+        hp = string.format(" · HP %d%%", math.floor(cur / max * 100 + 0.5))
+    end
+    Log("spawn", name, source)
+    Alert("SPAWN", name, string.format("%s is UP! (%s, %s)%s%s", name, Location(), source or "?", hp, extra),
+        Location() .. hp)
+    Refresh()
+end
+
+function ns.ResetData()
+    db.mobs = {}
+    Print("All kill and respawn data reset.")
+    Refresh()
+end
+
+-- ---------------------------------------------------------------- scanning
+
+local guidToName = {}   -- GUIDs of watched mobs seen this session, for UNIT_DIED / PARTY_KILL
+local enemySeen = {}    -- enemy player name -> last announced
+local friendSeen = {}   -- friendly player name -> last announced
+ns.lastEnemy = nil      -- { name =, at = } for the panel and mini bar
+ns.lastFriend = nil     -- the same for friendly players
+
+-- Any hostile player (PvP), when "Any enemy player" is on. Not in instances or battlegrounds,
+-- and the same player only once every ENEMY_COOLDOWN seconds.
+local function CheckEnemyPlayer(unit, name, source)
+    local hostile = Plain(UnitIsEnemy("player", unit)) == true or Plain(UnitCanAttack("player", unit)) == true
+    if not hostile or Plain(UnitIsDead(unit)) == true then return end
+    local inInstance = IsInInstance and IsInInstance()
+    if inInstance then return end
+    local now = time()
+    ns.lastEnemy = { name = name, at = now }
+    if enemySeen[name] and now - enemySeen[name] < ENEMY_COOLDOWN then return end
+    enemySeen[name] = now
+    local info = PlayerInfo(unit)
+    Log("enemy", name, source)
+    Alert("ENEMY", name, string.format("Enemy player: %s (%s%s)", name, info ~= "" and (info .. " – ") or "", Location()),
+        (info ~= "" and (info .. " · ") or "") .. Location())
+end
+
+-- ---------------------------------------------------------------- nearby enemies (like Spy)
+-- Every enemy player the nameplates, target, mouseover or focus show is listed for a while, with
+-- level, class and guild. Stealth is spotted from the cast (Stealth, Vanish, Prowl, Shadowmeld): the
+-- nameplate goes at once, so the name it last showed is kept for a moment. Learned from Spy's
+-- Forever port. In game only – nothing is sent to the phone.
+local NEARBY_ACTIVE, GONE_WINDOW = 30, 1.5
+function ns.NearbyKeepMin() return math.max(1, math.min(30, tonumber(db and db.nearbyKeep) or 5)) end
+local function NearbyKeep() return ns.NearbyKeepMin() * 60 end
+local STEALTH_IDS = { [1784] = "Stealth", [1785] = "Stealth", [1786] = "Stealth", [1787] = "Stealth",
+    [1856] = "Vanish", [1857] = "Vanish", [5215] = "Prowl", [6783] = "Prowl", [9913] = "Prowl",
+    [20580] = "Shadowmeld" }
+local STEALTH_NAMES = { Stealth = true, Vanish = true, Prowl = true, Shadowmeld = true }
+ns.nearby = {}            -- key -> { key, name, first, class, level, guild, firstSeen, last, stealth, targetingMe }
+ns.NEARBY_ACTIVE = NEARBY_ACTIVE
+local plateKeys, gonePlates, lastStealth = {}, {}, {}
+
+-- Forever player names have a surname where Classic had the realm: key "First-Last", shown "First Last".
+local function PlayerKey(unit)
+    local name, realm = UnitName(unit)
+    name, realm = Plain(name), Plain(realm)
+    if type(name) ~= "string" or name == "" or name == UNKNOWNOBJECT then return end
+    if type(realm) == "string" and realm ~= "" then return name .. "-" .. realm, name .. " " .. realm, name end
+    return name, name, name
+end
+ns.PlayerKey = PlayerKey
+
+-- The macro that targets a player: the full name first, then the other ways Forever may want it.
+function ns.TargetMacro(first, full, key)
+    if not full or full == first then return "/targetexact " .. first end
+    return table.concat({ "/cleartarget", "/targetexact " .. full, "/targetexact [noexists] " .. key,
+        "/targetexact [noexists] " .. first }, "\n")
+end
+
+local function NoteNearby(unit)
+    local key, display, first = PlayerKey(unit)
+    if not key then return end
+    local now, e, isNew = time(), ns.nearby[key], false
+    if not e then
+        e = { key = key, name = display, first = first, firstSeen = now }
+        ns.nearby[key] = e
+        isNew = true
+    end
+    e.last = now
+    local _, class = UnitClass(unit)
+    class = Plain(class)
+    if type(class) == "string" then e.class = class end
+    local lvl = Plain(UnitLevel(unit))
+    if type(lvl) == "number" then e.level = lvl end
+    local guild = Plain((GetGuildInfo(unit)))
+    if type(guild) == "string" and guild ~= "" then e.guild = guild end
+    local race = Plain((UnitRace(unit)))
+    if type(race) == "string" and race ~= "" then e.race = race end
+    if Plain(UnitIsUnit(unit .. "target", "player")) == true then e.targetingMe = now end
+    -- the history (kept between sessions)
+    local r = ns.EnemyRecord(key, display)
+    if isNew or now - (r.lastSeen or 0) > NearbyKeep() then r.seen = (r.seen or 0) + 1 end
+    r.lastSeen, r.zone = now, GetZoneText and Plain(GetZoneText()) or r.zone
+    r.class, r.level, r.guild, r.race = e.class or r.class, e.level or r.level, e.guild or r.guild, e.race or r.race
+    local guid = Plain(UnitGUID(unit))
+    if type(guid) == "string" then ns.playerGuids[guid] = key end
+    e.kos = ns.IsKOS(key, first, e.guild)
+    if isNew then
+        if e.kos and db.kosAlert ~= false and ns.OnKOS then ns.OnKOS(e)
+        elseif ns.OnNewEnemy then ns.OnNewEnemy(e) end
+    end
+    return key
+end
+
+-- ---------------------------------------------------------------- KOS, notes and history
+ns.playerGuids = {}   -- GUID -> key, this session (for kills)
+local ENEMY_MAX = 2000
+
+function ns.EnemyRecord(key, name)
+    local r = db.enemies[key]
+    if not r then
+        r = { name = name or key:gsub("%-", " "), firstSeen = time(), seen = 0, kills = 0, deaths = 0 }
+        db.enemies[key] = r
+        ns.enemyCount = (ns.enemyCount or 0) + 1
+        if ns.enemyCount > ENEMY_MAX then ns.PruneEnemies() end
+    elseif name then
+        r.name = name
+    end
+    return r
+end
+
+-- Too many: the oldest ones without KOS, a note or kills go first.
+function ns.PruneEnemies()
+    local list = {}
+    for k, r in pairs(db.enemies) do
+        if not (r.kos or r.note or (r.kills or 0) > 0 or (r.deaths or 0) > 0) then list[#list + 1] = { k, r.lastSeen or 0 } end
+    end
+    table.sort(list, function(a, b) return a[2] < b[2] end)
+    for i = 1, math.floor(#list / 4) do db.enemies[list[i][1]] = nil end
+    ns.enemyCount = nil
+    local n = 0
+    for _ in pairs(db.enemies) do n = n + 1 end
+    ns.enemyCount = n
+end
+
+-- KOS: the player (by full key or by first name only) or the guild.
+function ns.IsKOS(key, first, guild)
+    local r = db.enemies[key]
+    if r and r.kos then return true end
+    local f = first and db.enemies[first]
+    if f and f.kos then return true end
+    if type(guild) == "string" and db.kosGuilds[guild:lower()] then return true, "guild" end
+    return false
+end
+
+-- A typed name ("Shixa Nightblade", "Shixa-Nightblade" or just "Shixa") -> the key it's stored by.
+function ns.KeyFromName(name)
+    name = Trim(name or "")
+    if name == "" then return end
+    local key = name:gsub("%s+", "-")
+    for k in pairs(db.enemies) do if k:lower() == key:lower() then return k end end
+    return key
+end
+
+function ns.SetKOS(key, on)
+    local r = ns.EnemyRecord(key)
+    r.kos = on and true or nil
+    local e = ns.nearby[key]
+    if e then e.kos = ns.IsKOS(key, e.first, e.guild) end
+    Print((on and "|cffff3030KOS|r: " or "No longer KOS: ") .. r.name)
+    if ns.UpdatePlates then ns.UpdatePlates() end
+    Refresh()
+end
+
+function ns.SetGuildKOS(guild, on)
+    guild = Trim(guild or "")
+    if guild == "" then return end
+    db.kosGuilds[guild:lower()] = on and guild or nil
+    for key, e in pairs(ns.nearby) do e.kos = ns.IsKOS(key, e.first, e.guild) end
+    Print((on and "|cffff3030KOS guild|r: " or "No longer a KOS guild: ") .. "<" .. guild .. ">")
+    if ns.UpdatePlates then ns.UpdatePlates() end
+    Refresh()
+end
+
+function ns.SetNote(key, text)
+    local r = ns.EnemyRecord(key)
+    text = Trim(text or "")
+    r.note = text ~= "" and text or nil
+    Refresh()
+end
+
+function ns.ForgetEnemy(key)
+    db.enemies[key] = nil
+    ns.enemyCount = nil
+    Refresh()
+end
+
+-- A kill by you or your group: if it was a player we know, count it.
+function ns.OnPlayerKill(targetGuid)
+    targetGuid = Plain(targetGuid)
+    local key = type(targetGuid) == "string" and ns.playerGuids[targetGuid]
+    if not key then return end
+    local r = ns.EnemyRecord(key)
+    r.kills = (r.kills or 0) + 1
+    r.lastKill = time()
+    Log("kill", r.name)
+    Print("Killed " .. r.name .. " |cffaaaaaa(" .. r.kills .. " kill" .. (r.kills == 1 and "" or "s") .. ")|r")
+    Refresh()
+end
+
+-- You died: the enemy player who had you targeted most recently (within 10 s) gets the kill.
+function ns.OnPlayerDead()
+    local best, at, now = nil, 0, time()
+    for key, e in pairs(ns.nearby) do
+        if e.targetingMe and now - e.targetingMe <= 10 and e.targetingMe > at then best, at = key, e.targetingMe end
+    end
+    if not best then return end
+    local r = ns.EnemyRecord(best)
+    r.deaths = (r.deaths or 0) + 1
+    r.lastDeath = now
+    Log("killed by", r.name)
+    Print("Killed by " .. r.name .. "? |cffaaaaaa(" .. r.deaths .. " time" .. (r.deaths == 1 and "" or "s") .. ")|r")
+    Refresh()
+end
+
+-- Newest first; old ones are dropped.
+function ns.NearbyList()
+    local list, now = {}, time()
+    for key, e in pairs(ns.nearby) do
+        if now - e.last > NearbyKeep() then ns.nearby[key] = nil else list[#list + 1] = e end
+    end
+    table.sort(list, function(a, b) if a.last ~= b.last then return a.last > b.last end return a.key < b.key end)
+    return list
+end
+
+-- How the Nearby list looks here: "show" (open world, or battlegrounds when allowed), "fade" (dungeons
+-- and raids) or "hide" (where the settings say so).
+function ns.NearbyZoneMode()
+    if not IsInInstance then return "show" end
+    local inside, kind = IsInInstance()
+    if not inside then return "show" end
+    if kind == "pvp" or kind == "arena" then return db.nearbyNoBG == false and "show" or "hide" end
+    if kind == "raid" then return db.nearbyHideRaid and "hide" or "fade" end
+    if kind == "party" or kind == "scenario" then return db.nearbyHideDungeon and "hide" or "fade" end
+    return "fade"
+end
+
+-- Where Nearby works: the open world; battlegrounds and arenas only when "Hide in battlegrounds" is unticked.
+function ns.NearbyHere()
+    if not (IsInInstance) then return true end
+    local inside, kind = IsInInstance()
+    if not inside then return true end
+    if kind == "pvp" or kind == "arena" then return db.nearbyNoBG == false end
+    return false   -- dungeons and raids: no enemy players there anyway
+end
+
+local function OnStealthCast(unit, spellID)
+    if not (db.nearby and type(unit) == "string") or not ns.NearbyHere() then return end
+    if not (unit == "target" or unit == "focus" or unit == "mouseover" or unit:find("^nameplate%d+$")) then return end
+    spellID = Plain(spellID)
+    if type(spellID) ~= "number" then return end
+    local what = STEALTH_IDS[spellID]
+    if not what then
+        local nameOf = (C_Spell and C_Spell.GetSpellName and Plain(C_Spell.GetSpellName(spellID)))
+            or (GetSpellInfo and Plain((GetSpellInfo(spellID))))
+        if not (type(nameOf) == "string" and STEALTH_NAMES[nameOf]) then return end
+        what = nameOf
+    end
+    local key
+    if Plain(UnitExists(unit)) == true and Plain(UnitIsPlayer(unit)) == true then
+        if not ns.IsHostilePlayer(unit) then return end
+        key = NoteNearby(unit)
+    else
+        local gone = gonePlates[unit]
+        if gone and GetTime() - gone.at <= GONE_WINDOW then key = gone.key end
+    end
+    local e = key and ns.nearby[key]
+    if not e then return end
+    local now = time()
+    e.stealth, e.stealthHow = now, what
+    if lastStealth[key] and now - lastStealth[key] < 5 then return end   -- one cast fires on every token
+    lastStealth[key] = now
+    Log("stealth", e.name, what)
+    local info = ((e.level and e.level > 0) and (e.level .. " ") or "") .. (e.class and (e.class:sub(1, 1) .. e.class:sub(2):lower()) or "")
+    Print("|cffc080ffStealthed player detected:|r " .. e.name .. (info ~= "" and (" (" .. info .. ")") or "")
+        .. " – " .. what)
+    if db.stealthWarn == false then Refresh() return end
+    if db.stealthSound ~= false then PlaySound(SOUNDKIT.RAID_WARNING, "Master") end
+    if ns.ShowStealthToast then ns.ShowStealthToast(e) end
+    Refresh()
+end
+
+-- ---------------------------------------------------------------- healers (for the nameplate icons)
+-- Only proof counts, never "he cast a heal" (a Ret paladin or a Feral druid heals himself too):
+--   * friendly players: their talents, read by inspecting them (like Leatrix Plus's ID card on Forever: the
+--     three trees side by side in one trait tree, told apart by the gaps between the columns), or their group role.
+--   * enemy players can't be inspected (WoW never lets you inspect the other faction), so: a cast of a spell only
+--     a healing talent gives (Riptide, Wild Growth, Prayer of Mending, Holy Shock ...), or a healer's form.
+--     A spell or form only a damage talent gives (Shadowform, Moonkin Form, Lava Burst ...) proves the opposite.
+-- Spells are matched by name, so every rank counts. Final talents on Forever from ForeverAuras' catalog
+-- (talentsforever.com). Kept for 30 days in db.roles, for friends and enemies alike.
+local HEALER_TALENT_IDS = {
+    401859, 10060, 724, 34861, 47540,   -- priest: Prayer of Mending, Power Infusion, Lightwell, Circle of Healing, Penance
+    408521, 16190, 974,                 -- shaman: Riptide, Mana Tide Totem, Earth Shield
+    408120, 18562, 33891,               -- druid: Wild Growth, Swiftmend, Tree of Life
+    20473, 53563 }                      -- paladin: Holy Shock, Beacon of Light
+local DAMAGE_TALENT_IDS = {
+    15473, 15407, 15286, 15487,         -- priest: Shadowform, Mind Flay, Vampiric Embrace, Silence
+    408490, 16166, 17364, 425336,       -- shaman: Lava Burst, Elemental Mastery, Stormstrike, Rage of the Farseer
+    24858, 5570, 16979, 417141,         -- druid: Moonkin Form, Insect Swarm, Feral Charge, Berserk
+    20375, 20066, 20925 }               -- paladin: Seal of Command, Repentance, Holy Shield
+-- The talent trees, left to right, that make a healer.
+local HEALER_TREES = { PRIEST = { [1] = true, [2] = true }, PALADIN = { [1] = true }, SHAMAN = { [3] = true },
+    DRUID = { [3] = true } }
+local ROLE_DAYS, ROLE_MAX, REINSPECT = 30, 3000, 24 * 3600
+ns.roles = {}              -- "plate:nameplateN" -> role, for players whose name is hidden (battlegrounds)
+local roleSpells = nil
+
+local function SpellName(id)
+    local n = C_Spell and C_Spell.GetSpellName and Plain(C_Spell.GetSpellName(id))
+    if type(n) ~= "string" and GetSpellInfo then n = Plain((GetSpellInfo(id))) end
+    return type(n) == "string" and n or nil
+end
+ns.SpellName = SpellName
+
+local function RoleOfSpell(spellID)   -- "healer", "dps" or nil, and the spell's name
+    if not roleSpells then
+        roleSpells = {}
+        for _, id in ipairs(HEALER_TALENT_IDS) do local n = SpellName(id); if n then roleSpells[n] = "healer" end end
+        for _, id in ipairs(DAMAGE_TALENT_IDS) do local n = SpellName(id); if n then roleSpells[n] = "dps" end end
+    end
+    local n = SpellName(spellID)
+    return n and roleSpells[n], n
+end
+
+local function RoleStore()
+    db.roles = type(db.roles) == "table" and db.roles or {}
+    return db.roles
+end
+
+local function PruneRoles(t)
+    local list = {}
+    for k, r in pairs(t) do list[#list + 1] = { k, r.at or 0 } end
+    if #list <= ROLE_MAX then return end
+    table.sort(list, function(a, b) return a[2] < b[2] end)
+    for i = 1, #list - ROLE_MAX + 200 do t[list[i][1]] = nil end
+end
+
+-- Remember what a player is. key = "First-Last" (or nil when the name is hidden; then the plate holds it).
+local function SetRole(key, unit, role, how)
+    local entry = { role = role, how = how, at = time() }
+    local old
+    if key then
+        local t = RoleStore()
+        old = t[key]
+        t[key] = entry
+        if not old then PruneRoles(t) end
+    elseif type(unit) == "string" and unit:find("^nameplate%d+$") then
+        old = ns.roles["plate:" .. unit]
+        ns.roles["plate:" .. unit] = entry
+    else
+        return
+    end
+    if old and old.role == role then return end
+    Log("role", key or unit, role, how)
+    if ns.UpdatePlates then ns.UpdatePlates() end
+end
+
+local function KnownUnit(unit)
+    return type(unit) == "string" and (unit == "target" or unit == "focus" or unit == "mouseover"
+        or unit:find("^nameplate%d+$") or unit:find("^party%d$") or unit:find("^raid%d+$"))
+end
+
+local function OnRoleCast(unit, spellID)
+    if not KnownUnit(unit) then return end
+    spellID = Plain(spellID)
+    if type(spellID) ~= "number" or Plain(UnitIsPlayer(unit)) ~= true then return end
+    local role, name = RoleOfSpell(spellID)
+    if role then SetRole((PlayerKey(unit)), unit, role, name) end
+end
+
+-- A healer's or damage dealer's form on the player (Tree of Life, Shadowform, Moonkin Form). Out of combat;
+-- Forever hides auras in combat, and then this finds nothing.
+function ns.ScanRoleAuras(unit)
+    if Plain(UnitIsPlayer(unit)) ~= true then return end
+    for i = 1, 40 do
+        local id
+        if C_UnitAuras and C_UnitAuras.GetBuffDataByIndex then
+            local ok, a = pcall(C_UnitAuras.GetBuffDataByIndex, unit, i)
+            if not ok or type(a) ~= "table" then break end
+            id = Plain(a.spellId)
+        elseif UnitBuff then
+            local ok, name, _, _, _, _, _, _, _, sid = pcall(UnitBuff, unit, i)
+            if not ok or name == nil then break end
+            id = Plain(sid)
+        else
+            return
+        end
+        if type(id) == "number" then
+            local role, name = RoleOfSpell(id)
+            if role then SetRole((PlayerKey(unit)), unit, role, name) return end
+        end
+    end
+end
+
+-- The role for a player: "healer", "dps" or nil, and how it's known.
+function ns.Role(key, unit)
+    if type(unit) == "string" and UnitGroupRolesAssigned then
+        local ok, r = pcall(UnitGroupRolesAssigned, unit)
+        r = ok and Plain(r)
+        if r == "HEALER" then return "healer", "group role" end
+        if r == "TANK" or r == "DAMAGER" then return "dps", "group role" end
+    end
+    local e = key and db and type(db.roles) == "table" and db.roles[key]
+    if e and time() - (e.at or 0) < ROLE_DAYS * 86400 then return e.role, e.how end
+    e = (type(unit) == "string" and ns.roles["plate:" .. unit]) or (key and ns.roles[key])   -- (by key: the example)
+    if e then return e.role, e.how end
+end
+function ns.IsHealer(key, unit) return ns.Role(key, unit) == "healer" end
+
+-- ---- inspecting friendly players' talents
+-- One at a time, out of combat, only healing classes in inspect range, and never while you have the Inspect window
+-- open (that's yours). Each player again after a day at most. If the game blocks it, it's off until /reload.
+local inspect = { pending = nil, last = 0, tried = {} }
+local HEAL_CLASSES = { PRIEST = true, PALADIN = true, SHAMAN = true, DRUID = true }
+
+-- Points per tree, left to right, from Forever's trait tree (config -1 = the inspected player), or nil.
+local function InspectTrees()
+    local cfg = Constants and Constants.TraitConsts and Constants.TraitConsts.INSPECT_TRAIT_CONFIG_ID or -1
+    if C_Traits and C_Traits.GetConfigInfo and C_Traits.GetTreeNodes and C_Traits.GetNodeInfo then
+        local ok, info = pcall(C_Traits.GetConfigInfo, cfg)
+        local trees = ok and type(info) == "table" and type(info.treeIDs) == "table" and info.treeIDs
+        local columns, xs = {}, {}
+        for _, treeID in ipairs(trees or {}) do
+            local okN, nodes = pcall(C_Traits.GetTreeNodes, Plain(treeID))
+            for _, nodeID in ipairs(okN and type(nodes) == "table" and nodes or {}) do
+                local okI, node = pcall(C_Traits.GetNodeInfo, cfg, Plain(nodeID))
+                local x = okI and type(node) == "table" and Plain(node.posX)
+                if type(x) == "number" then
+                    local pts = tonumber(Plain(node.ranksPurchased)) or 0
+                    if pts == 0 then pts = tonumber(Plain(node.activeRank)) or 0 end
+                    if not columns[x] then columns[x] = 0; xs[#xs + 1] = x end
+                    columns[x] = columns[x] + pts
+                end
+            end
+        end
+        if #xs >= 3 then
+            table.sort(xs)
+            local gaps = {}
+            for i = 2, #xs do gaps[#gaps + 1] = xs[i] - xs[i - 1] end
+            table.sort(gaps)
+            local usual = gaps[math.ceil(#gaps / 2)] or 0
+            local out = { columns[xs[1]] }
+            for i = 2, #xs do
+                if xs[i] - xs[i - 1] > usual * 1.5 then out[#out + 1] = 0 end
+                out[#out] = out[#out] + columns[xs[i]]
+            end
+            if #out == 3 then return out end
+        end
+    end
+    if GetNumTalentTabs and GetTalentTabInfo then   -- the classic way
+        local out = {}
+        for tab = 1, 3 do
+            local ok, a, b, c, d, e = pcall(GetTalentTabInfo, tab, true)
+            if not ok then return end
+            local spent = type(a) == "string" and c or e
+            spent = tonumber(Plain(spent))
+            if not spent then return end
+            out[tab] = spent
+        end
+        return out
+    end
+end
+
+local function ReadInspect(p, tries)
+    if inspect.pending ~= p then return end
+    local trees = InspectTrees()
+    local total = trees and (trees[1] + trees[2] + trees[3]) or 0
+    if total == 0 and tries < 3 then   -- the answer can take a moment to fill in
+        C_Timer.After(0.5 * tries, function() ns.Safe("inspect", ReadInspect, p, tries + 1) end)
+        return
+    end
+    inspect.pending = nil
+    if total > 0 then
+        local best = 1
+        for i = 2, 3 do if trees[i] > trees[best] then best = i end end
+        local heal = HEALER_TREES[p.class] and HEALER_TREES[p.class][best]
+        SetRole(p.key, nil, heal and "healer" or "dps", "talents " .. table.concat(trees, "/"))
+    end
+    if ClearInspectPlayer and not (InspectFrame and InspectFrame:IsShown()) then pcall(ClearInspectPlayer) end
+end
+
+function ns.OnInspectReady(guid)
+    local p = inspect.pending
+    if p and Plain(guid) == p.guid then ReadInspect(p, 1) end
+end
+
+-- Called for friendly players on nameplates (UI.lua). Asks for at most one inspect every 3 seconds.
+function ns.MaybeInspect(unit)
+    if inspect.blocked or not (db.plateFriendly and db.plateHealer ~= false) then return end
+    if not (NotifyInspect and CanInspect) or InCombatLockdown() then return end
+    if InspectFrame and InspectFrame:IsShown() then return end
+    local now = GetTime()
+    if inspect.pending and now - inspect.pending.at < 5 then return end
+    if now - inspect.last < 3 then return end
+    local _, class = UnitClass(unit)
+    class = Plain(class)
+    if not HEAL_CLASSES[class] or Plain(UnitIsUnit(unit, "player")) == true then return end
+    if Plain(UnitIsPlayer(unit)) ~= true or ns.IsHostilePlayer(unit) then return end
+    local key = PlayerKey(unit)
+    local guid = Plain(UnitGUID(unit))
+    if not key or type(guid) ~= "string" then return end
+    local e = type(db.roles) == "table" and db.roles[key]
+    if e and e.how and e.how:find("^talents") and time() - (e.at or 0) < REINSPECT then return end
+    if inspect.tried[key] and now - inspect.tried[key] < 300 then return end
+    local ok, can = pcall(CanInspect, unit)
+    if not ok or Plain(can) ~= true then return end
+    if CheckInteractDistance then
+        local okD, near = pcall(CheckInteractDistance, unit, 1)
+        if okD and Plain(near) == false then return end
+    end
+    inspect.tried[key], inspect.last = now, now
+    inspect.pending = { key = key, guid = guid, class = class, at = now }
+    pcall(NotifyInspect, unit)
+end
+
+-- The game said no (ADDON_ACTION_BLOCKED): stop asking.
+function ns.InspectBlocked()
+    inspect.blocked, inspect.pending = true, nil
+    Print("Reading friendly players' talents isn't allowed on this client – the healer mark uses their spells instead.")
+end
+
+-- ---------------------------------------------------------------- XP boosts (until max level)
+-- What gives extra XP on Forever, and what you're missing right now. From the Forever guides (Nov 2026):
+--   * Rested: kills give double XP until it's spent (quests don't). Builds in an inn or a city while logged
+--     out, 5% of a level per 8 hours, up to 150%.
+--   * Camp Tent (Leatherworking 20, 5 Light Leather): by a campfire it tops rested up to 5% of a level, for
+--     everyone sitting there a minute; then "Boosted Rest" blocks another tent for 1 hour.
+--   * Well Fed (cooked food): +5% kill XP, about 15 minutes, gone on death.
+--   * Cozy Sleeping Bag (quest chain from level 14): lying on it gives Well-Rested, +1% XP a minute, up to 3.
+-- Your auras are hidden in combat on Forever, so they're read out of combat and kept (counting down).
+local CAMP_TENT, SLEEPING_BAG = 279978, 211527
+local CAMPFIRES = { { 279981, "Basic Campfire" }, { 279961, "Journeyman Campfire" }, { 279974, "Expert Campfire" } }
+local WELL_FED, BOOSTED_REST, WELL_RESTED = 1243969, 1229451, 429959
+local AURA_NAMES = { [WELL_FED] = "Well Fed", [BOOSTED_REST] = "Boosted Rest", [WELL_RESTED] = "Well-Rested" }
+local auraCache = { at = 0 }
+
+-- Bags are only read again when they change (BAG_UPDATE), not on every refresh: counts and XP food are kept.
+local bagState = { dirty = true, at = -100, pending = false }
+local statusCache = { at = -100, dirty = true }
+local countCache = {}
+local ItemCountRaw
+local function ItemCount(id)
+    local c = countCache[id]
+    if not c then c = { ItemCountRaw(id) }; countCache[id] = c end
+    return c[1], c[2]
+end
+ItemCountRaw = function(id)
+    local f = (C_Item and C_Item.GetItemCount) or GetItemCount
+    local n = 0
+    if f then
+        local ok, c = pcall(f, id)
+        n = ok and tonumber(Plain(c)) or 0
+    end
+    if n == 0 and PlayerHasToy then   -- the sleeping bag may be a toy
+        local ok, has = pcall(PlayerHasToy, id)
+        if ok and Plain(has) == true then return 1, true end
+    end
+    return n, false
+end
+
+local function ItemName(id, fallback)
+    local n = GetItemInfo and Plain((GetItemInfo(id)))
+    return type(n) == "string" and n or fallback
+end
+
+local function ItemCooldownLeft(id)
+    local f = (C_Container and C_Container.GetItemCooldown) or GetItemCooldown
+    if not f then return 0 end
+    local ok, start, dur = pcall(f, id)
+    start, dur = ok and tonumber(Plain(start)), ok and tonumber(Plain(dur))
+    if not (start and dur) or start == 0 or dur <= 1.5 then return 0 end   -- 1.5 s = the global cooldown
+    return math.max(0, start + dur - GetTime())
+end
+
+-- Does a buff's text say it gives XP? (true / false / nil = can't tell). Set below, with the tooltip helpers.
+local AuraIsXP
+
+-- The boost auras on you: spell ID -> { left = seconds (nil: no end), stacks }.
+-- Well Fed counts when it's the XP one: its own ID, or any buff whose text says it gives XP from kills (a
+-- "Well Fed" from stat food doesn't count when its text can be read).
+local function ReadAuras()
+    local byName, found = {}, {}
+    for id, en in pairs(AURA_NAMES) do
+        byName[en] = id
+        local n = SpellName(id)
+        if n then byName[n] = id end
+    end
+    for _, filter in ipairs({ "HELPFUL", "HARMFUL" }) do
+        for i = 1, 40 do
+            local name, count, expires, sid
+            if C_UnitAuras and C_UnitAuras.GetAuraDataByIndex then
+                local ok, a = pcall(C_UnitAuras.GetAuraDataByIndex, "player", i, filter)
+                if not ok or type(a) ~= "table" then break end
+                name, count, expires, sid = a.name, a.applications, a.expirationTime, a.spellId
+            elseif UnitAura then
+                local ok, n, _, c, _, _, e, _, _, _, s = pcall(UnitAura, "player", i, filter)
+                if not ok or n == nil then break end
+                name, count, expires, sid = n, c, e, s
+            else
+                break
+            end
+            name, count, expires, sid = Plain(name), Plain(count), Plain(expires), Plain(sid)
+            local id = (AURA_NAMES[sid] and sid) or (type(name) == "string" and byName[name])
+            if filter == "HELPFUL" and AuraIsXP and id ~= WELL_RESTED and sid ~= WELL_FED then
+                local xp = AuraIsXP(i, sid, name)
+                if id == WELL_FED and xp == false then id = nil          -- stat food's Well Fed
+                elseif not id and xp then id = WELL_FED end              -- an XP buff by another name
+            end
+            if id and not found[id] then
+                local left = (type(expires) == "number" and expires > 0) and math.max(0, expires - GetTime()) or nil
+                found[id] = { left = left, stacks = tonumber(count) or 0 }
+            end
+        end
+    end
+    return found
+end
+
+function ns.MaxLevel()
+    local m = GetMaxPlayerLevel and Plain(GetMaxPlayerLevel())
+    return tonumber(m) or 60
+end
+
+-- XP food: anything in your bags whose tooltip says "Experience (gained) from kills is increased by 5%" (how
+-- Forever words it; ForeverFishing's food journal reads the same line) – or gives rested XP.
+-- The plain item tooltip (item:ID) is read, not the bag slot: food you cooked yourself says "<Made by Name>",
+-- and names are secret on Forever (touching them is an error). Every line is checked before it's read.
+local xpFoodCache = {}   -- itemID -> true/false (false is asked again after a while)
+local NOT_FOOD = { [CAMP_TENT] = true, [SLEEPING_BAG] = true }
+for _, c in ipairs(CAMPFIRES) do NOT_FOOD[c[1]] = true end
+
+local function IsXPText(t)
+    if type(t) ~= "string" then return false end
+    local l = t:lower()
+    local xp = l:find("experience", 1, true) or l:find("%f[%a]xp%f[%A]")
+    return xp and (l:find("kill", 1, true) or l:find("rested", 1, true)) and true or false
+end
+ns.IsXPText = IsXPText
+
+local function Secret(v) return Plain(v) == nil and v ~= nil end
+local RETRIEVING = type(RETRIEVING_ITEM_INFO) == "string" and RETRIEVING_ITEM_INFO or "Retrieving item information"
+
+-- The tooltip's text as one string, or nil (not loaded yet / can't be read).
+local function TooltipText(data)
+    if type(data) ~= "table" or Secret(data) then return nil end
+    local ok, lines = pcall(rawget, data, "lines")
+    if not ok or type(lines) ~= "table" or Secret(lines) then return nil end
+    local out = {}
+    for i = 1, 40 do
+        local okL, line = pcall(rawget, lines, i)
+        if not okL or line == nil then break end
+        if type(line) == "table" and not Secret(line) then
+            for _, key in ipairs({ "leftText", "rightText" }) do
+                local okT, t = pcall(rawget, line, key)
+                t = okT and Plain(t)
+                if type(t) == "string" then
+                    if t == RETRIEVING then return nil end
+                    out[#out + 1] = t
+                end
+            end
+        end
+    end
+    return #out > 0 and table.concat(out, "\n") or nil
+end
+
+-- The old way, if the tooltip data API can't read it: a hidden tooltip, line by line.
+local scanTip
+local function ScanTipText(itemID)
+    if not (CreateFrame and WorldFrame) then return nil end
+    if not scanTip then
+        local ok, t = pcall(CreateFrame, "GameTooltip", "WatchXScanTip", nil, "GameTooltipTemplate")
+        if not ok or not t then return nil end
+        scanTip = t
+    end
+    local out, loading = {}, false
+    pcall(function()
+        scanTip:SetOwner(WorldFrame, "ANCHOR_NONE")
+        scanTip:ClearLines()
+        scanTip:SetHyperlink("item:" .. itemID)
+        for i = 1, math.min(30, scanTip:NumLines() or 0) do
+            local fs = _G["WatchXScanTipTextLeft" .. i]
+            local t = fs and Plain(fs:GetText())
+            if type(t) == "string" then
+                if t == RETRIEVING then loading = true end
+                out[#out + 1] = t
+            end
+        end
+    end)
+    pcall(scanTip.Hide, scanTip)
+    if loading or #out == 0 then return nil end
+    return table.concat(out, "\n")
+end
+
+local function ItemTooltipText(itemID, bag, slot)
+    local T = C_TooltipInfo or {}
+    local text
+    if T.GetHyperlink then
+        local ok, data = pcall(T.GetHyperlink, "item:" .. itemID)
+        if ok then text = TooltipText(data) end
+    end
+    if not text and T.GetItemByID then
+        local ok, data = pcall(T.GetItemByID, itemID)
+        if ok then text = TooltipText(data) end
+    end
+    if not text then text = ScanTipText(itemID) end
+    if not text and T.GetBagItem and bag then
+        local ok, data = pcall(T.GetBagItem, bag, slot)
+        if ok then text = TooltipText(data) end
+    end
+    return text
+end
+
+-- The item's Use: spell, in words (some foods only say it there).
+local function ItemSpellText(itemID)
+    local get = (C_Item and C_Item.GetItemSpell) or GetItemSpell
+    if not get then return nil end
+    local ok, _, sid = pcall(get, itemID)
+    sid = ok and tonumber(Plain(sid))
+    if not sid then return nil end
+    local desc = (C_Spell and C_Spell.GetSpellDescription) or GetSpellDescription
+    if not desc then return nil end
+    local okD, t = pcall(desc, sid)
+    t = okD and Plain(t)
+    return type(t) == "string" and t ~= "" and t or nil
+end
+
+-- A buff's text: its tooltip, or its spell's description. Cached per spell (it doesn't change).
+local auraXPCache = {}
+AuraIsXP = function(index, sid, name)
+    local key = sid or name
+    if key == nil then return nil end
+    local c = auraXPCache[key]
+    if type(c) == "boolean" then return c end
+    if c and GetTime() < c then return nil end   -- couldn't be read a moment ago
+    local text
+    local T = C_TooltipInfo
+    for _, f in ipairs({ T and T.GetUnitAura or false, T and T.GetUnitBuff or false }) do
+        if f and not text then
+            local ok, data = pcall(f, "player", index, "HELPFUL")
+            if ok then text = TooltipText(data) end
+        end
+    end
+    if not text and sid then
+        local desc = (C_Spell and C_Spell.GetSpellDescription) or GetSpellDescription
+        if desc then
+            local ok, t = pcall(desc, sid)
+            t = ok and Plain(t)
+            if type(t) == "string" and t ~= "" then text = t end
+        end
+    end
+    if not text then auraXPCache[key] = GetTime() + 60 return nil end
+    -- the name line alone isn't the description
+    local body = name and text:gsub("^" .. name:gsub("%p", "%%%0") .. "\n?", "") or text
+    local yes = IsXPText(body)
+    auraXPCache[key] = yes
+    return yes
+end
+
+local function IsConsumable(itemID)
+    local f = (C_Item and C_Item.GetItemInfoInstant) or GetItemInfoInstant
+    if not f then return true end
+    local ok, _, _, _, _, _, classID = pcall(f, itemID)
+    classID = ok and tonumber(Plain(classID))
+    return classID == nil or classID == 0   -- 0 = Consumable (food, drink, potions)
+end
+
+local function IsXPFood(itemID, bag, slot)
+    local known = xpFoodCache[itemID]
+    if known == true then return true end
+    if type(known) == "number" and GetTime() < known then return false end
+    if NOT_FOOD[itemID] or not IsConsumable(itemID) then xpFoodCache[itemID] = GetTime() + 3600 return false end
+    local text = ItemTooltipText(itemID, bag, slot)
+    if not text then bagState.pending = true return false end   -- not loaded yet: ask again a bit later
+    local yes = IsXPText(text) or IsXPText(ItemSpellText(itemID))
+    xpFoodCache[itemID] = yes or (GetTime() + 120)   -- a "no" is checked again in 2 minutes
+    return yes
+end
+
+-- How many XP food items you carry, and the name of the one you have most of.
+local function XPFoodInBags()
+    local C = C_Container
+    if not (C and C.GetContainerNumSlots and C.GetContainerItemInfo) then return nil end
+    local total, best, bestN, bestID, byID, list = 0, nil, 0, nil, {}, {}
+    for bag = 0, 4 do
+        local okN, n = pcall(C.GetContainerNumSlots, bag)
+        for slot = 1, (okN and tonumber(Plain(n)) or 0) do
+            local ok, info = pcall(C.GetContainerItemInfo, bag, slot)
+            local id = ok and type(info) == "table" and not Secret(info) and Plain(info.itemID)
+            if type(id) == "number" and IsXPFood(id, bag, slot) then
+                local count = tonumber(Plain(info.stackCount)) or 1
+                total = total + count
+                local e = byID[id]
+                if not e then
+                    e = { id = id, name = Plain(info.itemName) or ItemName(id, "XP food"), count = 0 }
+                    byID[id], list[#list + 1] = e, e
+                end
+                e.count = e.count + count
+                if count > bestN then
+                    best, bestN, bestID = Plain(info.itemName) or (GetItemInfo and Plain((GetItemInfo(id)))), count, id
+                end
+            end
+        end
+    end
+    table.sort(list, function(a, b) return a.count > b.count end)
+    return total, best, bestID, list
+end
+
+-- Icons for the XP boosts strip: the item's or the buff's own icon, or a stock one if it isn't loaded yet.
+local function ItemIcon(id)
+    local f = (C_Item and C_Item.GetItemIconByID) or GetItemIcon
+    if not (f and id) then return nil end
+    local ok, t = pcall(f, id)
+    t = ok and Plain(t)
+    return (type(t) == "number" or type(t) == "string") and t or nil
+end
+local function SpellIcon(id)
+    local f = (C_Spell and C_Spell.GetSpellTexture) or GetSpellTexture
+    if not f then return nil end
+    local ok, t = pcall(f, id)
+    t = ok and Plain(t)
+    return (type(t) == "number" or type(t) == "string") and t or nil
+end
+
+local function Clock(sec)
+    sec = math.max(0, math.floor(sec or 0))
+    if sec >= 3600 then return ("%d:%02d:%02d"):format(sec / 3600, (sec % 3600) / 60, sec % 60) end
+    return ("%d:%02d"):format(sec / 60, sec % 60)
+end
+ns.Clock = Clock
+ns.ItemIcon = ItemIcon
+
+-- Warnings when a boost has run out (or a wait is over): a raid-warning line mid-screen, a sound and chat.
+-- Not in combat (it waits until the fight is over) and not when you've just died.
+local lastBoost, pendingWarn = nil, {}
+local function Warn(msg)
+    Print("|cffffd100" .. msg .. "|r")
+    if RaidNotice_AddMessage and RaidWarningFrame then
+        pcall(RaidNotice_AddMessage, RaidWarningFrame, msg, ChatTypeInfo and ChatTypeInfo["RAID_WARNING"] or { r = 1, g = 0.82, b = 0 })
+    end
+    if PlaySound and SOUNDKIT then pcall(PlaySound, SOUNDKIT.RAID_WARNING, "Master") end
+end
+
+local function CheckBoosts(now)
+    local was = lastBoost
+    lastBoost = now
+    if not was or db.levelWarn == false then return end
+    if Plain(UnitIsDeadOrGhost("player")) == true then return end
+    local function gone(k) return was[k] and not now[k] end
+    if gone("fed") then
+        pendingWarn.fed = now.food and now.food > 0 and ("Well Fed has run out – eat " .. (now.foodName or "XP food") .. ".")
+            or "Well Fed has run out – and you have no XP food in your bags!"
+    end
+    if (was.food or 0) > 0 and now.food == 0 and not pendingWarn.fed then
+        pendingWarn.food = "You've used your last XP food – cook or buy more."
+    end
+    if gone("rested") then pendingWarn.bag = "Well-Rested (Sleeping Bag) has run out." end
+    if gone("boost") and now.lowRested then pendingWarn.tent = "Camp Tent works again – your rested is under 5%." end
+    if gone("bagCd") and not now.rested then pendingWarn.bagReady = "Your Cozy Sleeping Bag is ready again." end
+    if InCombatLockdown() then return end
+    for k, msg in pairs(pendingWarn) do
+        Warn(msg)
+        pendingWarn[k] = nil
+    end
+end
+
+-- The XP boosts: { { state = "ok" | "todo" | "wait" | "info", name, icon, text, tip, timer, count }, ... }, or nil
+-- at max level. name = the tooltip title, text = how it stands, timer = seconds left, count = a number on the icon.
+-- The bags again: when they changed (at most once a second), after 15 s while an item's text wasn't loaded
+-- yet, and every 2 minutes anyway.
+local foodCache = {}
+local function ReadBags()
+    local now = GetTime()
+    local since = now - bagState.at
+    if not ((bagState.dirty and since >= 1) or (bagState.pending and since >= 15) or since >= 120) then return end
+    bagState.dirty, bagState.pending, bagState.at = false, false, now
+    wipe(countCache)
+    foodCache = { XPFoodInBags() }
+end
+
+function ns.LevelDirty() statusCache.dirty = true; bagState.dirty = true end
+
+if CreateFrame then
+    local bagEvents = CreateFrame("Frame")
+    for _, e in ipairs({ "BAG_UPDATE_DELAYED", "BAG_UPDATE", "PLAYER_ENTERING_WORLD", "TOYS_UPDATED", "UNIT_AURA",
+                         "PLAYER_LEVEL_UP", "PLAYER_XP_UPDATE", "UPDATE_EXHAUSTION" }) do
+        pcall(bagEvents.RegisterEvent, bagEvents, e)
+    end
+    bagEvents:SetScript("OnEvent", function(_, event, unit)
+        if event == "UNIT_AURA" then
+            if unit == "player" then statusCache.dirty = true end
+        elseif event == "PLAYER_XP_UPDATE" or event == "UPDATE_EXHAUSTION" or event == "PLAYER_LEVEL_UP" then
+            statusCache.dirty = true
+        else
+            bagState.dirty, statusCache.dirty = true, true
+        end
+    end)
+end
+
+-- Worked out at most once a second (sooner after a change to your buffs, bags or XP, but never more than
+-- three times a second): the bars refresh on lots of events, and this used to cost real CPU in a busy city.
+local ComputeLevelStatus
+function ns.LevelStatus()
+    local since = GetTime() - statusCache.at
+    if since < 1 and not (statusCache.dirty and since >= 0.3) then return statusCache.rows end
+    statusCache.rows = ComputeLevelStatus()
+    statusCache.at, statusCache.dirty = GetTime(), false
+    return statusCache.rows
+end
+
+ComputeLevelStatus = function()
+    local level = tonumber(Plain(UnitLevel("player"))) or 0
+    if level <= 0 or level >= ns.MaxLevel() then return nil end
+    ReadBags()
+    if not InCombatLockdown() or not auraCache.found then
+        local ok, found = pcall(ReadAuras)
+        if ok then auraCache.found, auraCache.at = found, GetTime() end
+    end
+    local passed = GetTime() - auraCache.at
+    local function aura(id)
+        local a = auraCache.found and auraCache.found[id]
+        if not a then return nil end
+        local left = a.left and a.left - passed
+        if left and left <= 0 then return nil end
+        return { left = left, stacks = a.stacks }
+    end
+    local rows, seen = {}, {}
+    local name, icon, slot, use, options
+    local function add(state, text, tip, timer, count)
+        rows[#rows + 1] = { state = state, name = name, icon = icon, text = text, tip = tip, timer = timer,
+            count = (count and count > 0) and tostring(count) or nil, slot = slot, use = use, options = options }
+    end
+    local picks = type(db.levelPick) == "table" and db.levelPick or {}
+    -- the one you chose (right-click menu) if you still have it, else the first
+    local function Pick(key, opts)
+        for _, o in ipairs(opts) do if o.id == picks[key] then return o end end
+        return opts[1]
+    end
+
+    -- Camp Tent (rested itself isn't listed: the XP bar shows it)
+    local xpMax = tonumber(Plain(UnitXPMax("player"))) or 0
+    local rested = tonumber(Plain(GetXPExhaustion and GetXPExhaustion())) or 0
+    local pct = xpMax > 0 and rested / xpMax * 100 or 0
+    seen.lowRested = pct < 5
+    local tentTip = "Light a campfire (Cooking: Simple Wood + Flint and Tinder), put a Camp Tent by it and sit a "
+        .. "minute: rested goes up to 5% of a level, for everyone sitting there. Then Boosted Rest blocks another tent "
+        .. "for 1 hour. Made with Leatherworking 20 (5 Light Leather) – a friend's tent works too.\n\nRested: kills "
+        .. "give double XP until it's spent. It also builds while you're logged out in an inn or a city."
+    local boost = aura(BOOSTED_REST)
+    local tents = ItemCount(CAMP_TENT)
+    seen.boost = boost and true or nil
+    name, icon, slot = "Camp Tent", ItemIcon(CAMP_TENT) or SpellIcon(BOOSTED_REST) or "Interface\\Icons\\Spell_Fire_Fire", "tent"
+    options = {}   -- the tent first, then the campfires you carry
+    if tents > 0 then options[1] = { id = CAMP_TENT, name = ItemName(CAMP_TENT, "Camp Tent"), count = tents } end
+    for _, c in ipairs(CAMPFIRES) do
+        local n = ItemCount(c[1])
+        if n > 0 then options[#options + 1] = { id = c[1], name = ItemName(c[1], c[2]), count = n } end
+    end
+    local pick = Pick("tent", options)
+    use = pick
+    if pick and pick.id ~= CAMP_TENT and not boost and pct < 5 then icon = ItemIcon(pick.id) or icon end
+    if boost then
+        add("wait", "Boosted Rest – you can use another tent when it's gone.", tentTip, boost.left)
+    elseif pct < 5 then
+        add("todo", "Your rested is under 5% – use a Camp Tent"
+            .. (tents > 0 and (" (you have " .. tents .. ").") or " (you have none)."), tentTip, nil, tents)
+    else
+        add("ok", ("Not needed – you have %d%% rested."):format(math.floor(pct + 0.5)), tentTip)
+    end
+
+    -- Well Fed, and XP food in your bags
+    local food, foodName, foodID, foods = foodCache[1], foodCache[2], foodCache[3], foodCache[4]
+    slot, options = "food", foods or {}
+    local fpick = Pick("food", options)
+    use = fpick
+    if fpick then foodName, foodID = fpick.name, fpick.id end
+    seen.food, seen.foodName = food, foodName
+    local fedTip = "Food that says \"Experience gained from kills is increased by 5%\" gives Well Fed for about "
+        .. "15 minutes. Gone when you die; a new dish replaces the old one."
+    local fed = aura(WELL_FED)
+    seen.fed = fed and true or nil
+    local none = food == 0   -- nil: can't tell
+    local bagNote = none and "\n|cffff6060No XP food in your bags!|r Cook some, or buy it."
+        or (food and food > 0 and ("\nXP food in your bags: " .. food
+            .. (#options > 1 and (" (" .. #options .. " kinds)") or "") .. ".")) or ""
+    name = "Well Fed"
+    if fed then
+        icon = SpellIcon(WELL_FED) or ItemIcon(foodID) or "Interface\\Icons\\Spell_Misc_Food"
+        add((fed.left and fed.left < 120) and "wait" or "ok", "+5% XP from kills." .. bagNote, fedTip, fed.left,
+            fpick and fpick.count)
+    else
+        icon = ItemIcon(foodID) or SpellIcon(WELL_FED) or "Interface\\Icons\\Spell_Misc_Food"
+        add("todo", (none and "|cffff6060No XP food in your bags!|r Cook some, or buy it.")
+            or ("Eat " .. (foodName or "XP food") .. (fpick and (" (you have " .. fpick.count .. ").") or ".")),
+            fedTip, nil, fpick and fpick.count)
+    end
+
+    -- Cozy Sleeping Bag
+    local bagTip = "Lie on the Cozy Sleeping Bag: Well-Rested, +1% XP for each minute, up to +3%. Once an hour; it "
+        .. "stays when you die. Party members can use yours."
+    local wr = aura(WELL_RESTED)
+    seen.rested = wr and true or nil
+    name, icon, slot = "Cozy Sleeping Bag", ItemIcon(SLEEPING_BAG) or SpellIcon(WELL_RESTED) or "Interface\\Icons\\Spell_Nature_Sleep", "bag"
+    local bags, toy = ItemCount(SLEEPING_BAG)
+    options = {}
+    if bags > 0 then options[1] = { id = SLEEPING_BAG, name = ItemName(SLEEPING_BAG, "Cozy Sleeping Bag"), count = bags, toy = toy } end
+    use = options[1]
+    if wr then
+        local st = math.max(1, math.min(3, wr.stacks))
+        icon = SpellIcon(WELL_RESTED) or icon
+        add(st >= 3 and "ok" or "wait", ("Well-Rested %d/3: +%d%% XP."):format(st, st)
+            .. (st < 3 and " Keep lying on the bag for the full +3%." or ""), bagTip, wr.left, st)
+    elseif bags > 0 then
+        local cd = ItemCooldownLeft(SLEEPING_BAG)
+        seen.bagCd = cd > 0 or nil
+        if cd > 0 then add("wait", "On cooldown – ready again when the clock runs out.", bagTip, cd)
+        else add("todo", "Ready – lie on it for 3 minutes.", bagTip) end
+    elseif level >= 14 then
+        add("info", "You don't have one yet – a quest chain from level 14.", bagTip .. "\n\nThe chain starts at Alexston "
+            .. "Farmstead in Westfall (Alliance) or the Burned-Out Remains in the Barrens (Horde).")
+    end
+    CheckBoosts(seen)
+    return rows
+end
+
+-- ---------------------------------------------------------------- buff warnings
+-- A warning (mid-screen, sound, chat) shortly before a buff you care about runs out, and when it has. What to
+-- watch: ready-made groups (underwater breathing, potions/elixirs/flasks, your own buffs, buffs from others) and
+-- your own list of names or spell IDs. Your auras are hidden in combat on Forever, so they're read out of
+-- combat; in a fight it goes by the clock (a buff renewed mid-fight is seen again afterwards).
+local BREATH = { ["water breathing"] = true, ["unending breath"] = true, ["underwater breathing"] = true,
+    ["greater water breathing"] = true, ["elixir of water breathing"] = true }
+local buffTracked = {}   -- lower-case name -> { name, expires, dur, group, soon }
+
+local function ReadBuffs()
+    local out = {}
+    for i = 1, 40 do
+        local name, icon, dur, expires, caster, sid
+        if C_UnitAuras and C_UnitAuras.GetAuraDataByIndex then
+            local ok, a = pcall(C_UnitAuras.GetAuraDataByIndex, "player", i, "HELPFUL")
+            if not ok or type(a) ~= "table" then break end
+            name, icon, dur, expires, caster, sid = a.name, a.icon, a.duration, a.expirationTime, a.sourceUnit, a.spellId
+        elseif UnitAura then
+            local ok, n, ic, _, _, d, e, c, _, _, sp = pcall(UnitAura, "player", i, "HELPFUL")
+            if not ok or n == nil then break end
+            name, icon, dur, expires, caster, sid = n, ic, d, e, c, sp
+        else
+            break
+        end
+        name, caster = Plain(name), Plain(caster)
+        if type(name) == "string" and name ~= "" then
+            out[#out + 1] = { name = name, icon = Plain(icon), dur = tonumber(Plain(dur)) or 0,
+                expires = tonumber(Plain(expires)) or 0, caster = type(caster) == "string" and caster or nil,
+                sid = tonumber(Plain(sid)) }
+        end
+    end
+    return out
+end
+ns.ReadBuffs = function() local ok, l = pcall(ReadBuffs) return ok and l or {} end
+
+local function KnownSpell(sid)
+    if not sid then return false end
+    for _, f in ipairs({ IsPlayerSpell or false, IsSpellKnown or false }) do
+        if f then
+            local ok, yes = pcall(f, sid)
+            if ok and Plain(yes) == true then return true end
+        end
+    end
+    return false
+end
+
+-- Is it on your own list? (by name, any case, or spell ID)
+function ns.BuffOnList(name, sid)
+    local l = type(name) == "string" and name:lower()
+    for i, c in ipairs(db.buffCustom or {}) do
+        if (tonumber(c) and tonumber(c) == sid) or (type(c) == "string" and c:lower() == l) then return i end
+    end
+end
+
+-- Which group a buff is watched by, or nil.
+function ns.BuffGroup(a)
+    if ns.BuffOnList(a.name, a.sid) then return "custom" end
+    local g, l = db.buffGroups or {}, a.name:lower()
+    if BREATH[l] then return g.breath ~= false and "breath" or nil end
+    if (a.dur or 0) <= 0 then return nil end
+    -- the XP boosts warn about these themselves (below max level)
+    if AURA_NAMES[a.sid] or a.name == "Well Fed" or a.name == "Well-Rested" or a.name == "Boosted Rest" then
+        if db.levelWarn ~= false and ns.LevelStatus and (tonumber(Plain(UnitLevel("player"))) or 0) < ns.MaxLevel() then
+            return nil
+        end
+    end
+    if a.caster == "player" then
+        if not KnownSpell(a.sid) then   -- not a spell of yours: it came from your bags
+            return (g.consumables ~= false and a.dur >= 60) and "consumables" or nil
+        end
+        return (g.own == true and a.dur >= 300) and "own" or nil
+    end
+    return (g.others == true and a.dur >= 300) and "others" or nil
+end
+
+local function BuffMsg(t, left)
+    local surface = t.group == "breath" and IsSwimming and Plain(IsSwimming()) == true
+    if left then
+        return t.name .. " runs out in " .. Clock(left) .. (surface and " – head for air!" or "!")
+    end
+    return t.name .. " has run out!" .. (surface and " Get to the surface!" or "")
+end
+
+function ns.CheckBuffs()
+    if db.buffWarn == false then wipe(buffTracked) return end
+    if Plain(UnitIsDeadOrGhost("player")) == true then wipe(buffTracked) return end   -- dying took them
+    local now, soon = GetTime(), tonumber(db.buffSoon) or 60
+    local fight = InCombatLockdown()
+    if not fight then
+        local ok, list = pcall(ReadBuffs)
+        if ok then
+            local here = {}
+            for _, a in ipairs(list) do
+                local g = a.expires > 0 and ns.BuffGroup(a)
+                if g then
+                    local k = a.name:lower()
+                    here[k] = true
+                    local t = buffTracked[k]
+                    if not t or a.expires > t.expires + 1 then   -- new, or renewed
+                        buffTracked[k] = { name = a.name, expires = a.expires, dur = a.dur, group = g }
+                    else
+                        t.group = g
+                    end
+                end
+            end
+            for k, t in pairs(buffTracked) do
+                if not here[k] then
+                    -- gone at its time: it ran out. Gone early: clicked off, dispelled or zoned – no warning.
+                    if now >= t.expires - 3 and db.buffGone ~= false then Warn(BuffMsg(t)) end
+                    buffTracked[k] = nil
+                end
+            end
+        end
+    end
+    for k, t in pairs(buffTracked) do
+        local left = t.expires - now
+        if left <= 0 then
+            if fight then   -- can't see it in a fight: by the clock it's gone
+                if db.buffGone ~= false then Warn(BuffMsg(t)) end
+                buffTracked[k] = nil
+            end
+        elseif not t.soon and soon > 0 and left <= soon and t.dur > soon + 5 then
+            t.soon = true
+            Warn(BuffMsg(t, left))
+        end
+    end
+end
+
+function ns.AddBuffWatch(text)
+    text = ns.Trim(tostring(text or ""))
+    if text == "" then return end
+    db.buffCustom = db.buffCustom or {}
+    local id = tonumber(text)
+    if ns.BuffOnList(text, id) then Print(text .. " is already on your buff list.") return end
+    db.buffCustom[#db.buffCustom + 1] = id or text
+    Print("Buff warnings: " .. (id and (SpellName(id) or ("spell " .. id)) or text) .. " added.")
+end
+
+function ns.RemoveBuffWatch(i)
+    if db.buffCustom and db.buffCustom[i] then table.remove(db.buffCustom, i) end
+end
+
+function ns.BuffTest()
+    Warn("Water Breathing runs out in 0:30 – head for air!  |cff808080(a test)|r")
+end
+
+-- /wx nearby test: a few made-up enemies and a stealth card, to see what it looks like.
+function ns.NearbyTest()
+    if not db.nearby then ns.SetNearby(true) end
+    local now = time()
+    for i, ex in ipairs({ { "Example Rogue", "ROGUE", 60 }, { "Example Warrior", "WARRIOR", 58 },
+                          { "Example Mage", "MAGE", 60 }, { "Example Druid", "DRUID", -1 } }) do
+        local key = ex[1]:gsub(" ", "-")
+        ns.nearby[key] = { key = key, name = ex[1], first = ex[1]:match("^%S+"), class = ex[2], level = ex[3],
+            firstSeen = now - i * 20, last = (i == 4) and (now - 90) or now, guild = (i == 2) and "Example Guild" or nil }
+    end
+    local rogue = ns.nearby["Example-Rogue"]
+    rogue.stealth, rogue.stealthHow = now, "Stealth"
+    ns.roles["Example-Druid"] = { role = "healer", how = "Wild Growth", at = now }   -- this session only
+    Print("Example Nearby list and stealth card shown (made-up names – they go away by themselves).")
+    if ns.ShowStealthToast then ns.ShowStealthToast(rogue) end
+    Refresh()
+end
+
+function ns.SetNearby(on)
+    db.nearby = on and true or false
+    Print("Nearby enemies: " .. (db.nearby and "|cff40ff40on|r" or "off"))
+    if not db.nearby then wipe(ns.nearby) end
+    Refresh()
+end
+
+-- Any friendly player, when "Any friendly player" is on. Not in instances, cities or inns (far too
+-- many), not yourself or your group, and the same player only once every ENEMY_COOLDOWN seconds.
+local function CheckFriendlyPlayer(unit, name, source)
+    if ns.IsHostilePlayer(unit) then return end
+    if Plain(UnitIsUnit("player", unit)) == true or Plain(UnitIsDead(unit)) == true then return end
+    if Plain(UnitInParty(unit)) == true or Plain(UnitInRaid(unit)) then return end
+    if (IsInInstance and IsInInstance()) or (IsResting and IsResting()) then return end
+    local now = time()
+    ns.lastFriend = { name = name, at = now }
+    if friendSeen[name] and now - friendSeen[name] < ENEMY_COOLDOWN then return end
+    friendSeen[name] = now
+    local info = PlayerInfo(unit)
+    Log("friend", name, source)
+    Alert("FRIEND", name, string.format("Friendly player: %s (%s%s)", name, info ~= "" and (info .. " – ") or "",
+        Location()), (info ~= "" and (info .. " · ") or "") .. Location())
+end
+
+local function CheckUnit(unit, source)
+    if not UnitExists(unit) then return end
+    local raw = Plain(UnitName(unit))
+    if type(raw) ~= "string" then return end
+    if db.nearby and Plain(UnitIsPlayer(unit)) == true and ns.NearbyHere()
+        and ns.IsHostilePlayer(unit)
+        and Plain(UnitIsDead(unit)) ~= true then
+        local key = NoteNearby(unit)
+        if key and unit:find("^nameplate") then plateKeys[unit] = key end
+    end
+    local name = Resolve(raw)
+    if name then
+        local guid = Plain(UnitGUID(unit))
+        if type(guid) == "string" then guidToName[guid] = name end
+        OnSeen(name, unit, source)
+    elseif Plain(UnitIsPlayer(unit)) == true then
+        if db.enemyPlayers then CheckEnemyPlayer(unit, raw, source) end
+        if db.friendlyPlayers then CheckFriendlyPlayer(unit, raw, source) end
+    end
+end
+
+function ns.SetEnemyPlayers(on)
+    db.enemyPlayers = on and true or false
+    Print("Any enemy player: " .. (db.enemyPlayers and "|cff40ff40on|r" or "off"))
+    if ns.UpdateChatLogPrompt then ns.UpdateChatLogPrompt() end
+    Refresh()
+end
+
+function ns.SetFriendlyPlayers(on)
+    db.friendlyPlayers = on and true or false
+    Print("Any friendly player: " .. (db.friendlyPlayers and "|cff40ff40on|r" or "off")
+        .. ((db.friendlyPlayers and GetCVar("nameplateShowFriends") ~= "1")
+            and " – |cffffd100friendly nameplates are off|r (Shift+V or the yellow bar)." or ""))
+    if ns.UpdateChatLogPrompt then ns.UpdateChatLogPrompt() end
+    Refresh()
+end
+
+function ns.IsWatchingAnything()
+    return next(watchByLower) ~= nil or (db and (db.enemyPlayers or db.friendlyPlayers))
+end
+
+-- Enemy nameplates are needed for mobs and enemy players; friendly ones for "Any friendly player".
+function ns.NeedsEnemyPlates()
+    return next(watchByLower) ~= nil or (db and db.enemyPlayers)
+end
+function ns.FriendPlatesMissing()
+    return db and db.friendlyPlayers and GetCVar("nameplateShowFriends") ~= "1"
+end
+
+local function OnGuidDied(guid, source)
+    guid = Plain(guid)
+    local name = type(guid) == "string" and guidToName[guid]
+    if name then
+        guidToName[guid] = nil
+        OnDeath(name, source)
+    end
+end
+
+local deathPatterns
+local function OnDeathLine(text)
+    text = Plain(text)
+    if type(text) ~= "string" then return end
+    deathPatterns = deathPatterns or { MakePattern(_G.UNITDIESOTHER), MakePattern(_G.SELFKILLOTHER) }
+    for _, p in ipairs(deathPatterns) do
+        local who = text:match(p)
+        local name = who and Resolve(who)
+        if name then OnDeath(name, "death message") return end
+    end
+end
+
+local function ScanNameplates()
+    if not (C_NamePlate and C_NamePlate.GetNamePlates) or not (ns.IsWatchingAnything() or db.nearby) then return end
+    local ok, plates = pcall(C_NamePlate.GetNamePlates)
+    if not ok or not plates then return end
+    for _, plate in ipairs(plates) do
+        local unit = plate.namePlateUnitToken or (plate.UnitFrame and plate.UnitFrame.unit)
+        if unit then CheckUnit(unit, "nameplate") end
+    end
+end
+
+local function ScanLoot()
+    if not next(activeLoot) or time() - lastLootAlert < 60 then return end
+    for i = 1, GetNumLootItems() do
+        local link = GetLootSlotLink(i)
+        local id = link and tonumber(link:match("item:(%d+)"))
+        local hit = id and activeLoot[id]
+        if hit then
+            lastLootAlert = time()
+            Alert("LOOT", hit.item, string.format("%s DROPPED from %s!!!", hit.item:upper(), hit.mob),
+                "From " .. hit.mob .. " · " .. Location())
+            return
+        end
+    end
+end
+
+-- ---------------------------------------------------------------- AFK logout warning
+-- The game marks you AFK after a few idle minutes and logs you out a while later (with a 20 second
+-- countdown). WatchX counts from the AFK flag and warns 5 minutes before; the real time is learned
+-- from the countdown. The logout itself can't be sent from the game (it has stopped by then): the
+-- bridge sees the settings file being written at the logout and reads exitWhy.
+local afkSince, afkWarned, campingAfk, exitReason
+
+local function CheckAfk()
+    local afk = UnitIsAFK and Plain(UnitIsAFK("player")) == true
+    if afk and not afkSince then
+        afkSince, afkWarned = time(), false
+        Log("afk", "on")
+    elseif not afk and afkSince then
+        afkSince = nil
+        afkEndedAt = time()
+        Log("afk", "off")
+    end
+end
+
+function ns.AfkStatus()   -- seconds until the expected logout, or nil when not AFK
+    if not afkSince then return nil end
+    return (db.afkLogoutMin or 25) * 60 - (time() - afkSince)
+end
+
+local function AfkTick()
+    if not (afkSince and db.afkWarn) or afkWarned then return end
+    local left = ns.AfkStatus()
+    if left <= 5 * 60 then
+        afkWarned = true
+        Alert("AFK", "AFK logout", "You will be logged out for being AFK in about " .. Fmt(math.max(left, 60))
+            .. " – move your character!", "Logged out in about " .. Fmt(math.max(left, 60)) .. " – move your character!")
+    end
+end
+
+local function OnCamping()
+    CheckAfk()
+    if not afkSince then return end   -- you logged out yourself
+    campingAfk = true
+    local min = math.floor((time() - afkSince + 20) / 60 + 0.5)
+    if min >= 6 and min <= 90 and min ~= db.afkLogoutMin then
+        Log("afk", "logout comes after", min, "min AFK")
+        db.afkLogoutMin = min
+    end
+    if db.afkWarn then
+        Alert("LOGOUT", "AFK logout", "Logging out in 20 seconds for being AFK!", "Logging out in 20 seconds – move now!")
+    end
+end
+
+-- ---------------------------------------------------------------- profiles
+-- A profile = what you watch + alert and display choices. The live settings are the active profile;
+-- switching stores them and loads the other one. Phone links, timers and the log are shared.
+local PROFILE_KEYS = { "enemyPlayers", "friendlyPlayers", "attackAlert", "whisper", "instant", "afkWarn",
+    "notifyDeath", "sound", "show", "miniQuiet", "hideIdle", "alertSame", "miniPoint", "miniScale", "miniWidth",
+    "alertPoint", "alertScale", "alertWidth", "nearby", "nearbyPoint", "nearbyScale", "nearbyWidth", "toastPoint",
+    "stealthWarn", "stealthSound", "nearbyShowEmpty", "nearbyKeep", "newEnemyCard", "warnDock", "nearbyAttach", "nearbyMax", "nearbyNoBG", "nearbyHideDungeon", "nearbyHideRaid",
+    "plateIcons", "plateFriendly", "plateHealer", "plateSize", "plateKOS",
+    "levelHelper", "levelMissing", "levelFlash", "levelWarn", "levelHideCombat", "levelHideInstance", "levelPoint", "levelScale", "levelWidth",
+    "buffWarn", "buffSoon", "buffGone", "buffGroups" }
+local PROFILE_MAX_NAME = 16
+
+local function Copy(v)
+    if type(v) ~= "table" then return v end
+    local t = {}
+    for k, x in pairs(v) do t[k] = Copy(x) end
+    return t
+end
+
+local function Snapshot()
+    local snap = { watch = Copy(db.watch), custom = Copy(db.custom) }
+    for _, k in ipairs(PROFILE_KEYS) do snap[k] = Copy(db[k]) end
+    return snap
+end
+
+local function ApplySnapshot(snap)
+    db.watch = Copy(snap.watch or {})
+    db.custom = Copy(snap.custom or {})
+    for _, k in ipairs(PROFILE_KEYS) do
+        db[k] = Copy(snap[k])
+        if db[k] == nil and defaults[k] ~= nil then db[k] = Copy(defaults[k]) end
+    end
+end
+
+-- The first time: three ready-made profiles, all starting from your current choices.
+function ns.InitProfiles()
+    if type(db.profiles) ~= "table" or not next(db.profiles) then
+        local base = Snapshot()
+        local leveling = Copy(base)
+        leveling.watch = {}                    -- your list stays, switched off
+        leveling.enemyPlayers, leveling.attackAlert = true, true
+        leveling.miniQuiet, leveling.hideIdle = true, true
+        local pvp = Copy(base)
+        pvp.enemyPlayers, pvp.attackAlert, pvp.miniQuiet = true, true, false
+        db.profiles = { Camping = base, Leveling = leveling, PvP = pvp }
+        db.profile = "Camping"
+    end
+    if not db.profiles[db.profile or ""] then db.profile = ns.ProfileNames()[1] end
+end
+
+function ns.ProfileNames()
+    local names = {}
+    for name in pairs(db.profiles or {}) do names[#names + 1] = name end
+    table.sort(names, function(a, b) return a:lower() < b:lower() end)
+    return names
+end
+
+local function AfterProfileChange()
+    ns.RebuildWatch()
+    if ns.ApplyLayout then ns.ApplyLayout() end
+    if ns.UpdateChatLogPrompt then ns.UpdateChatLogPrompt() end
+    Refresh()
+end
+
+function ns.SwitchProfile(name)
+    if not (db.profiles and db.profiles[name]) or name == db.profile then return end
+    if db.profile then db.profiles[db.profile] = Snapshot() end
+    ApplySnapshot(db.profiles[name])
+    db.profile = name
+    Print("Profile: |cff38ccad" .. name .. "|r")
+    AfterProfileChange()
+end
+
+-- A new profile starts as a copy of your current choices. Returns true, or false + why.
+function ns.NewProfile(name)
+    name = Trim(name or "")
+    if name == "" then return false, "Enter a name." end
+    if #name > PROFILE_MAX_NAME then return false, "Max " .. PROFILE_MAX_NAME .. " letters." end
+    for n in pairs(db.profiles) do
+        if n:lower() == name:lower() then return false, "There is already a profile called '" .. n .. "'." end
+    end
+    if db.profile then db.profiles[db.profile] = Snapshot() end
+    db.profiles[name] = Snapshot()
+    db.profile = name
+    Print("New profile |cff38ccad" .. name .. "|r – a copy of your current settings. Change what you like.")
+    Refresh()
+    return true
+end
+
+function ns.DeleteProfile(name)
+    if not db.profiles[name] then return false end
+    if #ns.ProfileNames() <= 1 then Print("You need at least one profile.") return false end
+    db.profiles[name] = nil
+    Print("Deleted the profile '" .. name .. "'.")
+    if db.profile == name then
+        db.profile = ns.ProfileNames()[1]
+        ApplySnapshot(db.profiles[db.profile])
+        Print("Profile: |cff38ccad" .. db.profile .. "|r")
+        AfterProfileChange()
+    else
+        Refresh()
+    end
+    return true
+end
+
+function ns.SaveProfile()   -- keeps the active profile up to date (also done at logout)
+    if db and db.profiles and db.profile then db.profiles[db.profile] = Snapshot() end
+end
+
+-- ---------------------------------------------------------------- attacked
+-- Combat starts while you haven't done anything for a while (or are AFK) = something attacked you.
+-- (Without the combat log the attacker is found through nameplates: whoever has you targeted.)
+local IDLE_FOR = 20          -- seconds without moving, casting or targeting
+local lastActive, lastAttack, afkEndedAt = time(), 0, 0   -- a fresh login counts as active
+
+function ns.MarkActive() lastActive = time() end
+
+local function Attacker()
+    if not (C_NamePlate and C_NamePlate.GetNamePlates) then return end
+    local ok, plates = pcall(C_NamePlate.GetNamePlates)
+    if not ok or not plates then return end
+    for _, plate in ipairs(plates) do
+        local unit = plate.namePlateUnitToken or (plate.UnitFrame and plate.UnitFrame.unit)
+        if unit and Plain(UnitIsUnit(unit .. "target", "player")) == true
+            and Plain(UnitCanAttack("player", unit)) == true then
+            local name = Plain(UnitName(unit))
+            if type(name) == "string" then
+                local lvl = Plain(UnitLevel(unit))
+                return name, (type(lvl) == "number" and lvl > 0) and lvl or nil, Plain(UnitIsPlayer(unit)) == true
+            end
+        end
+    end
+end
+
+local function OnCombatStart()
+    if not db.attackAlert then return end
+    local now = time()
+    local idle = now - lastActive >= IDLE_FOR
+    local afk = afkSince ~= nil or now - afkEndedAt <= 3   -- combat may clear the AFK flag first
+    if not (idle or afk) or now - lastAttack < 60 then return end
+    lastAttack = now
+    C_Timer.After(0.3, function()   -- give the nameplates a moment to show who it is
+        local who, lvl, isPlayer = Attacker()
+        local hp = ""
+        local cur, max = Plain(UnitHealth("player")), Plain(UnitHealthMax("player"))
+        if type(cur) == "number" and type(max) == "number" and max > 0 then
+            hp = "HP " .. math.floor(cur / max * 100 + 0.5) .. "%"
+        end
+        local by = who and (who .. (lvl and (" (" .. (isPlayer and "player, " or "") .. lvl .. ")") or "")) or nil
+        Log("attacked", who or "?")
+        Alert("ATTACK", who or "Something",
+            "You are being attacked" .. (by and (" by " .. by) or "") .. "! (" .. Location() .. ")",
+            (by and ("By " .. by .. " · ") or "") .. (hp ~= "" and (hp .. " · ") or "") .. Location())
+    end)
+end
+
+for name, why in pairs({ ReloadUI = "reload", Logout = "logout", Quit = "quit", ForceQuit = "quit" }) do
+    if type(_G[name]) == "function" then pcall(hooksecurefunc, name, function() exitReason = why end) end
+end
+if C_UI and type(C_UI.Reload) == "function" then
+    pcall(hooksecurefunc, C_UI, "Reload", function() exitReason = "reload" end)
+end
+
+-- Every second: scan nameplates and refresh the UI.
+local ticker = CreateFrame("Frame")
+local elapsed = 0
+ticker:SetScript("OnUpdate", function(_, dt)
+    if not db then return end
+    elapsed = elapsed + dt
+    if elapsed < 1 then return end
+    elapsed = 0
+    ns.Safe("scan", ScanNameplates)
+    ns.Safe("afk", function() CheckAfk(); AfkTick() end)
+    -- the XP boost warnings also work with the list switched off (the list reads it every second itself)
+    if db.levelHelper == false and db.levelWarn ~= false then ns.Safe("xp boosts", ns.LevelStatus) end
+    ns.Safe("buffs", ns.CheckBuffs)
+    Refresh()
+end)
+
+-- ---------------------------------------------------------------- events
+
+-- Never COMBAT_LOG_EVENT_*: Forever blocks it for addons.
+for _, e in ipairs({
+    "PLAYER_LOGIN", "PLAYER_ENTERING_WORLD", "ADDON_ACTION_FORBIDDEN", "ADDON_ACTION_BLOCKED",
+    "NAME_PLATE_UNIT_ADDED", "UPDATE_MOUSEOVER_UNIT", "PLAYER_TARGET_CHANGED", "LOOT_OPENED",
+    "UNIT_DIED", "PARTY_KILL", "CHAT_MSG_COMBAT_HOSTILE_DEATH", "CHAT_MSG_SYSTEM",
+    "PLAYER_FLAGS_CHANGED", "PLAYER_CAMPING", "PLAYER_LOGOUT",
+    "PLAYER_REGEN_DISABLED", "PLAYER_STARTED_MOVING", "UNIT_SPELLCAST_SENT", "PLAYER_ENTER_COMBAT",
+    "NAME_PLATE_UNIT_REMOVED", "UNIT_SPELLCAST_SUCCEEDED", "PLAYER_DEAD", "INSPECT_READY",
+}) do
+    pcall(ev.RegisterEvent, ev, e)
+end
+ns.shotEvents = pcall(ev.RegisterEvent, ev, "SCREENSHOT_SUCCEEDED") and pcall(ev.RegisterEvent, ev, "SCREENSHOT_FAILED")
+
+local function GetVersion()
+    local get = (C_AddOns and C_AddOns.GetAddOnMetadata) or GetAddOnMetadata
+    return get and get(ADDON, "Version") or "?"
+end
+ns.GetVersion = GetVersion
+
+local ACTIVE = { PLAYER_STARTED_MOVING = true, UNIT_SPELLCAST_SENT = true, PLAYER_ENTER_COMBAT = true,
+                 PLAYER_TARGET_CHANGED = true, LOOT_OPENED = true }
+local function OnEvent(_, event, arg1, arg2, ...)
+    if ACTIVE[event] then ns.MarkActive() end   -- you did something: combat now is probably your own
+    if event == "PLAYER_STARTED_MOVING" or event == "UNIT_SPELLCAST_SENT" or event == "PLAYER_ENTER_COMBAT" then
+        return
+    elseif event == "PLAYER_REGEN_DISABLED" then
+        if db then OnCombatStart() end
+        return
+    elseif event == "UNIT_SPELLCAST_SUCCEEDED" then
+        if db and arg1 ~= "player" then   -- unit, castGUID, spellID
+            local spellID = (...)
+            OnStealthCast(arg1, spellID)
+            OnRoleCast(arg1, spellID)
+        end
+        return
+    elseif event == "NAME_PLATE_UNIT_REMOVED" then
+        if type(arg1) == "string" then ns.roles["plate:" .. arg1] = nil end
+        if type(arg1) == "string" and plateKeys[arg1] then
+            gonePlates[arg1] = { key = plateKeys[arg1], at = GetTime() }
+            plateKeys[arg1] = nil
+        end
+        return
+    end
+    if event == "PLAYER_LOGIN" then
+        WatchXDB = WatchXDB or {}
+        db = WatchXDB
+        for k, v in pairs(defaults) do
+            if db[k] == nil then db[k] = type(v) == "table" and CopyTable(v) or v end
+        end
+        ns.db = db
+        db.exitAt, db.exitWhy = nil, nil
+        ns.InitProfiles()
+        for _, r in pairs(db.enemies) do r.healer = nil end   -- 2.3.0 guessed healers from heals; only proof now
+        if db.instant ~= false then
+            -- the bridge reads the code block from the picture: JPEG at a quality that keeps it sharp
+            if GetCVar("screenshotFormat") == "tga" then pcall(SetCVar, "screenshotFormat", "jpeg") end
+            if (tonumber(GetCVar("screenshotQuality")) or 10) < 6 then pcall(SetCVar, "screenshotQuality", "6") end
+        end
+        -- One session per log; the previous one is kept (it is read from disk after a /reload).
+        db.previousLog = db.log
+        db.log = {}
+        Log("session", (GetBuildInfo()), "v" .. GetVersion())
+        ns.RebuildWatch()
+        HookChatLog()
+        if ns.InitUI then ns.InitUI() end
+
+        if GetCVar("nameplateShowEnemies") ~= "1" then
+            Print("|cffffd100Enemy nameplates are OFF|r – click the yellow bar or press V, otherwise nothing can be spotted.")
+        end
+        if db.ntfyUrl == "" and db.discordWebhook == "" then
+            Print("Phone alerts aren't set up yet – type /wx and press Settings.")
+        end
+        Print("v" .. GetVersion() .. " loaded – Made by " .. ns.AUTHOR .. ". /wx opens the panel.")
+        return
+    end
+    if not db then return end
+
+    if event == "PLAYER_ENTERING_WORLD" then
+        -- arg1 = isInitialLogin, arg2 = isReloadingUi. Forever turns the chat log off on a login AND on a
+        -- reload (seen 21 Nov 2026: the log file stopped at the /reload), so both make the state unknown.
+        if arg1 or arg2 then db.chatlogOn = nil end
+        if ns.UpdateChatLogPrompt then ns.UpdateChatLogPrompt() end
+    elseif event == "ADDON_ACTION_FORBIDDEN" or event == "ADDON_ACTION_BLOCKED" then
+        if arg1 == ADDON then
+            Log("blocked", event, tostring(arg2))
+            if tostring(arg2):find("Inspect") then
+                ns.InspectBlocked()
+            elseif takingShot then
+                shotBlocked = true   -- NextShot falls back to the chat log
+            elseif sendingChat then
+                heldBack = true   -- SendAlertLine says it in plain words and offers the click
+            else
+                Print("|cffffd100The game blocked " .. tostring(arg2) .. " – that action needs a click on this "
+                    .. "client. Please tell " .. ns.AUTHOR .. " (see /wx log).|r")
+            end
+        end
+    elseif event == "INSPECT_READY" then
+        ns.OnInspectReady(arg1)
+    elseif event == "NAME_PLATE_UNIT_ADDED" then
+        CheckUnit(arg1, "nameplate")
+    elseif event == "UPDATE_MOUSEOVER_UNIT" then
+        CheckUnit("mouseover", "mouseover")
+    elseif event == "PLAYER_TARGET_CHANGED" then
+        CheckUnit("target", "target")
+    elseif event == "LOOT_OPENED" then
+        ScanLoot()
+    elseif event == "UNIT_DIED" then
+        OnGuidDied(arg1, "died nearby")
+    elseif event == "PARTY_KILL" then
+        OnGuidDied(arg2, "killed by your group")
+        ns.OnPlayerKill(arg2)
+    elseif event == "PLAYER_DEAD" then
+        ns.OnPlayerDead()
+    elseif event == "CHAT_MSG_COMBAT_HOSTILE_DEATH" then
+        OnDeathLine(arg1)
+    elseif event == "CHAT_MSG_SYSTEM" then
+        OnSystemMessage(arg1)
+    elseif event == "PLAYER_FLAGS_CHANGED" then
+        CheckAfk()
+    elseif event == "PLAYER_CAMPING" then
+        OnCamping()
+    elseif event == "SCREENSHOT_SUCCEEDED" or event == "SCREENSHOT_FAILED" then
+        ns.OnScreenshot(event == "SCREENSHOT_SUCCEEDED")
+    elseif event == "PLAYER_LOGOUT" then
+        -- written to disk right now: the bridge sees the file change and tells your phone (not on reload/quit)
+        ns.SaveProfile()
+        db.exitAt = time()
+        db.exitWhy = exitReason or (campingAfk and "afk") or "disconnect"
+    end
+end
+ev:SetScript("OnEvent", function(...) ns.Safe("event", OnEvent, ...) end)
+
+-- ---------------------------------------------------------------- slash
+
+SLASH_WATCHX1 = "/wx"
+SLASH_WATCHX2 = "/watchx"
+local function OnSlash(input)
+    if not db then return end
+    local cmd, rest = (input or ""):match("^%s*(%S*)%s*(.-)%s*$")
+    cmd = cmd:lower()
+    local function toggle(key, label)
+        if rest == "on" then db[key] = true elseif rest == "off" then db[key] = false else db[key] = not db[key] end
+        Print(label .. ": " .. (db[key] and "on" or "off"))
+        if ns.UpdateChatLogPrompt then ns.UpdateChatLogPrompt() end
+        Refresh()
+    end
+
+    if cmd == "" then
+        if ns.TogglePanel then ns.TogglePanel() end
+    elseif cmd == "settings" or cmd == "options" or cmd == "config" then
+        if ns.OpenSettings then ns.OpenSettings() end
+    elseif cmd == "guide" or cmd == "help" or cmd == "howto" then
+        if ns.ShowHelp then ns.ShowHelp() end
+    elseif cmd == "test" then
+        ns.SendTest()
+    elseif cmd == "add" then
+        local ok, err = ns.AddCustom(rest)
+        if not ok then Print(err) end
+    elseif cmd == "remove" then
+        local name = FindAny(rest)
+        if not (name and ns.RemoveCustom(name)) then Print("No custom mob named '" .. rest .. "'.") end
+    elseif cmd == "list" or cmd == "status" then
+        for _, mob in ipairs(ns.GetMobList()) do
+            local _, short, detail = ns.GetMobStatus(mob.name)
+            Print(string.format("%s%s – %s %s · kills: %d", mob.enabled and "" or "|cff808080(off)|r ",
+                mob.name, short, detail, #MobState(mob.name).kills))
+        end
+        Print(string.format("Chat log: %s · Nameplates: %s (%s yd)", ns.ChatLogText(),
+            GetCVar("nameplateShowEnemies") == "1" and "on" or "OFF", GetCVar("nameplateMaxDistance") or "?"))
+    elseif cmd == "mini" then
+        if ns.SetMiniShown then ns.SetMiniShown(not db.show) end
+    elseif cmd == "move" then
+        if ns.ToggleUnlock then ns.ToggleUnlock() end
+    elseif cmd == "alert" then
+        db.alertSame = (db.alertSame == false)
+        Print(db.alertSame and "The alert pops up in the mini bar's spot."
+            or "The alert has its own spot – /wx move to place it.")
+        if ns.RefreshUI then ns.RefreshUI() end
+        if ns.UpdateChatLogPrompt then ns.UpdateChatLogPrompt() end
+    elseif cmd == "quiet" then
+        db.miniQuiet = not db.miniQuiet
+        Print(db.miniQuiet and "Mini bar only shows when something is up." or "Mini bar always shown.")
+        if ns.RefreshUI then ns.RefreshUI() end
+    elseif cmd == "lock" then
+        if ns.StopMove then ns.StopMove() end
+    elseif cmd == "unlock" then
+        if ns.StartMove then ns.StartMove() end
+    elseif cmd == "profile" then
+        if rest ~= "" then
+            local want
+            for _, n in ipairs(ns.ProfileNames()) do if n:lower() == rest:lower() then want = n end end
+            if want then ns.SwitchProfile(want) else Print("No profile called '" .. rest .. "'.") end
+        else
+            Print("Profiles: " .. table.concat(ns.ProfileNames(), ", ") .. " · active: " .. tostring(db.profile)
+                .. " · /wx profile <name> to switch")
+        end
+    elseif cmd == "xp" or cmd == "boosts" then
+        db.levelHelper = db.levelHelper == false
+        Print("XP boosts list: " .. (db.levelHelper and "|cff40ff40on|r" or "off")
+            .. ((db.levelHelper and not ns.LevelStatus()) and " (it only shows below level " .. ns.MaxLevel() .. ")" or ""))
+        if ns.RefreshUI then ns.RefreshUI() end
+    elseif cmd == "buffs" or cmd == "buff" then
+        if rest == "test" then ns.BuffTest()
+        elseif rest ~= "" then ns.AddBuffWatch(rest)
+        elseif ns.OpenBuffSettings then ns.OpenBuffSettings() end
+    elseif cmd == "nearby" or cmd == "spy" then
+        if rest == "test" then ns.NearbyTest()
+        elseif rest == "on" or rest == "off" then ns.SetNearby(rest == "on")
+        elseif ns.OpenNearbySettings then ns.OpenNearbySettings() end
+    elseif cmd == "attack" or cmd == "attacked" then
+        toggle("attackAlert", "Alert when attacked")
+    elseif cmd == "friend" or cmd == "friendly" then
+        ns.SetFriendlyPlayers(not db.friendlyPlayers)
+    elseif cmd == "enemy" or cmd == "pvp" then
+        ns.SetEnemyPlayers(not db.enemyPlayers)
+    elseif cmd == "whisper" then toggle("whisper", "Phone alerts")
+    elseif cmd == "instant" then
+        toggle("instant", "Instant alerts (screenshot)")
+        db.instantOK = nil
+    elseif cmd == "afk" then
+        local min = tonumber(rest)
+        if min and min >= 6 and min <= 120 then
+            db.afkLogoutMin = math.floor(min)
+            Print("AFK logout expected " .. db.afkLogoutMin .. " min after you go AFK – warning 5 min before.")
+        else
+            toggle("afkWarn", "AFK logout warning")
+        end
+    elseif cmd == "sound" then toggle("sound", "Sound")
+    elseif cmd == "minimap" then
+        if ns.SetMinimapShown then ns.SetMinimapShown(db.minimap.hide) end
+    elseif cmd == "dead" then
+        local name = FindAny(rest ~= "" and rest or "Prince Nazjak")
+        if name then MobState(name).alive = false; MobState(name).lastDeath = nil; OnDeath(name, "manual")
+        else Print("Unknown mob.") end
+    elseif cmd == "respawn" then
+        local min, who = rest:match("^(%S+)%s*(.-)$")
+        local name = FindAny(who ~= "" and who or "Prince Nazjak")
+        if not name then Print("Usage: /wx respawn <minutes> [name]") return end
+        ns.SetManualRespawn(name, min)
+        local m = MobState(name)
+        Print(name .. ": " .. (m.manualRespawn and ("respawn set to " .. Fmt(m.manualRespawn)) or "manual respawn cleared."))
+    elseif cmd == "method" then
+        db.methodFailed = db.methodFailed or {}
+        if rest == "reset" then
+            db.methodFailed, db.sendMethod = {}, nil
+            Print("Send method reset – WatchX finds the way again with the next alert.")
+        elseif rest == "auto" or rest == "whisper" or rest == "realm" or rest == "dnd" then
+            db.sendMethod = rest ~= "auto" and rest or nil
+            Print("Send method: " .. rest)
+        else
+            local failed = {}
+            for _, m in ipairs(METHODS) do if db.methodFailed[m] then failed[#failed + 1] = m end end
+            Print("Send method: |cff40ff40" .. CurrentMethod() .. "|r" .. (db.sendMethod and " (forced)" or " (auto)")
+                .. (#failed > 0 and ("  ·  doesn't work here: " .. table.concat(failed, ", ")) or "")
+                .. "  ·  /wx method auto|whisper|realm|dnd|reset")
+        end
+    elseif cmd == "reset" then
+        ns.ResetData()
+    elseif cmd == "log" then
+        local lines = (rest == "previous" and db.previousLog) or db.log or {}
+        Print((rest == "previous" and "Previous" or "This") .. " session's log (" .. #lines .. " lines):")
+        for i = math.max(1, #lines - 24), #lines do DEFAULT_CHAT_FRAME:AddMessage("  " .. lines[i]) end
+    else
+        Print("Made by " .. ns.AUTHOR .. ". Commands: /wx (panel) | settings | guide | test | add <name> | "
+            .. "remove <name> | profile [name] | enemy | friend | nearby [on|off|test] | xp | buffs [name|test] | attack | afk [minutes] | instant | list | mini | quiet | alert | move | lock | unlock | minimap | sound | "
+            .. "whisper | dead [name] | "
+            .. "respawn <min> [name] | reset | log [previous]")
+    end
+end
+SlashCmdList.WATCHX = function(input) ns.Safe("/wx", OnSlash, input) end

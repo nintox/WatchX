@@ -1,0 +1,36 @@
+# Every push: the Lua files must compile (Lua 5.1, like the game) and the Windows bridge must parse.
+name: Check
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+
+jobs:
+  lua:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq lua5.1
+      - run: luac5.1 -p WatchX.lua UI.lua
+
+  bridge-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse watchx_bridge.ps1 (Windows PowerShell 5.1)
+        shell: powershell
+        run: |
+          $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile("$PWD\bridge\watchx_bridge.ps1", [ref]$null, [ref]$errors)
+          if ($errors) { $errors | ForEach-Object { Write-Host $_.ToString() }; exit 1 }
+          Write-Host "watchx_bridge.ps1 parses fine"
+
+  bridge-mac:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          bash -n bridge/watchx_bridge.sh
+          bash -n "bridge/Install (Mac).command"
+          bash -n "bridge/Uninstall (Mac).command"

@@ -1,0 +1,35 @@
+# A new version: bump "## Version" in WatchX.toc, commit, then
+#   git tag v1.2.3 && git push origin main --tags
+# This builds the addon zip, uploads it to CurseForge (needs the CF_API_KEY secret and
+# X-Curse-Project-ID in WatchX.toc) and makes a GitHub release with the addon and WatchX-Bridge.zip.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      CF_API_KEY: ${{ secrets.CF_API_KEY }}
+      GITHUB_OAUTH: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Package the addon (CurseForge + GitHub release)
+        uses: BigWigsMods/packager@v2
+
+      - name: Add WatchX-Bridge.zip to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p /tmp/bridge/WatchX-Bridge
+          cp -p bridge/* /tmp/bridge/WatchX-Bridge/
+          (cd /tmp/bridge && zip -r -X WatchX-Bridge.zip WatchX-Bridge)
+          gh release upload "$GITHUB_REF_NAME" /tmp/bridge/WatchX-Bridge.zip --clobber

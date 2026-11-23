@@ -1,0 +1,8 @@
+# BigWigs packager: builds WatchX-<version>.zip for CurseForge when a v* tag is pushed.
+# The phone bridge isn't in the addon download – it's WatchX-Bridge.zip on the GitHub release.
+package-as: WatchX
+
+ignore:
+  - bridge
+  - README.md
+  - .github
