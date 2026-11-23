@@ -5284,13 +5284,12 @@ do (function()
         end
         bag.stacks = stacks
         -- full: the tile blinks "get up!" while you still lie on the bag (Resting, bag put down lately)
-        if stacks >= 3 and (ns.bagStart or bag.doneAt or lying) then
+        -- full: blink "get up!" for 2 minutes after the 3rd stack (its time since then comes from Well-Rested's clock),
+        -- longer while WatchX can tell you still lie there
+        if stacks >= 3 then
             ns.bagStart = nil
-            bag.doneAt = bag.doneAt or now
-            -- still lying on the bag (however long ago the 3rd came): keep blinking; else a moment, then gone
-            if lying or now - bag.doneAt < 3 then
-                return { kind = "bag", stacks = 3, done = true }
-            end
+            local fresh = wrAge and wrAge < 120
+            if fresh or lying then return { kind = "bag", stacks = 3, done = true } end
             return nil
         end
         bag.doneAt = nil
