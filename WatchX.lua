@@ -1995,7 +1995,8 @@ function ns.CampFireNear()
     if auraCache.found and auraCache.found.campfire then return true end
     if not campFire.at or GetTime() - campFire.at > 600 then return false end
     local map, x, y = PlayerPos()
-    if map and campFire.map and (map ~= campFire.map or math.abs(x - campFire.x) + math.abs(y - campFire.y) > 0.01) then
+    -- a few yards only (0.01 of a zone map was ~30 yards: too far for the fire to count)
+    if map and campFire.map and (map ~= campFire.map or math.abs(x - campFire.x) + math.abs(y - campFire.y) > 0.0035) then
         return false   -- walked away from it
     end
     return true

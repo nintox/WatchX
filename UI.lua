@@ -5310,7 +5310,10 @@ do (function()
             if issecretvalue and issecretvalue(name) then name = nil end
             local kind = name and KINDS[name]
             local lower = name and name:lower() or ""
-            if not kind and lower:find("campfire", 1, true) then kind = "fire" end
+            -- the fire's own buff (with a clock, by the fire); "Campfire Nearby" reaches far and lingers: only a hint
+            if not kind and lower:find("campfire", 1, true) then
+                if lower:find("nearby", 1, true) then out.nearFire = true else kind = "fire" end
+            end
             -- lying on the bag: Forever gives "Resting" (no end); a "sleep" buff counts too
             if not kind and (lower == "resting" or N(a.spellId) == 1331671
                     or (lower:find("sleep", 1, true) and not lower:find("well", 1, true))) then out.lying = true end
@@ -5336,14 +5339,14 @@ do (function()
             end
         end
         if fire then keep[#keep + 1] = fire end
-        keep.lying, keep.wr, keep.wrAge = out.lying, out.wr, out.wrAge
+        keep.lying, keep.wr, keep.wrAge, keep.nearFire = out.lying, out.wr, out.wrAge, out.nearFire
         out = keep
         local b = BagState(out.lying, out.wr, out.wrAge)
         if b then out[#out + 1] = b end
         -- a fire you lit here, when there's no Campfire buff to show
         local hasFire = false
         for _, a in ipairs(out) do if a.kind == "fire" then hasFire = true end end
-        if not hasFire and ns.CampFireLit then
+        if not hasFire and out.nearFire and ns.CampFireLit then
             local ago = ns.CampFireLit()
             if ago then out[#out + 1] = { kind = "fire", lit = ago } end
         end
