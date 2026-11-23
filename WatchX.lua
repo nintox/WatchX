@@ -187,6 +187,7 @@ local reportedErrors = {}
 ns.cpu = { ms = 0, by = {}, depth = 0, clock = debugprofilestop, max = 0, spikes = 0, kb = 0 }   -- one table: locals limit
 function ns.cpu.Spent(label, dt, kb)
     local C = ns.cpu
+    if label == "/wx" then return end   -- what you type (/wx mem asks the game for every addon's memory: slow)
     C.ms = C.ms + dt
     C.by[label] = (C.by[label] or 0) + dt
     if dt > C.max then C.max, C.maxLabel = dt, label end
