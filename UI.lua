@@ -5426,6 +5426,30 @@ do (function()
         f:Hide()
     end
 
+    -- Damage over time on you (debuffs with a clock): how many.
+    local function Dots()
+        local n = 0
+        if not (C_UnitAuras and C_UnitAuras.GetAuraDataByIndex) then return 0 end
+        for i = 1, 40 do
+            local ok, a = pcall(C_UnitAuras.GetAuraDataByIndex, "player", i, "HARMFUL")
+            if not ok or type(a) ~= "table" then break end
+            local ex = N(a.expirationTime)
+            if ex and ex > 0 then n = n + 1 end
+        end
+        return n
+    end
+    -- The real change per second over the last few seconds (food minus whatever is hurting you).
+    local function NetRate(s, cur)
+        local now = GetTime()
+        s.samples = s.samples or {}
+        local list = s.samples
+        list[#list + 1] = { now, cur }
+        while #list > 2 and now - list[1][1] > 4 do table.remove(list, 1) end
+        local first = list[1]
+        if now - first[1] < 1.5 then return nil end
+        return (cur - first[2]) / (now - first[1])
+    end
+
     -- One tile: the power it restores (health or mana), what's left of the buff, and how far it'll get you.
     local function Paint(r, a, what, label, color)
         local cur = what == "mp" and N(UnitPower("player", 0)) or N(UnitHealth("player"))
@@ -5445,6 +5469,29 @@ do (function()
         local rate = a.index and RateFromText(a.index, label)   -- per second ("X over Y sec" is divided already)
         if not rate and GetTime() - s.t >= 2 then rate = (cur - s.v) / (GetTime() - s.t) end
         local missing = max - cur
+        -- eating with damage over time on you: will the food keep you alive?
+        local dots = what == "hp" and Dots() or 0
+        local net = what == "hp" and NetRate(s, cur) or nil
+        r.danger = nil
+        if dots > 0 and a.left then
+            local tag = "|cffaaaaaa" .. dots .. (dots == 1 and " debuff" or " debuffs") .. "|r  "
+            if not net then
+                r.info:SetText(tag .. "|cffccccccchecking...|r")
+            elseif net < 0 then
+                local deadIn = cur / -net
+                if deadIn < a.left then
+                    r.danger = true
+                    r.info:SetText(tag .. "|cffff3030dies in " .. math.ceil(deadIn) .. "s!|r")
+                else
+                    r.info:SetText(tag .. ("|cffff8040%d/s · ends at %d%%|r"):format(math.floor(net), math.max(0, math.floor((cur + net * a.left) / max * 100))))
+                end
+            else
+                local fullIn = net > 0 and missing / net or math.huge
+                r.info:SetText(tag .. "|cff40ff40survives|r " .. (fullIn <= a.left and ("|cff40ff40· full in " .. math.ceil(fullIn) .. "s|r")
+                    or ("|cffcccccc· ends at " .. math.min(100, math.floor((cur + net * a.left) / max * 100)) .. "%|r")))
+            end
+            return
+        end
         if missing <= 0 then
             r.info:SetText("|cff40ff40full|r")
         elseif rate and rate > 0 and a.left then
@@ -5518,7 +5565,11 @@ do (function()
         for i, r in ipairs(f.rows) do
             local l = lines[i]
             if l then
-                if l[2] == "camp" then PaintCamp(r, l[1]) else Paint(r, l[1], l[2], l[3], l[4]) end
+                if l[2] == "camp" then PaintCamp(r, l[1]) else
+                    r:SetAlpha(1)
+                    Paint(r, l[1], l[2], l[3], l[4])
+                    if r.danger then r:SetAlpha(0.35 + 0.65 * math.abs(math.sin(GetTime() * 6))) end
+                end
                 r:ClearAllPoints()
                 r:SetPoint("CENTER", f, "CENTER", (i - (n + 1) / 2) * (ICON + 18), 0)
                 r:Show()
