@@ -65,9 +65,8 @@ local defaults = {
     nearbyHideDungeon = false, -- Nearby: hidden in dungeons (else faded)
     nearbyHideRaid = false,    -- Nearby: hidden in raids (else faded)
     kosAlert = true,      -- Nearby: a "Kill on sight!" card + sound when a KOS player shows up
-    enemies = {},         -- Nearby history: key -> { name, class, level, guild, firstSeen, lastSeen, zone, seen, kills, deaths, kos, note }
+    enemies = {},         -- Nearby history: key -> { name, class, level, guild, firstSeen, lastSeen, zone, seen, kills, deaths, kos, avoid, note }
     kosGuilds = {},       -- lower-case guild name -> guild name, KOS
-    avoid = {},           -- Avoid list: lower-case key -> { name, note, at } (people you don't want to play with)
     avoidGroup = true,    -- ... a warning when one of them invites you or is in your group
     avoidChat = true,     -- ... a red [Avoid] before their chat lines
     nearbyShowEmpty = false, -- Nearby: show the list even when no enemy is around
@@ -876,7 +875,7 @@ end
 function ns.PruneEnemies()
     local list = {}
     for k, r in pairs(db.enemies) do
-        if not (r.kos or r.note or (r.kills or 0) > 0 or (r.deaths or 0) > 0) then list[#list + 1] = { k, r.lastSeen or 0 } end
+        if not (r.kos or r.avoid or r.note or (r.kills or 0) > 0 or (r.deaths or 0) > 0) then list[#list + 1] = { k, r.lastSeen or 0 } end
     end
     table.sort(list, function(a, b) return a[2] < b[2] end)
     for i = 1, math.floor(#list / 4) do db.enemies[list[i][1]] = nil end
@@ -934,6 +933,7 @@ end
 
 function ns.ForgetEnemy(key)
     db.enemies[key] = nil
+    if ns.AvoidChanged then ns.AvoidChanged() end
     ns.enemyCount = nil
     Refresh()
 end
@@ -1918,61 +1918,72 @@ function ns.RemoveBuffWatch(i)
 end
 
 -- ---------------------------------------------------------------- avoid list
--- People you don't want to play with (ninja looters, and worse), with your own note. Shared by all your
--- characters. Shown in their tooltip, a warning when one of them invites you or is in your group, and a red
--- [Avoid] before their chat lines. Names are "First Last" on Forever; just "First" matches anyone called that.
-local function AvoidKey(name)
-    if type(name) ~= "string" then return end
-    name = Trim(name):gsub("%s+", "-"):lower()
-    return name ~= "" and name or nil
+-- People you don't want to play with (ninja looters, and worse): a mark on the same player records as KOS and
+-- notes (db.enemies – the Nearby history), so the note is the one you already have. Shared by all characters.
+-- Shown in their tooltip and the Nearby list, a warning when one of them invites you or is in your group, and a
+-- red [Avoid] before their chat lines. Names are "First Last"; just "First" matches anyone called that.
+local avoidIndex   -- lower-case key -> key, rebuilt when the list changes
+local function AvoidIndex()
+    if not avoidIndex then
+        avoidIndex = {}
+        for k, r in pairs(db.enemies) do if r.avoid then avoidIndex[k:lower()] = k end end
+    end
+    return avoidIndex
 end
+function ns.AvoidChanged() avoidIndex = nil end
 
--- The entry for a key/name ("Shixa-Nightblade", "Shixa Nightblade" or "Shixa"), or nil.
+-- The record for a name/key ("Shixa-Nightblade", "Shixa Nightblade" or "Shixa") if it's on the list, and its key.
 function ns.Avoided(name)
-    local list = db and db.avoid
-    if not list or not next(list) then return nil end
-    local k = AvoidKey(name)
-    if not k then return nil end
-    return list[k] or list[(k:match("^([^%-]+)"))]
+    if type(name) ~= "string" or not db then return nil end
+    local idx = AvoidIndex()
+    if not next(idx) then return nil end
+    local k = Trim(name):gsub("%s+", "-"):lower()
+    local key = idx[k] or idx[(k:match("^([^%-]+)"))]
+    return key and db.enemies[key], key
 end
 
-function ns.SetAvoid(name, note)
-    local k = AvoidKey(name)
-    if not k then return end
-    db.avoid = db.avoid or {}
-    local shown = Trim(name):gsub("%-", " ")
+-- On (or off) the list; a note is kept with the player like any other note.
+function ns.SetAvoid(name, on, note)
+    local key = ns.KeyFromName(name)
+    if not key then return end
+    local r = ns.EnemyRecord(key, not db.enemies[key] and Trim(name):gsub("%-", " ") or nil)
+    r.avoid = on and true or nil
     note = Trim(note or "")
-    local e = db.avoid[k]
-    if e then
-        e.note = note ~= "" and note or e.note
-        Print("Avoid list: note for " .. e.name .. " updated.")
-    else
-        db.avoid[k] = { name = shown, note = note ~= "" and note or nil, at = time() }
-        Print("Avoid list: |cffff6060" .. shown .. "|r added" .. (note ~= "" and (" – " .. note) or "") .. ".")
-    end
+    if note ~= "" then r.note = note end
+    ns.AvoidChanged()
+    Print(on and ("|cffff8040Avoid|r: " .. r.name .. (r.note and (" – " .. r.note) or ""))
+        or ("No longer on your avoid list: " .. r.name))
     Refresh()
+    return key
 end
 
-function ns.RemoveAvoid(k)
-    if db.avoid and db.avoid[k] then
-        Print("Avoid list: " .. db.avoid[k].name .. " removed.")
-        db.avoid[k] = nil
-    end
-    Refresh()
+function ns.AvoidLine(r)
+    return "|cffff8040WatchX: Avoid|r" .. (r.note and ("|cffffb080 – " .. r.note .. "|r") or "")
 end
 
-function ns.AvoidLine(e)
-    return "|cffff4040WatchX: Avoid|r" .. (e.note and ("|cffff9090 – " .. e.note .. "|r") or "")
+-- 2.9.0 kept the list on its own: move it onto the player records.
+function ns.MigrateAvoid()
+    if type(db.avoid) ~= "table" then db.avoid = nil return end
+    for _, e in pairs(db.avoid) do
+        if type(e) == "table" and e.name then
+            local key = ns.KeyFromName(e.name)
+            local r = ns.EnemyRecord(key, not db.enemies[key] and e.name or nil)
+            r.avoid = true
+            r.note = r.note or e.note
+        end
+    end
+    db.avoid = nil
+    ns.AvoidChanged()
 end
 
 -- In your group, or an invite: one warning per player while you're in the group.
 local avoidWarned = {}
-local function AvoidWarn(e, what)
-    Warn("Avoid list: " .. e.name .. " " .. what .. (e.note and (" – " .. e.note) or ""))
+local function AvoidWarn(r, what)
+    Warn("Avoid list: " .. (r.name or "?") .. " " .. what .. (r.note and (" – " .. r.note) or ""))
 end
 
 local function CheckGroup()
-    if db.avoidGroup == false or not (db.avoid and next(db.avoid)) then return end
+    if db.avoidGroup == false or not next(AvoidIndex()) then return end
     local raid = Plain(IsInRaid and IsInRaid()) == true
     local n = raid and (tonumber(Plain(GetNumGroupMembers())) or 0) or 4
     if not raid and Plain(IsInGroup and IsInGroup()) ~= true then wipe(avoidWarned) return end
@@ -1996,7 +2007,7 @@ end
 
 -- Their chat lines get a red [Avoid] in front (say, yell, whispers, channels, group, guild).
 local function AvoidChatFilter(_, _, msg, author, ...)
-    if db and db.avoidChat ~= false and db.avoid and next(db.avoid) then
+    if db and db.avoidChat ~= false and next(AvoidIndex()) then
         local ok, e = pcall(function()
             local a, m = Plain(author), Plain(msg)
             if type(a) ~= "string" or type(m) ~= "string" then return nil end
@@ -2454,6 +2465,7 @@ local function OnEvent(_, event, arg1, arg2, ...)
         ns.db = db
         db.exitAt, db.exitWhy = nil, nil
         ns.InitProfiles()
+        ns.MigrateAvoid()
         for _, r in pairs(db.enemies) do r.healer = nil end   -- 2.3.0 guessed healers from heals; only proof now
         if db.instant ~= false then
             -- the bridge reads the code block from the picture: JPEG at a quality that keeps it sharp
@@ -2607,8 +2619,8 @@ local function OnSlash(input)
         -- /wx avoid Name Surname: note   (or just /wx avoid to open the list)
         local name, note = rest:match("^([^:]+):%s*(.*)$")
         name = name or rest
-        if Trim(name) ~= "" then ns.SetAvoid(name, note)
-        elseif ns.OpenAvoidSettings then ns.OpenAvoidSettings() end
+        if Trim(name) ~= "" then ns.SetAvoid(name, true, note)
+        elseif ns.ShowHistory then ns.ShowHistory("avoid") end
     elseif cmd == "buffs" or cmd == "buff" then
         if rest == "test" then ns.BuffTest()
         elseif rest ~= "" then ns.AddBuffWatch(rest)
