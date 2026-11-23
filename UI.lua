@@ -482,21 +482,54 @@ do
         local lr = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
         lr:SetPoint("TOPLEFT", f, "TOPLEFT", 18, -56)
         lr:SetText("Reward")
-        f.reward = Box(f, 100, 24, "e.g. 50g")
-        f.reward:SetPoint("TOPLEFT", f, "TOPLEFT", 80, -52)
+        -- gold, silver, copper: numbers only, a coin after each (like Blizzard's money boxes)
+        f.coins = {}
+        local x = 80
+        for i, c in ipairs({ { "gold", 56, 6, "Interface\\MoneyFrame\\UI-GoldIcon" }, { "silver", 30, 2, "Interface\\MoneyFrame\\UI-SilverIcon" },
+                             { "copper", 30, 2, "Interface\\MoneyFrame\\UI-CopperIcon" } }) do
+            local e = Box(f, c[2], c[3], "")
+            e:SetNumeric(true)
+            e:SetJustifyH("RIGHT")
+            e:SetPoint("TOPLEFT", f, "TOPLEFT", x, -52)
+            local icon = f:CreateTexture(nil, "ARTWORK")
+            icon:SetSize(13, 13)
+            icon:SetPoint("LEFT", e, "RIGHT", 3, 0)
+            icon:SetTexture(c[4])
+            f.coins[i] = e
+            x = x + c[2] + 26
+        end
+        f.reward = f.coins[1]
+        f.err = f:CreateFontString(nil, "OVERLAY", "GameFontRedSmall")
+        f.err:SetPoint("LEFT", f.coins[3], "RIGHT", 22, 0)
+        f.err:SetPoint("RIGHT", f, "RIGHT", -14, 0)
+        f.err:SetJustifyH("LEFT")
         local ln = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
         ln:SetPoint("TOPLEFT", f, "TOPLEFT", 18, -82)
         ln:SetText("Note")
         f.note = Box(f, 216, 100, "why – ninja looter, camps the flight path...")
         f.note:SetPoint("TOPLEFT", f, "TOPLEFT", 80, -78)
-        local function post()
-            ns.SetWanted(f.key, f.name, f.reward:GetText(), f.note:GetText())
-            f:Hide()
+        local function copper()
+            local g, sv, cp = tonumber(f.coins[1]:GetText()) or 0, tonumber(f.coins[2]:GetText()) or 0, tonumber(f.coins[3]:GetText()) or 0
+            return g * 10000 + math.min(99, sv) * 100 + math.min(99, cp)
         end
-        f.reward:SetScript("OnEnterPressed", function() f.note:SetFocus() end)
-        f.reward:SetScript("OnTabPressed", function() f.note:SetFocus() end)
+        local function post()
+            local c = copper()
+            if c <= 0 then
+                f.err:SetText("Put in a reward")
+                f.coins[1]:SetFocus()
+                return
+            end
+            if ns.SetWanted(f.key, f.name, c, f.note:GetText()) then f:Hide() end
+        end
+        for i, e in ipairs(f.coins) do
+            local nextBox = f.coins[i + 1] or f.note
+            e:SetScript("OnEnterPressed", function() nextBox:SetFocus() end)
+            e:SetScript("OnTabPressed", function() nextBox:SetFocus() end)
+            local changed = e:GetScript("OnTextChanged")
+            e:SetScript("OnTextChanged", function(self, ...) if changed then changed(self, ...) end f.err:SetText("") end)
+        end
         f.note:SetScript("OnEnterPressed", post)
-        f.note:SetScript("OnTabPressed", function() f.reward:SetFocus() end)
+        f.note:SetScript("OnTabPressed", function() f.coins[1]:SetFocus() end)
         f.post = Button(f, "Post bounty", 110, 22, post)
         f.post:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 16, 14)
         f.down = Button(f, "Take down", 90, 22, function() ns.RemoveWanted(f.key); f:Hide() end)
@@ -515,7 +548,11 @@ do
         local w = r and r.wanted
         bw.key, bw.name = key, name or (r and r.name) or key
         bw.who:SetText(bw.name)
-        bw.reward:SetText(w and w.reward or "")
+        local c = w and w.copper or 0
+        bw.coins[1]:SetText(c >= 10000 and tostring(math.floor(c / 10000)) or "")
+        bw.coins[2]:SetText((c % 10000) >= 100 and tostring(math.floor(c / 100) % 100) or "")
+        bw.coins[3]:SetText((c % 100) > 0 and tostring(c % 100) or "")
+        bw.err:SetText("")
         bw.note:SetText(w and w.note or "")
         bw.down:SetShown(w and true or false)
         local d = db()
@@ -524,7 +561,7 @@ do
         bw.shareHint:SetText("Sent to " .. to .. " who run WatchX.")
         bw:Show()
         bw:Raise()
-        bw.reward:SetFocus()
+        bw.coins[1]:SetFocus()
     end
 end
 
@@ -1655,6 +1692,8 @@ function ns.BuildNearbySettings()
         function() return db().nearbyAttach ~= false end, function(v) db().nearbyAttach = v; ns.AttachNearby() end)
     check("Warnings on top of the list", "off: top of the screen (Unlock to move)",
         function() return db().warnDock == true end, function(v) db().warnDock = v end)
+    check("Ping and fps in the list's title", "ms and frames a second, coloured green / yellow / red",
+        function() return db().nearbyStats ~= false end, function(v) db().nearbyStats = v end)
     check("Show the list when it's empty", "off: it only shows when enemies are around",
         function() return db().nearbyShowEmpty == true end, function(v) db().nearbyShowEmpty = v end)
     check("KOS alert", "a red card + sound when a KOS player shows up",
@@ -1887,11 +1926,11 @@ function ns.BuildNearbySettings()
         function() return db().wantedFriends ~= false end, function(v) db().wantedFriends = v end)
     check("Card + sound when one shows up", nil,
         function() return db().wantedAlert ~= false end, function(v) db().wantedAlert = v end)
-    addRow("Bounty", "Name: 50g note", function(t)
+    addRow("Bounty", "Name: 50g 20s note", function(t)
         local name, rest = t:match("^([^:]+):%s*(.*)$")
         name = ns.Trim(name or t)
-        local reward, note = (rest or ""):match("^(%d+%s*[gGsS]%S*)%s*(.*)$")
-        ns.SetWanted(ns.KeyFromName(name), name, reward, reward and note or rest)
+        local copper, note = ns.ParseMoney(rest or "")
+        ns.SetWanted(ns.KeyFromName(name), name, copper, note)
     end, "Bounty on target", function()
         local key, full
         if UnitExists("target") and UnitIsPlayer("target") then key, full = ns.PlayerKey("target") end
@@ -2988,6 +3027,22 @@ local function BuildNearby()
     f.count = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     f.count:SetPoint("RIGHT", f.hist, "LEFT", -8, 0)
     f.count:SetTextColor(ACCENT[1], ACCENT[2], ACCENT[3])
+    -- ms and fps after the title, once a second (two cheap calls): green / yellow / red by how good it is
+    f.stats = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    f.stats:SetPoint("LEFT", f.title, "RIGHT", 8, 0)
+    local statsT = 1
+    f:HookScript("OnUpdate", function(self, elapsed)
+        statsT = statsT + elapsed
+        if statsT < 1 then return end
+        statsT = 0
+        if db().nearbyStats == false then self.stats:SetText("") return end
+        local ms = select(4, GetNetStats())
+        ms = tonumber(ms) or 0
+        local fps = math.floor((tonumber(GetFramerate()) or 0) + 0.5)
+        local mc = ms < 100 and "|cff40ff40" or ms < 250 and "|cffffd100" or "|cffff4040"
+        local fc = fps >= 50 and "|cff40ff40" or fps >= 25 and "|cffffd100" or "|cffff4040"
+        self.stats:SetText(mc .. ms .. "|r|cff999999 ms|r  " .. fc .. fps .. "|r|cff999999 fps|r")
+    end)
     f.empty = f:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
     f.empty:SetPoint("TOPLEFT", f, "TOPLEFT", 9, -26)
     f.empty:SetText("No enemy players seen")
@@ -3343,10 +3398,11 @@ end
 -- A wanted player showed up: the WANTED card with the reward, and a sound.
 function ns.OnWantedSeen(e, w)
     if not db().nearby then return end
-    ns.Print("|cffffa000WANTED|r nearby: " .. e.name .. (w.reward and (" – " .. w.reward) or "") .. (w.by and (" (from " .. w.by .. ")") or ""))
+    local rw = ns.WantedReward(w)
+    ns.Print("|cffffa000WANTED|r nearby: " .. e.name .. (rw and (" – " .. rw) or "") .. (w.by and (" (from " .. w.by .. ")") or ""))
     if db().stealthSound ~= false then PlaySound(SOUNDKIT.RAID_WARNING, "Master") end
     ns.ShowStealthToast(e, "wanted")
-    if toast and w.reward then toast.head:SetText("WANTED!  |cffffd100" .. w.reward .. "|r") end
+    if toast and rw then toast.head:SetText("WANTED!  " .. rw) end
 end
 
 -- A new enemy in the list: the red card (not more often than every few seconds).
@@ -4118,7 +4174,7 @@ function ns.RefreshUI() ns.Safe("refresh", RefreshUIInner) end
 -- a chat log bar that couldn't be made or moved in combat is done once combat ends
 local uiEvents = CreateFrame("Frame")
 uiEvents:RegisterEvent("PLAYER_REGEN_ENABLED")
-uiEvents:SetScript("OnEvent", function()
+uiEvents:SetScript("OnEvent", ns.Timed(function()
     if not ns.db then return end
     if toast and toast:IsShown() and toast.waitCombat then
         toast.untilT = GetTime() + 6
@@ -4130,7 +4186,7 @@ uiEvents:SetScript("OnEvent", function()
     RefreshNearby()
     ns.UpdateTargetButton()
     if promptPending then ns.UpdateChatLogPrompt() end
-end)
+end))
 
 -- After a profile switch: the bars' spot and size, and the settings page if it's open.
 function ns.ApplyLayout()
@@ -4458,7 +4514,7 @@ local function BuildLevel()
     end)
     -- the missing ones pulse (a red glow and the icon), about once a second
     local t = 0
-    f:SetScript("OnUpdate", function(self, elapsed)
+    f:SetScript("OnUpdate", ns.Timed(function(self, elapsed)
         t = t + elapsed
         local on = db().levelFlash ~= false and not moving
         local wave = (math.sin(t * 5) + 1) / 2   -- 0..1
@@ -4471,7 +4527,7 @@ local function BuildLevel()
                 b.border:SetAlpha(1)
             end
         end
-    end)
+    end))
     -- any edge only changes the size (the icons keep their shape); the top-left corner stays put
     AddGrips(f, function(self, st, cx, cy)
         local sc
@@ -5497,14 +5553,14 @@ local function InitPlates()
     f:SetScript("OnEvent", function(...) ns.Safe("nameplate icons", OnPlateEvent, ...) end)
     -- friendly players wait their turn for an inspect: one is asked every few seconds
     local wait = 0
-    f:SetScript("OnUpdate", function(_, elapsed)
+    f:SetScript("OnUpdate", ns.Timed(function(_, elapsed)
         wait = wait + elapsed
         if wait < 3 then return end
         wait = 0
         local d = db()
         if not (d.plateFriendly and d.plateHealer ~= false) or InCombatLockdown() then return end
         for unit in pairs(plateUnits) do ns.Safe("inspect", ns.MaybeInspect, unit) end
-    end)
+    end))
     if C_NamePlate and C_NamePlate.GetNamePlates then   -- plates already up (after a /reload)
         local ok, plates = pcall(C_NamePlate.GetNamePlates)
         for _, plate in ipairs(ok and type(plates) == "table" and plates or {}) do

@@ -180,8 +180,29 @@ ns.Log = Log
 
 -- Runs fn; an error is logged and said once in chat instead of breaking WatchX for the session.
 local reportedErrors = {}
+-- WatchX's own CPU time: every handler is timed once at its outermost call (debugprofilestop: microsecond clock,
+-- costs next to nothing). /wx mem shows it.
+local cpuDepth, clock = 0, debugprofilestop
+ns.cpu = { ms = 0 }
+function ns.Timed(fn)
+    return function(...)
+        if not clock or cpuDepth > 0 then return fn(...) end
+        cpuDepth = 1
+        local t0 = clock()
+        local ok, a, b, c = pcall(fn, ...)
+        ns.cpu.ms = ns.cpu.ms + (clock() - t0)
+        cpuDepth = 0
+        if not ok then error(a, 0) end
+        return a, b, c
+    end
+end
+
 function ns.Safe(label, fn, ...)
+    local top = clock and cpuDepth == 0
+    local t0
+    if top then cpuDepth = 1; t0 = clock() end
     local ok, err = pcall(fn, ...)
+    if top then ns.cpu.ms = ns.cpu.ms + (clock() - t0); cpuDepth = 0 end
     if not ok then
         err = tostring(err)
         if Log then Log("error", label, err) end
@@ -1872,7 +1893,7 @@ if CreateFrame then
     if not pcall(bagEvents.RegisterUnitEvent, bagEvents, "UNIT_SPELLCAST_SUCCEEDED", "player") then
         pcall(bagEvents.RegisterEvent, bagEvents, "UNIT_SPELLCAST_SUCCEEDED")
     end
-    bagEvents:SetScript("OnEvent", function(_, event, unit, _, spellID)
+    bagEvents:SetScript("OnEvent", ns.Timed(function(_, event, unit, _, spellID)
         if event == "UNIT_SPELLCAST_SUCCEEDED" then
             if unit == "player" and ns.OnCampCast then pcall(ns.OnCampCast, spellID) end
         elseif event == "UNIT_AURA" then
@@ -1882,7 +1903,7 @@ if CreateFrame then
         else
             bagState.dirty, statusCache.dirty = true, true
         end
-    end)
+    end))
 end
 
 -- A campfire close by: a "...Campfire" buff on you, or one you put down here less than 10 minutes ago.
@@ -2402,6 +2423,39 @@ do
     end
     local function On() return db and db.wantedOn ~= false end
 
+    -- Money: rewards are copper (shown with coin icons); old ones may still be plain text.
+    local function Money(c)
+        c = math.floor(tonumber(c) or 0)
+        if GetCoinTextureString then
+            local ok, str = pcall(GetCoinTextureString, c)
+            if ok and type(str) == "string" and str ~= "" then return str end
+        end
+        local g, sv, cp = math.floor(c / 10000), math.floor(c / 100) % 100, c % 100
+        local t = {}
+        if g > 0 then t[#t + 1] = g .. "g" end
+        if sv > 0 then t[#t + 1] = sv .. "s" end
+        if cp > 0 or #t == 0 then t[#t + 1] = cp .. "c" end
+        return table.concat(t, " ")
+    end
+    ns.Money = Money
+    local UNITS = { g = 10000, gold = 10000, s = 100, silver = 100, c = 1, copper = 1 }
+    -- "50g 20s ninja looter" -> 502000, "ninja looter"
+    function ns.ParseMoney(text)
+        local total, rest = 0, text or ""
+        while true do
+            local n, unit, after = rest:match("^%s*(%d+)%s*(%a+)(.*)$")
+            local mult = unit and UNITS[unit:lower()]
+            if not mult then break end
+            total, rest = total + tonumber(n) * mult, after
+        end
+        return total, Trim(rest)
+    end
+    function ns.WantedReward(w)
+        if not w then return nil end
+        if w.copper and w.copper > 0 then return Money(w.copper) end
+        return w.reward
+    end
+
     -- The bounty on this player (still open), or nil.
     function ns.Wanted(key)
         local r = key and db and db.enemies[key]
@@ -2411,7 +2465,8 @@ do
     -- A line for tooltips and lists.
     function ns.WantedLine(w)
         if not w then return "" end
-        local s = "|cffffa000WANTED|r" .. (w.reward and (" |cffffd100" .. w.reward .. "|r") or "")
+        local rw = ns.WantedReward(w)
+        local s = "|cffffa000WANTED|r" .. (rw and (" |cffffd100" .. rw .. "|r") or "")
             .. (w.by and ("|cffaaaaaa by " .. w.by .. "|r") or "") .. (w.note and (" – " .. w.note) or "")
         if w.claimed then s = s .. "  |cff40ff40claimed by " .. (w.claimed.by or "?") .. "|r" end
         return s
@@ -2421,14 +2476,14 @@ do
     local queue, sender = {}, CreateFrame("Frame")
     local wait = 0
     sender:Hide()
-    sender:SetScript("OnUpdate", function(self, elapsed)
+    sender:SetScript("OnUpdate", ns.Timed(function(self, elapsed)
         wait = wait - elapsed
         if wait > 0 then return end
         local m = table.remove(queue, 1)
         if not m then self:Hide() return end
         wait = 0.3
         pcall(C_ChatInfo.SendAddonMessage, PREFIX, m[1], m[2], m[3])
-    end)
+    end))
     local friends = {}   -- lower-case name -> true (online friends, rebuilt when sending)
     local function Friends()
         wipe(friends)
@@ -2459,19 +2514,26 @@ do
     local function SendAdd(key, r)
         local w = r.wanted
         recent[key .. (w.t or 0)] = time()
-        Send("A", key, r.name or key, r.class or "", w.reward or "", w.note or "", w.by or "", w.t or 0,
+        Send("A", key, r.name or key, r.class or "", (w.copper and tostring(w.copper)) or w.reward or "", w.note or "", w.by or "", w.t or 0,
             w.claimed and w.claimed.by or "", w.claimed and w.claimed.t or 0)
     end
 
+    -- reward: copper, or text like "50g 20s"; a bounty needs one.
     function ns.SetWanted(key, name, reward, note)
-        if not key then return end
+        if not key then return false end
+        local copper = type(reward) == "number" and math.floor(reward) or ns.ParseMoney(tostring(reward or ""))
+        if not copper or copper <= 0 then
+            Print("A bounty needs a reward: gold, silver or copper (e.g. |cffffd100/wx wanted Name: 50g ninja looter|r).")
+            return false
+        end
         local r = ns.EnemyRecord(key, name)
-        r.wanted = { reward = Clean(reward, MAX_REWARD), note = Clean(note, MAX_NOTE), by = Me(), t = time() }
+        r.wanted = { copper = copper, note = Clean(note, MAX_NOTE), by = Me(), t = time() }
         r.wantedHide = nil
         SendAdd(key, r)
-        Print("|cffffa000WANTED|r posted: " .. r.name .. (r.wanted.reward and (" – " .. r.wanted.reward) or "")
+        Print("|cffffa000WANTED|r posted: " .. r.name .. " – " .. Money(copper)
             .. (r.wanted.note and (" (" .. r.wanted.note .. ")") or "") .. " |cffaaaaaa– sent to your guild and friends|r")
         if ns.RefreshUI then ns.RefreshUI() end
+        return true
     end
 
     -- Your own bounty: taken down for everyone. Someone else's: hidden here only.
@@ -2495,7 +2557,7 @@ do
         if not w then return end
         w.claimed = { by = Me(), t = time() }
         Send("C", key, w.claimed.by, w.claimed.t, w.t or 0)
-        Warn("Bounty claimed: " .. (r.name or key) .. (w.reward and (" – " .. w.reward) or "")
+        Warn("Bounty claimed: " .. (r.name or key) .. (ns.WantedReward(w) and (" – " .. ns.WantedReward(w)) or "")
             .. (w.by ~= Me() and (" from " .. w.by) or ""))
     end
 
@@ -2517,12 +2579,14 @@ do
             end
             r = ns.EnemyRecord(key, Clean(f[2], 60))
             if (not r.class) and f[3] ~= "" then r.class = Clean(f[3], 20) end
-            r.wanted = { reward = Clean(f[4], MAX_REWARD), note = Clean(f[5], MAX_NOTE), by = Clean(f[6], 40) or from, t = t }
+            local cp = (f[4] or ""):match("^%d+$") and tonumber(f[4]) or nil
+            r.wanted = { copper = cp, reward = (not cp) and Clean(f[4], MAX_REWARD) or nil, note = Clean(f[5], MAX_NOTE),
+                by = Clean(f[6], 40) or from, t = t }
             if f[8] and f[8] ~= "" then r.wanted.claimed = { by = Clean(f[8], 40), t = tt(f[9]) or t } end
             recent[key .. t] = time()
             if time() - t < 600 and not r.wanted.claimed then
                 Print("|cffffa000WANTED|r from " .. (r.wanted.by or "?") .. ": " .. (r.name or key)
-                    .. (r.wanted.reward and (" – " .. r.wanted.reward) or "") .. (r.wanted.note and (" (" .. r.wanted.note .. ")") or ""))
+                    .. (ns.WantedReward(r.wanted) and (" – " .. ns.WantedReward(r.wanted)) or "") .. (r.wanted.note and (" (" .. r.wanted.note .. ")") or ""))
             end
         elseif op == "D" then
             local r = db.enemies[key]
@@ -2535,7 +2599,7 @@ do
             if w and not w.claimed and (tt(f[4]) or 0) == (w.t or 0) then
                 w.claimed = { by = Clean(f[2], 40) or from, t = tt(f[3]) or time() }
                 Print("|cffffa000Bounty claimed|r: " .. (r.name or key) .. " by " .. w.claimed.by
-                    .. (w.reward and (" – " .. w.reward) or "") .. (w.by and (", from " .. w.by) or ""))
+                    .. (ns.WantedReward(w) and (" – " .. ns.WantedReward(w)) or "") .. (w.by and (", from " .. w.by) or ""))
             end
         end
         if ns.RefreshUI then ns.RefreshUI() end
@@ -2979,7 +3043,7 @@ end
 -- Every second: scan nameplates and refresh the UI.
 local ticker = CreateFrame("Frame")
 local elapsed = 0
-ticker:SetScript("OnUpdate", function(_, dt)
+ticker:SetScript("OnUpdate", ns.Timed(function(_, dt)
     if not db then return end
     elapsed = elapsed + dt
     if elapsed < 1 then return end
@@ -2990,7 +3054,7 @@ ticker:SetScript("OnUpdate", function(_, dt)
     if db.levelHelper == false and db.levelWarn ~= false then ns.Safe("xp boosts", ns.LevelStatus) end
     ns.Safe("buffs", ns.CheckBuffs)
     Refresh()
-end)
+end))
 
 -- ---------------------------------------------------------------- events
 
@@ -3038,6 +3102,7 @@ local function OnEvent(_, event, arg1, arg2, ...)
         return
     end
     if event == "PLAYER_LOGIN" then
+        ns.cpuStart, ns.cpu.ms = GetTime(), 0
         WatchXDB = WatchXDB or {}
         db = WatchXDB
         for k, v in pairs(defaults) do
@@ -3212,13 +3277,18 @@ local function OnSlash(input)
             .. "plain ones go after 2000)  ·  log: %d lines (max %d)  ·  rare catalogue: %d mobs"):format(
             ok and kb and (kb >= 1024 and ("%.1f MB"):format(kb / 1024) or ("%d KB"):format(kb)) or "?",
             players, notes, logLines, LOG_MAX, #(ns.RARES or {})))
+        local up = GetTime() - (ns.cpuStart or 0)
+        if debugprofilestop and up > 0 then
+            Print(("CPU (WatchX's own clock): |cffffd100%.0f ms|r in %s  ·  %.2f ms a second  ·  |cffffd100%.3f%%|r of one CPU core"):format(
+                ns.cpu.ms, ns.Fmt and ns.Fmt(up) or (math.floor(up) .. " s"), ns.cpu.ms / up, ns.cpu.ms / up / 10))
+        end
         local GetCPU = (C_AddOns and C_AddOns.GetAddOnCPUUsage) or GetAddOnCPUUsage
         if GetCVar("scriptProfile") == "1" and GetCPU then
             local okc, ms = pcall(GetCPU, "WatchX")
             if okc and ms then Print(("CPU since login/reload: %.0f ms"):format(ms)) end
         else
-            Print("|cffaaaaaaCPU: the game only measures it with /console scriptProfile 1 and a /reload (costs a little "
-                .. "itself – turn it off again with /console scriptProfile 0).|r")
+            Print("|cffaaaaaaThe game's own measure: /console scriptProfile 1 and a /reload (it costs a little itself – "
+                .. "/console scriptProfile 0 afterwards).|r")
         end
     elseif cmd == "rares" or cmd == "rare" or cmd == "catalogue" then
         if ns.ShowRares then ns.ShowRares() end
@@ -3227,8 +3297,8 @@ local function OnSlash(input)
         local name, after = rest:match("^([^:]+):%s*(.*)$")
         name = Trim(name or rest)
         if name ~= "" then
-            local reward, note = (after or ""):match("^(%d+%s*[gGsS]%S*)%s*(.*)$")
-            ns.SetWanted(ns.KeyFromName(name), name, reward, reward and note or after)
+            local copper, note = ns.ParseMoney(after or "")
+            ns.SetWanted(ns.KeyFromName(name), name, copper, note)
         elseif ns.ShowHistory then ns.ShowHistory("wanted") end
     elseif cmd == "avoid" or cmd == "blacklist" then
         -- /wx avoid Name Surname: note   (or just /wx avoid to open the list)
