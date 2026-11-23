@@ -412,10 +412,11 @@ function ns.EnemyMenu(anchor, key)
         local gk = ns.db.kosGuilds[r.guild:lower()]
         items[#items + 1] = { (gk and "Guild off KOS: " or "KOS the guild: ") .. r.guild, function() ns.SetGuildKOS(r.guild, not gk) end }
     end
-    if r.wanted and not r.wanted.claimed and not ns.WantedMine(r.wanted) then
-        items[#items + 1] = { "|cff909090Bounty by " .. (r.wanted.by or "?") .. " – only they can change it|r", nil }
+    local mineW = r.wanted and ns.WantedMine(r.wanted)
+    if r.wanted and not mineW then
+        items[#items + 1] = { "|cff909090Bounty by " .. ((r.wanted.by or "?"):gsub("%-", " ")) .. " – only they can change it|r", nil }
     elseif r.wanted and r.wanted.claimed then
-        if not r.wanted.paid and ns.WantedMine(r.wanted) then
+        if not r.wanted.paid and not (ns.ClaimedByMe and ns.ClaimedByMe(r.wanted)) then
             items[#items + 1] = { "|cff40ff40Mark paid|r (paid by trade)", function() ns.MarkPaid(key) end }
         end
         items[#items + 1] = { "Take the bounty down", function() ns.RemoveWanted(key) end }
@@ -551,7 +552,7 @@ do
         local function post()
             local c = copper()
             if c <= 0 then
-                f.err:SetText("Put in a reward")
+                f.err:SetText("Put in a reward"); f.shareHint:Hide()
                 f.coins[1]:SetFocus()
                 return
             end
@@ -559,23 +560,24 @@ do
             if f.whoBox:IsShown() then
                 local first, last = ns.Trim(f.whoBox:GetText() or ""), ns.Trim(f.lastBox:GetText() or "")
                 first, last = first:gsub("%s+", ""), last:gsub("%s+", "")
-                if first == "" then f.err:SetText("Who? Put in the first name"); f.whoBox:SetFocus() return end
-                if last == "" then f.err:SetText("And the last name – every name has one"); f.lastBox:SetFocus() return end
+                if first == "" then f.err:SetText("Who? Put in the first name"); f.shareHint:Hide(); f.whoBox:SetFocus() return end
+                if last == "" then f.err:SetText("And the last name – every name has one"); f.shareHint:Hide(); f.lastBox:SetFocus() return end
                 name = first .. " " .. last
                 key = ns.KeyFromName(name)
             end
-            if ns.SetWanted(key, name, c, f.note:GetText(), f.forever:GetChecked() and true or false) then f:Hide() end
+            local ok, why = ns.SetWanted(key, name, c, f.note:GetText(), f.forever:GetChecked() and true or false)
+            if ok then f:Hide() else f.err:SetText(why or "Couldn't post it – see chat."); f.shareHint:Hide() end
         end
         for i, e in ipairs(f.coins) do
             local nextBox = f.coins[i + 1] or f.note
             e:SetScript("OnEnterPressed", function() nextBox:SetFocus() end)
             e:SetScript("OnTabPressed", function() nextBox:SetFocus() end)
             local changed = e:GetScript("OnTextChanged")
-            e:SetScript("OnTextChanged", function(self, ...) if changed then changed(self, ...) end f.err:SetText("") end)
+            e:SetScript("OnTextChanged", function(self, ...) if changed then changed(self, ...) end f.err:SetText(""); f.shareHint:Show() end)
         end
         f.note:SetScript("OnEnterPressed", post)
         f.note:SetScript("OnTabPressed", function() f.coins[1]:SetFocus() end)
-        f.post = Button(f, "Post bounty", 120, 24, post)
+        f.post = Button(f, "Post bounty", 96, 24, post)
         f.post:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 18, 16)
         f.down = Button(f, "Take down", 96, 24, function() ns.RemoveWanted(f.key); f:Hide() end)
         f.down:SetPoint("BOTTOM", f, "BOTTOM", 0, 16)
@@ -609,6 +611,7 @@ do
         bw.coins[2]:SetText((c % 10000) >= 100 and tostring(math.floor(c / 100) % 100) or "")
         bw.coins[3]:SetText((c % 100) > 0 and tostring(c % 100) or "")
         bw.err:SetText("")
+        bw.shareHint:Show()
         bw.forever:SetChecked(w and w.forever and true or false)
         bw.note:SetText(w and w.note or "")
         bw.down:SetShown((w and ns.WantedMine(w)) and true or false)
@@ -1618,8 +1621,9 @@ function ns.RefreshHistory()
                     it.status = w.paid and "4" or w.claimed and "3" or "1"
                     it.note = (w.note or "~"):lower()
                     local mine = ns.WantedMine(w)
-                    it.group = (w.claimed and not w.paid and mine) and 1
-                        or (w.claimed and not w.paid and w.claimed.by == (ns.MyName and ns.MyName())) and 2
+                    local byMe = ns.ClaimedByMe and ns.ClaimedByMe(w)
+                    it.group = (w.claimed and not w.paid and mine and not byMe) and 1
+                        or (w.claimed and not w.paid and byMe and not mine) and 2
                         or (not w.claimed) and 3 or (not w.paid) and 4 or 5
                 end
             end
@@ -1655,7 +1659,7 @@ function ns.RefreshHistory()
             row.bar:SetColorTexture(0.11 + alt, 0.09 + alt, 0.06 + alt, 0.9)
             row.edge:SetColorTexture(cr, cg, cb, 1)
             local v = { (it.kos and "|cffff3030KOS|r " or "") .. (r.wanted and (r.wanted.paid and "|cff40ff40PAID|r "
-                    or r.wanted.claimed and (ns.WantedMine(r.wanted) and "|cffff8040OWED|r " or "|cffffd100CLAIMED|r ") or "|cffffa000WANTED|r ") or "")
+                    or r.wanted.claimed and ((ns.WantedMine(r.wanted) and not (ns.ClaimedByMe and ns.ClaimedByMe(r.wanted))) and "|cffff8040OWED|r " or "|cffffd100CLAIMED|r ") or "|cffffa000WANTED|r ") or "")
                 .. (r.avoid and "|cffff8040AVOID|r " or "") .. (r.name or it.key),
                 (r.level and r.level > 0) and r.level or "??", ClassName(r.class), r.guild or "|cff606060-|r",
                 (r.kills or 0) > 0 and ("|cffffd100" .. r.kills .. "|r") or "0",
@@ -3795,8 +3799,9 @@ end
 -- can't be changed in combat: it waits for combat to end.
 -- The macro that targets a watched name: players are targeted by their full name (Forever has surnames).
 local function TargetLine(name)
-    local m = ns.MobState(name)
-    if m.isPlayer and m.full and m.key then return ns.TargetMacro(name, m.full, m.key) end
+    if type(name) ~= "string" or name:find("[%c/;%[%]|]") then return "" end   -- a name, nothing that runs more
+    local m = ns.db and ns.db.mobs and ns.db.mobs[name]   -- read only: a player who pops the bar isn't saved as a mob
+    if m and m.isPlayer and m.full and m.key then return ns.TargetMacro(name, m.full, m.key) end
     return "/targetexact " .. name
 end
 

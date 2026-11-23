@@ -173,6 +173,7 @@ local function Log(...)
     if not db then return end
     local parts = { date("%H:%M:%S") }
     for i = 1, select("#", ...) do parts[#parts + 1] = tostring((select(i, ...))) end
+    if type(db.log) ~= "table" then db.log = {} end   -- a fresh install has none yet
     table.insert(db.log, table.concat(parts, " "))
     while #db.log > LOG_MAX do table.remove(db.log, 1) end
 end
@@ -394,6 +395,7 @@ end
 
 local function HookChatLog()
     local function onMessage(_, msg)
+        msg = Plain(msg)   -- chat text can be a secret value: that would error on :find
         if type(msg) ~= "string" then return end
         if CHATLOGENABLED and msg:find(CHATLOGENABLED, 1, true) then SetChatLogState(true)
         elseif CHATLOGDISABLED and msg:find(CHATLOGDISABLED, 1, true) then SetChatLogState(false) end
@@ -641,10 +643,12 @@ local function ShotDone(item, ok, why)
     shotWait, shotBusy = nil, false
     if ok then
         if db.instantOK ~= true then Log("instant", "screenshot works") end
-        db.instantOK = true
+        db.instantOK, ns.shotFails = true, 0
     else
         Log("instant", "screenshot failed", why or "?")
-        db.instantOK = false
+        -- one failed shot (a minimized window, a loading screen) doesn't switch it off: three in a row do
+        ns.shotFails = (ns.shotFails or 0) + 1
+        if ns.shotFails >= 3 then db.instantOK = false end
         Print("|cffffd100Instant alert failed (" .. (why or "?") .. ") – sending it the slow way (chat log).|r")
         if ns.UpdateChatLogPrompt then ns.UpdateChatLogPrompt() end
         Signal(item.kind, item.subject, item.text, item.epoch, item.ctr)
@@ -683,7 +687,22 @@ local function Phone(kind, subject, text)
     counter = (counter + 1) % 256
     local epoch = time()
     if db.instant ~= false and db.instantOK ~= false and Screenshot then
-        shotQueue[#shotQueue + 1] = { kind = kind, subject = subject, text = text, epoch = epoch, ctr = counter }
+        local item = { kind = kind, subject = subject, text = text, epoch = epoch, ctr = counter }
+        if kind == "SPAWN" or kind == "LOOT" or kind == "ATTACK" or kind == "AFK" or kind == "LOGOUT" or kind == "TEST" then
+            -- urgent: ahead of the player sightings (each picture takes about a second)
+            local at = 1
+            while shotQueue[at] and (shotQueue[at].kind == "SPAWN" or shotQueue[at].kind == "ATTACK"
+                    or shotQueue[at].kind == "LOGOUT" or shotQueue[at].kind == "AFK") do at = at + 1 end
+            table.insert(shotQueue, at, item)
+        else
+            -- a crowd of players: no more than three sightings wait, the newest ones
+            local n, first = 0, nil
+            for i, q in ipairs(shotQueue) do
+                if q.kind == kind then n = n + 1; first = first or i end
+            end
+            if n >= 3 and first then table.remove(shotQueue, first) end
+            shotQueue[#shotQueue + 1] = item
+        end
         NextShot()
     else
         Signal(kind, subject, text, epoch, counter)
@@ -706,6 +725,7 @@ ns.Alert = Alert
 
 -- Delayed so the test travels exactly like a real spawn alert (not straight from a click).
 function ns.SendTest()
+    if db.instantOK == false then db.instantOK, ns.shotFails = nil, 0 end   -- a test tries the instant way again
     Print("Sending a test alert in 3 seconds (the same way a real spawn alert is sent)...")
     C_Timer.After(3, function()
         Alert("TEST", "WatchX", "Test from WatchX – if you see this on your phone, everything works.",
@@ -727,6 +747,7 @@ local function OnDeath(name, source)
     m.alive = false
     m.lastDeath = now
     table.insert(m.kills, now)
+    while #m.kills > 50 do table.remove(m.kills, 1) end   -- the last 50 are plenty (saved between sessions)
     Log("death", name, source)
 
     local msg = name .. " died (" .. (source or "?") .. ")."
@@ -757,6 +778,8 @@ end
 local function OnSeen(name, unit, source)
     local m, now = MobState(name), time()
     if unit and Plain(UnitIsDead(unit)) == true then
+        -- the same corpse seen again (it lies there for minutes): not a new death, no new alert
+        if not m.alive and m.lastDeath and now - m.lastDeath < 900 then return end
         OnDeath(name, "corpse seen")
         return
     end
@@ -787,8 +810,9 @@ local function OnSeen(name, unit, source)
     if m.lastDeath and m.sampledDeath ~= m.lastDeath then
         local gap = now - m.lastDeath
         m.sampledDeath = m.lastDeath
-        if gap < 12 * 3600 then
+        if gap >= 120 and gap < 12 * 3600 then   -- under 2 minutes is a double count, not a respawn
             table.insert(m.samples, gap)
+            while #m.samples > 20 do table.remove(m.samples, 1) end
             extra = string.format(" %s after last kill.", Fmt(gap))
         end
     end
@@ -825,7 +849,7 @@ local function CheckEnemyPlayer(unit, name, source)
     local inInstance = IsInInstance and IsInInstance()
     if inInstance then return end
     local now = time()
-    ns.lastEnemy = { name = name, at = now }
+    if ns.lastEnemy then ns.lastEnemy.name, ns.lastEnemy.at = name, now else ns.lastEnemy = { name = name, at = now } end
     if enemySeen[name] and now - enemySeen[name] < ENEMY_COOLDOWN then return end
     enemySeen[name] = now
     local info = PlayerInfo(unit)
@@ -862,6 +886,10 @@ ns.PlayerKey = PlayerKey
 
 -- The macro that targets a player: the full name first, then the other ways Forever may want it.
 function ns.TargetMacro(first, full, key)
+    -- a name only: anything else (a line break, a slash, brackets) could make the macro run more than /targetexact
+    for _, v in ipairs({ first or "", full or "", key or "" }) do
+        if type(v) ~= "string" or v:find("[%c/;%[%]|]") then return "" end
+    end
     if not full or full == first then return "/targetexact " .. first end
     return table.concat({ "/cleartarget", "/targetexact " .. full, "/targetexact [noexists] " .. key,
         "/targetexact [noexists] " .. first }, "\n")
@@ -913,8 +941,14 @@ function ns.EnemyRecord(key, name)
     if not r then
         r = { name = name or key:gsub("%-", " "), firstSeen = time(), seen = 0, kills = 0, deaths = 0 }
         db.enemies[key] = r
-        ns.enemyCount = (ns.enemyCount or 0) + 1
-        if ns.enemyCount > ENEMY_MAX then ns.PruneEnemies() end
+        if not ns.enemyCount then   -- counted once per session (the saved ones too), then kept up to date
+            local n = 0
+            for _ in pairs(db.enemies) do n = n + 1 end
+            ns.enemyCount = n
+        else
+            ns.enemyCount = ns.enemyCount + 1
+        end
+        if ns.enemyCount > (ns.enemyPruneAt or ENEMY_MAX) then ns.PruneEnemies() end
     elseif name then
         r.name = name
     end
@@ -929,10 +963,11 @@ function ns.PruneEnemies()
     end
     table.sort(list, function(a, b) return a[2] < b[2] end)
     for i = 1, math.floor(#list / 4) do db.enemies[list[i][1]] = nil end
-    ns.enemyCount = nil
     local n = 0
     for _ in pairs(db.enemies) do n = n + 1 end
     ns.enemyCount = n
+    -- mostly kept ones (KOS, notes, kills)? then not again on the very next player
+    ns.enemyPruneAt = math.max(ENEMY_MAX, n) + 200
 end
 
 -- KOS: the player (by full key or by first name only) or the guild.
@@ -1141,25 +1176,27 @@ local function RoleStore()
 end
 
 local function PruneRoles(t)
+    local n = 0
+    for _ in pairs(t) do n = n + 1 end
+    if n <= ROLE_MAX then return end   -- counted first: no garbage for every new player
     local list = {}
     for k, r in pairs(t) do list[#list + 1] = { k, r.at or 0 } end
-    if #list <= ROLE_MAX then return end
     table.sort(list, function(a, b) return a[2] < b[2] end)
     for i = 1, #list - ROLE_MAX + 200 do t[list[i][1]] = nil end
 end
 
 -- Remember what a player is. key = "First-Last" (or nil when the name is hidden; then the plate holds it).
 local function SetRole(key, unit, role, how)
-    local entry = { role = role, how = how, at = time() }
     local old
     if key then
         local t = RoleStore()
         old = t[key]
-        t[key] = entry
+        if old and old.role == role then old.at, old.how = time(), how return end   -- the same again: just fresher
+        t[key] = { role = role, how = how, at = time() }
         if not old then PruneRoles(t) end
     elseif type(unit) == "string" and unit:find("^nameplate%d+$") then
         old = ns.roles["plate:" .. unit]
-        ns.roles["plate:" .. unit] = entry
+        ns.roles["plate:" .. unit] = { role = role, how = how, at = time() }
     else
         return
     end
@@ -1199,8 +1236,17 @@ function ns.ScanRoleAuras(unit)
             return
         end
         if type(id) == "number" then
+            -- only a form the player puts on himself counts: Power Infusion, Earth Shield, Riptide and the like are
+            -- buffs a healer gives to others, so they say nothing about this player
+            if not ns.ROLE_FORMS then
+                ns.ROLE_FORMS = {}
+                for _, fid in ipairs({ 33891, 15473, 24858 }) do   -- Tree of Life, Shadowform, Moonkin Form
+                    local fn = SpellName(fid)
+                    if fn then ns.ROLE_FORMS[fn] = true end
+                end
+            end
             local role, name = RoleOfSpell(id)
-            if role then SetRole((PlayerKey(unit)), unit, role, name) return end
+            if role and name and ns.ROLE_FORMS[name] then SetRole((PlayerKey(unit)), unit, role, name) return end
         end
     end
 end
@@ -2510,26 +2556,56 @@ end
 (function()
     local PREFIX, VER, SEP = "WatchX", "W1", "~"
     local MAX_REWARD, MAX_NOTE = 24, 100
-    local OPEN_DAYS, CLAIMED_DAYS = 14, 3
+    local OPEN_DAYS, CLAIMED_DAYS, GONE_DAYS = 14, 3, 15
+    local FOREIGN_MAX, PER_POSTER_MAX = 200, 20   -- bounties from others kept at most (all, and per poster)
 
+    -- Text from the network or typed: no control characters, no "|" (escape codes: icons, links), no "~" (our
+    -- separator); cut at a letter boundary (UTF-8).
     local function Clean(s, n)
-        s = Trim((tostring(s or "")):gsub("[%c|~]", " "))
+        if type(s) ~= "string" and type(s) ~= "number" then return nil end
+        s = Trim((tostring(s)):gsub("[%c|~]", " "))
         if s == "" then return nil end
-        return s:sub(1, n)
+        if #s > n then s = (s:sub(1, n):gsub("[\192-\255][\128-\191]*$", "")) end
+        return s ~= "" and s or nil
     end
+    -- A player key: "First-Last" or "First" – letters only (any language), one hyphen at most.
+    local function ValidKey(k)
+        return type(k) == "string" and #k >= 2 and #k <= 40 and k:find("^[%a\128-\255]+%-?[%a\128-\255]*$") ~= nil
+    end
+    -- A whole number within limits, or nil.
+    local function Int(v, lo, hi)
+        v = tonumber(v)
+        if not v or v ~= math.floor(v) or v < lo or v > hi then return nil end
+        return v
+    end
+    local function Norm(n) return type(n) == "string" and (n:gsub("%s+", "-")):lower() or nil end
+    local function First(n) return n and (n:match("^[^%-]+")) or n end
     local function Me()
         local n = Plain(UnitName("player"))
         return type(n) == "string" and n or "?"
     end
     local function On() return db and db.wantedOn ~= false end
-    -- Your name as mail takes it: "First-Surname" when the game gives a surname.
+    -- Your name as other players' games show it: "First-Surname" when known (from the game, or learned from
+    -- your own message coming back in the guild channel).
     local function MyFull()
+        if ns.myFull then return ns.myFull end
         local n, r = UnitName("player")
         n, r = Plain(n), Plain(r)
         if type(n) ~= "string" then return Me() end
         if type(r) == "string" and r ~= "" then return n .. "-" .. r end
         return n
     end
+    -- The same player? Full names must match; when one side has no surname (old saves), the first names do.
+    local function Same(a, b)
+        a, b = Norm(a), Norm(b)
+        if not a or not b then return false end
+        if a == b then return true end
+        if not a:find("-", 1, true) or not b:find("-", 1, true) then return First(a) == First(b) end
+        return false
+    end
+    local function IsMe(name) return Same(name, MyFull()) end
+    ns.IsMe = IsMe
+    local function Show(name) return name and (name:gsub("%-", " ")) or "?" end   -- "First Last" for the eye
 
     -- Money: rewards are copper (shown with coin icons); old ones may still be plain text.
     local function Money(c)
@@ -2564,6 +2640,12 @@ end
         return w.reward
     end
 
+    -- Is this bounty yours? Only the one who put it up can change it, take it down or mark it paid.
+    function ns.WantedMine(w) return w and (w.by == nil or IsMe(w.by)) or false end
+    local function ClaimedByMe(w) return w and w.claimed and IsMe(w.claimed.full or w.claimed.by) or false end
+    ns.ClaimedByMe = ClaimedByMe
+    ns.MyName = MyFull
+
     -- The bounty on this player (still open), or nil. A bounty on just a first name ("Bob") counts for any Bob.
     function ns.Wanted(key)
         if not (key and db and On()) then return end
@@ -2579,22 +2661,37 @@ end
         if not w then return "" end
         local rw = ns.WantedReward(w)
         local s = "|cffffa000WANTED|r" .. (rw and (" |cffffd100" .. rw .. "|r") or "")
-            .. (w.by and ("|cffaaaaaa by " .. w.by .. "|r") or "") .. (w.note and (" – " .. w.note) or "")
+            .. (w.by and ("|cffaaaaaa by " .. Show(w.by) .. "|r") or "") .. (w.note and (" – " .. w.note) or "")
         if w.claimed then
-            local mine, byMe = ns.WantedMine(w), w.claimed.by == Me()
-            s = s .. "  |cff40ff40claimed by " .. (byMe and "you" or (w.claimed.by or "?")) .. "|r"
+            local mine, byMe = ns.WantedMine(w), ClaimedByMe(w)
+            s = s .. "  |cff40ff40claimed by " .. (byMe and "you" or Show(w.claimed.by)) .. "|r"
             if w.paid then s = s .. "  |cff40ff40· paid|r"
-            elseif mine then s = s .. "  |cffff8040· you owe " .. (rw or "?") .. " – pay at a mailbox|r"
-            elseif byMe then s = s .. "  |cffffd100· " .. (w.by or "?") .. " owes you " .. (rw or "?") .. "|r"
-            else s = s .. "  |cffaaaaaa· not paid yet|r" end
+            elseif mine and not byMe then s = s .. "  |cffff8040· you owe " .. (rw or "?") .. " – pay at a mailbox|r"
+            elseif byMe and not mine then s = s .. "  |cffffd100· " .. Show(w.by) .. " owes you " .. (rw or "?") .. "|r"
+            elseif not mine then s = s .. "  |cffaaaaaa· not paid yet|r" end
         end
         return s
     end
 
-    -- Bounty news: a card like the stealth one (and a chat line); the plain mid-screen warning if there's no card.
+    -- Bounty news: a card like the stealth one (and a chat line); at most one card every few seconds (the rest only
+    -- in chat), the plain mid-screen warning if there's no card.
     local function Card(kind, who, reward, from, msg, class)
+        local now = GetTime()
+        if now - (ns.lastBountyCard or -100) < 4 then Print("|cffffa000" .. msg .. "|r") return end
+        ns.lastBountyCard = now
         if ns.BountyCard and ns.BountyCard(kind, who, reward, from, class) then Print("|cffffa000" .. msg .. "|r")
         else Warn(msg) end
+    end
+
+    -- The lists follow at once, but at most once per 0.2 s however many messages come in.
+    local function Changed()
+        if ns.wantedRefresh then return end
+        ns.wantedRefresh = true
+        C_Timer.After(0.2, function()
+            ns.wantedRefresh = nil
+            if ns.RefreshUI then ns.RefreshUI() end
+            if ns.RefreshHistory then ns.RefreshHistory() end
+        end)
     end
 
     -- The whole story, for tooltips: posted (by, when, reward, note), claimed (who, when, where), paid.
@@ -2607,8 +2704,9 @@ end
     function ns.AddWantedLines(tip, w)
         if not (tip and w) then return end
         local rw = ns.WantedReward(w) or "?"
+        local mine, byMe = ns.WantedMine(w), ClaimedByMe(w)
         tip:AddLine(" ")
-        tip:AddDoubleLine("|cffffa000WANTED|r " .. rw, (w.by == Me() and "by you" or ("by " .. (w.by or "?"))) .. ", " .. Ago(w.t), 1, 1, 1, 0.7, 0.7, 0.7)
+        tip:AddDoubleLine("|cffffa000WANTED|r " .. rw, (mine and "by you" or ("by " .. Show(w.by))) .. ", " .. Ago(w.t), 1, 1, 1, 0.7, 0.7, 0.7)
         if not w.claimed then
             tip:AddLine(w.forever and "No end date – until it's claimed or taken down"
                 or ("Ends in " .. math.max(0, math.ceil(((w.t or time()) + OPEN_DAYS * 86400 - time()) / 86400)) .. " days if nobody claims it"), 0.6, 0.6, 0.6)
@@ -2616,109 +2714,159 @@ end
         if w.note then tip:AddLine("\"" .. w.note .. "\"", 1, 0.85, 0.5, true) end
         local c = w.claimed
         if c then
-            tip:AddDoubleLine("|cff40ff40Killed by " .. (c.by == Me() and "you" or (c.by or "?")) .. "|r", Ago(c.t), 1, 1, 1, 0.7, 0.7, 0.7)
+            tip:AddDoubleLine("|cff40ff40Killed by " .. (byMe and "you" or Show(c.by)) .. "|r", Ago(c.t), 1, 1, 1, 0.7, 0.7, 0.7)
             if c.zone then tip:AddLine("in " .. c.zone, 0.7, 0.7, 0.7) end
             if c.t then tip:AddLine(date("%d.%m %H:%M", c.t), 0.5, 0.5, 0.5) end
             if w.paid then tip:AddDoubleLine("|cff40ff40Paid|r", Ago(w.paid), 1, 1, 1, 0.7, 0.7, 0.7)
-            elseif ns.WantedMine(w) then tip:AddLine("You owe " .. rw .. " – a Pay button shows at the mailbox.", 1, 0.5, 0.25, true)
-            elseif c.by == Me() then tip:AddLine((w.by or "?") .. " owes you " .. rw .. ".", 1, 0.82, 0, true)
-            else tip:AddLine("Not paid yet.", 0.7, 0.7, 0.7) end
+            elseif mine and not byMe then tip:AddLine("You owe " .. rw .. " to " .. Show(c.full or c.by) .. " – a Pay button shows at the mailbox.", 1, 0.5, 0.25, true)
+            elseif byMe and not mine then tip:AddLine(Show(w.by) .. " owes you " .. rw .. ".", 1, 0.82, 0, true)
+            elseif not mine then tip:AddLine("Not paid yet.", 0.7, 0.7, 0.7) end
         end
     end
 
-    -- Sending: one message every 0.3 s (the game drops a burst), to the guild and to each online friend.
+    -- ---- sending: to the guild and to each online friend. The game lets a burst through and then about one a
+    -- second, so: 8 quickly, then one a second. A sync message that someone else already sent meanwhile is skipped.
     local queue, sender = {}, CreateFrame("Frame")
-    local wait = 0
+    local wait, burst = 0, 8
+    local recent = {}   -- key..t -> time it was last sent or heard (no echo storms when syncing)
     sender:Hide()
-    sender:SetScript("OnUpdate", ns.Timed(function(self, elapsed)
+    sender:SetScript("OnUpdate", function(self, elapsed)
         wait = wait - elapsed
         if wait > 0 then return end
         local m = table.remove(queue, 1)
-        if not m then self:Hide() return end
-        wait = 0.3
-        pcall(C_ChatInfo.SendAddonMessage, PREFIX, m[1], m[2], m[3])
-    end, "WANTED sending"))
-    local friends = {}   -- lower-case name -> true (online friends, rebuilt when sending)
+        if not m then self:Hide() burst = 8 return end
+        if m.rk and recent[m.rk] and recent[m.rk] > m.at then wait = 0 return end   -- someone else just sent it
+        if burst > 0 then burst, wait = burst - 1, 0.15 else wait = 1 end
+        local ok = pcall(C_ChatInfo.SendAddonMessage, PREFIX, m.msg, m.chan, m.to)
+        if not ok then Log("wanted", "send failed", m.chan) end
+    end)
+    local friends, friendList, friendsAt = {}, {}, -100   -- lower-case name -> true; online ones; when read
     local function Friends()
-        wipe(friends)
-        local list = {}
-        if not (C_FriendList and C_FriendList.GetNumFriends) then return list end
+        if GetTime() - friendsAt < 30 then return friendList end
+        friendsAt = GetTime()
+        wipe(friends); wipe(friendList)
+        if not (C_FriendList and C_FriendList.GetNumFriends) then return friendList end
         for i = 1, (Plain(C_FriendList.GetNumFriends()) or 0) do
             local ok, info = pcall(C_FriendList.GetFriendInfoByIndex, i)
             local name = ok and info and Plain(info.name)
             if type(name) == "string" and name ~= "" then
-                friends[name:lower()] = true
-                friends[(name:match("^[^%-]+") or name):lower()] = true
-                if Plain(info.connected) == true then list[#list + 1] = name end
+                friends[Norm(name)] = true
+                if Plain(info.connected) == true then friendList[#friendList + 1] = name end
             end
         end
-        return list
+        return friendList
     end
-    local function Send(...)
+    local function IsFriend(name)
+        Friends()
+        local n = Norm(name)
+        if not n then return false end
+        if friends[n] then return true end
+        -- the list (or the sender) without surnames: the first name counts, if only one friend has it and the list
+        -- doesn't know a different surname for him
+        local f, hits, surname = First(n), 0, false
+        for k in pairs(friends) do
+            if First(k) == f then hits = hits + 1; if k:find("-", 1, true) then surname = true end end
+        end
+        if surname and n:find("-", 1, true) then return false end
+        return hits == 1
+    end
+    local function Send(fields, rk)
         if not (C_ChatInfo and C_ChatInfo.SendAddonMessage) then return end
-        local msg = table.concat({ VER, ... }, SEP)
-        if #msg > 250 then msg = msg:sub(1, 250) end
-        if db.wantedGuild ~= false and Plain(IsInGuild and IsInGuild()) == true then queue[#queue + 1] = { msg, "GUILD" } end
+        local msg = table.concat(fields, SEP)
+        local now = time()
+        if db.wantedGuild ~= false and Plain(IsInGuild and IsInGuild()) == true then
+            queue[#queue + 1] = { msg = msg, chan = "GUILD", rk = rk, at = now }
+        end
         if db.wantedFriends ~= false then
-            for _, name in ipairs(Friends()) do queue[#queue + 1] = { msg, "WHISPER", name } end
+            for _, name in ipairs(Friends()) do queue[#queue + 1] = { msg = msg, chan = "WHISPER", to = name, rk = rk, at = now } end
         end
         sender:Show()
     end
-    local recent = {}   -- key..t -> time it was last sent or heard (no echo storms when syncing)
-    local function SendAdd(key, r)
+    -- One bounty, in the order the protocol has always had; the note is cut to keep it under the 255-byte limit.
+    local function SendAdd(key, r, fromSync)
         local w = r.wanted
-        recent[key .. (w.t or 0)] = time()
-        Send("A", key, r.name or key, r.class or "", (w.copper and tostring(w.copper)) or w.reward or "", w.note or "", w.by or "", w.t or 0,
-            w.claimed and w.claimed.by or "", w.claimed and w.claimed.t or 0, w.claimed and w.claimed.full or "", w.paid and 1 or 0,
-            w.claimed and w.claimed.zone or "", w.forever and 1 or 0)
+        local rk = key .. (w.t or 0)
+        if not fromSync then recent[rk] = time() end
+        local c = w.claimed
+        local f = { VER, "A", key, r.name or key, r.class or "", (w.copper and tostring(w.copper)) or w.reward or "", "",
+            w.by or MyFull(), w.t or 0, c and c.by or "", c and c.t or 0, c and c.full or "", w.paid and tostring(w.paid) or "0",
+            c and (Clean(c.zone, 40) or "") or "", w.forever and 1 or 0 }
+        local room = 250 - #table.concat(f, SEP)
+        local note = w.note or ""
+        if #note > room then note = room > 0 and (note:sub(1, room):gsub("[\192-\255][\128-\191]*$", "")) or "" end
+        f[7] = note
+        Send(f, fromSync and rk or nil)
+        if fromSync then recent[rk] = recent[rk] or 0 end
     end
+
+    local function ForeignCounts(poster)
+        local all, his = 0, 0
+        for _, r in pairs(db.enemies) do
+            local w = r.wanted
+            if w and not ns.WantedMine(w) then
+                all = all + 1
+                if poster and Same(w.by, poster) then his = his + 1 end
+            end
+        end
+        return all, his
+    end
+    local function Gone(key) db.wantedGone = type(db.wantedGone) == "table" and db.wantedGone or {}; return db.wantedGone, db.wantedGone[key] end
 
     -- reward: copper, or text like "50g 20s"; a bounty needs one. forever: no end date (stays until claimed or
     -- taken down).
     function ns.SetWanted(key, name, reward, note, forever)
         if not key then return false end
+        if not ValidKey(key) then
+            local why = "That isn't a player name WatchX can use."
+            Print(why .. " (" .. tostring(name or key) .. ")") return false, why
+        end
         local copper = type(reward) == "number" and math.floor(reward) or ns.ParseMoney(tostring(reward or ""))
         if not copper or copper <= 0 then
             Print("A bounty needs a reward: gold, silver or copper (e.g. |cffffd100/wx wanted Name: 50g ninja looter|r).")
-            return false
+            return false, "Put in a reward"
         end
+        copper = math.min(copper, 1e10)
         local old = db.enemies[key] and db.enemies[key].wanted
+        if old and old.claimed and not old.paid then
+            local why = "Claimed and not paid yet – settle that first."
+            Print("The bounty on " .. (db.enemies[key].name or key) .. ": " .. why) return false, why
+        end
         if old and not old.claimed and not ns.WantedMine(old) then
-            Print((old.by or "Someone") .. " already has a bounty on " .. (db.enemies[key].name or key) .. " – only they can change it.")
-            return false
+            local why = Show(old.by) .. " has a bounty on them – only they can change it."
+            Print(why) return false, why
         end
         local r = ns.EnemyRecord(key, name)
-        r.wanted = { copper = copper, note = Clean(note, MAX_NOTE), by = Me(), t = time(), forever = forever and true or nil }
+        r.wanted = { copper = copper, note = Clean(note, MAX_NOTE), by = MyFull(), t = time(), forever = forever and true or nil }
         r.wantedHide = nil
+        local gone = Gone(key)
+        gone[key] = nil
         SendAdd(key, r)
         Print("|cffffa000WANTED|r posted: " .. r.name .. " – " .. Money(copper)
             .. (r.wanted.note and (" (" .. r.wanted.note .. ")") or "") .. " |cffaaaaaa– sent to your guild and friends|r")
-        if ns.RefreshUI then ns.RefreshUI() end; if ns.RefreshHistory then ns.RefreshHistory() end
+        Changed()
         return true
     end
 
-    ns.MyName = Me
-
-    -- Is this bounty yours? Only the one who put it up can change it or take it down.
-    function ns.WantedMine(w) return w and (w.by == nil or w.by == Me()) end
-
-    -- Your own bounty: taken down for everyone. Someone else's can't be (it goes when it's claimed or old).
+    -- Your own bounty: taken down for everyone (and it won't come back from someone who was offline then).
+    -- Someone else's can't be (it goes when it's claimed and paid, or old).
     function ns.RemoveWanted(key)
         local r = key and db.enemies[key]
         if not (r and r.wanted) then return end
         local w = r.wanted
         if not ns.WantedMine(w) then
-            Print("Only " .. (w.by or "the one who put it up") .. " can take this bounty down.")
+            Print("Only " .. Show(w.by) .. " can take this bounty down.")
             return false
         end
-        Send("D", key, w.by or Me(), w.t or 0)
+        Send({ VER, "D", key, w.by or MyFull(), time() })
+        local gone = Gone(key)
+        gone[key] = { t = w.t or time(), mine = true, at = time() }
         r.wanted = nil
         -- only here for the bounty (never seen, nothing else on it): gone from History too
-        if not (r.kos or r.avoid or r.note or (r.seen or 0) > 0 or (r.kills or 0) > 0 or (r.deaths or 0) > 0) and not r.wantedHide then
+        if not (r.kos or r.avoid or r.note or (r.seen or 0) > 0 or (r.kills or 0) > 0 or (r.deaths or 0) > 0) then
             db.enemies[key] = nil
         end
         Print("Bounty taken down: " .. (r.name or key))
-        if ns.RefreshUI then ns.RefreshUI() end; if ns.RefreshHistory then ns.RefreshHistory() end
+        Changed()
     end
 
     -- A kill by you or your group (ns.OnPlayerKill): the bounty is yours.
@@ -2730,12 +2878,13 @@ end
         local sub = Plain(GetSubZoneText and GetSubZoneText())
         zone = type(zone) == "string" and zone ~= "" and zone or nil
         if zone and type(sub) == "string" and sub ~= "" and sub ~= zone then zone = sub .. ", " .. zone end
-        w.claimed = { by = Me(), full = MyFull(), t = time(), zone = zone }
-        Send("C", key, w.claimed.by, w.claimed.t, w.t or 0, w.claimed.full, zone or "")
-        Card("bountyKill", r.name or key, ns.WantedReward(w), (w.by and w.by ~= Me()) and ("from " .. w.by) or "yours",
+        w.claimed = { by = MyFull(), full = MyFull(), t = time(), zone = Clean(zone, 40) }
+        Send({ VER, "C", key, w.claimed.by, w.claimed.t, w.t or 0, w.claimed.full, w.claimed.zone or "" })
+        local mine = ns.WantedMine(w)
+        Card("bountyKill", r.name or key, ns.WantedReward(w), mine and "yours" or ("from " .. Show(w.by)),
             "Bounty claimed: " .. (r.name or key) .. (zone and (" in " .. zone) or "") .. (ns.WantedReward(w) and (" – " .. ns.WantedReward(w)) or "")
-            .. ((w.by and w.by ~= Me()) and (" from " .. w.by .. " (they pay by mail)") or ""), r.class)
-        if ns.RefreshHistory then ns.RefreshHistory() end
+            .. (mine and "" or (" from " .. Show(w.by) .. " (they pay by mail)")), r.class)
+        Changed()
     end
 
     -- Paid (by mail, or "Mark paid" after a trade): only the one who put it up.
@@ -2744,9 +2893,9 @@ end
         local w = r and r.wanted
         if not (w and w.claimed and not w.paid and ns.WantedMine(w)) then return false end
         w.paid = time()
-        Send("P", key, w.by or Me(), w.t or 0)
-        Print("|cff40ff40Bounty paid|r: " .. (w.claimed.by or "?") .. " got " .. (ns.WantedReward(w) or "it") .. " for " .. (r.name or key) .. ".")
-        if ns.RefreshUI then ns.RefreshUI() end; if ns.RefreshHistory then ns.RefreshHistory() end
+        Send({ VER, "P", key, w.by or MyFull(), w.t or 0 })
+        Print("|cff40ff40Bounty paid|r: " .. Show(w.claimed.full or w.claimed.by) .. " got " .. (ns.WantedReward(w) or "it") .. " for " .. (r.name or key) .. ".")
+        Changed()
         return true
     end
     -- The bounties others owe you (you claimed them, not paid yet): { key, r, w }.
@@ -2754,115 +2903,174 @@ end
         local out = {}
         for key, r in pairs(db and db.enemies or {}) do
             local w = r.wanted
-            if w and w.claimed and not w.paid and w.claimed.by == Me() and not ns.WantedMine(w) then out[#out + 1] = { key = key, r = r, w = w } end
+            if w and w.claimed and not w.paid and ClaimedByMe(w) and not ns.WantedMine(w) then out[#out + 1] = { key = key, r = r, w = w } end
         end
         return out
     end
-    -- The claimed bounties you still owe: { key, r, w }.
+    -- The claimed bounties you still owe: { key, r, w } (your own kill on your own bounty owes nothing).
     function ns.OwedBounties()
         local out = {}
         for key, r in pairs(db and db.enemies or {}) do
             local w = r.wanted
-            if w and w.claimed and not w.paid and ns.WantedMine(w) and w.claimed.by ~= Me() then out[#out + 1] = { key = key, r = r, w = w } end
+            if w and w.claimed and not w.paid and ns.WantedMine(w) and not ClaimedByMe(w) then out[#out + 1] = { key = key, r = r, w = w } end
         end
         table.sort(out, function(a, b) return (a.w.claimed.t or 0) < (b.w.claimed.t or 0) end)
         return out
     end
 
+    -- ---- receiving. Every message is from another player and is checked as such: names, numbers, sizes; who may
+    -- do what (only the poster takes a bounty down or marks it paid; a claim is always the sender's own); a bounty
+    -- passed on by someone else can be learned, never change one you have; never one "by you" from anyone else.
     local function Apply(op, f, from)
         local key = f[1]
-        if type(key) ~= "string" or key == "" or #key > 60 then return end
-        local tt = tonumber
+        if not ValidKey(key) then return end
+        local now = time()
         if op == "A" then
-            local t = tt(f[7]) or 0
+            local t = Int(f[7], 1, now + 300)
             local forever = f[13] == "1"
-            if t <= 0 or (not forever and time() - t > OPEN_DAYS * 86400) then return end
+            if not t or (not forever and now - t > OPEN_DAYS * 86400) then return end
+            local _, gone = Gone(key)
+            if gone and (gone.t or 0) >= t then return end              -- taken down (or ran out): stays down
+            local by = Clean(f[6], 60) or from
+            if IsMe(by) then return end                                 -- yours only come from you
             local r = db.enemies[key]
-            if r and ((r.wanted and (r.wanted.t or 0) >= t) or (r.wantedHide and r.wantedHide >= t)) then
-                -- known; a claim or a payment we missed still counts
-                if r.wanted and (r.wanted.t or 0) == t then
-                    if not r.wanted.claimed and f[8] and f[8] ~= "" then
-                        r.wanted.claimed = { by = Clean(f[8], 40), t = tt(f[9]) or t, full = Clean(f[10], 60), zone = Clean(f[12], 60) }
+            local w = r and r.wanted
+            recent[key .. t] = now
+            if w then
+                if (w.t or 0) > t then return end                       -- we know a newer one
+                if (w.t or 0) == t then
+                    -- the same bounty: a claim or payment we missed (never on yours, never a claim in your name)
+                    if not ns.WantedMine(w) then
+                        local cby = Clean(f[8], 60)
+                        if not w.claimed and cby and not IsMe(cby) then
+                            w.claimed = { by = cby, t = Int(f[9], 1, now + 300) or t, full = Clean(f[10], 60) or cby, zone = Clean(f[12], 40) }
+                            Changed()
+                        end
+                        local pt = f[11] ~= "0" and f[11] ~= "" and (Int(f[11], 1, now + 300) or (f[11] == "1" and now)) or nil
+                        if w.claimed and not w.paid and pt and not ClaimedByMe(w) then w.paid = pt; Changed() end
                     end
-                    if r.wanted.claimed and not r.wanted.paid and f[11] == "1" then r.wanted.paid = time() end
+                    return
                 end
-                recent[key .. t] = time()
-                return
+                -- a newer one: only from the same poster, and never over a claim that isn't paid
+                if not Same(by, w.by) or (w.claimed and not w.paid) then return end
+            else
+                local all, his = ForeignCounts(by)
+                if all >= FOREIGN_MAX or his >= PER_POSTER_MAX then return end
             end
-            r = ns.EnemyRecord(key, Clean(f[2], 60))
-            if (not r.class) and f[3] ~= "" then r.class = Clean(f[3], 20) end
-            local cp = (f[4] or ""):match("^%d+$") and tonumber(f[4]) or nil
+            if not r then
+                local nm = Clean(f[2], 40)
+                if not (nm and nm:find("^[%a\128-\255]+ ?[%a\128-\255]*$")) then nm = nil end
+                r = ns.EnemyRecord(key, nm)                              -- named once, never renamed from outside
+            end
+            if not r.class then
+                local cl = Clean(f[3], 12)
+                if cl and cl:find("^%u+$") then r.class = cl end
+            end
+            local cp = Int(f[4], 1, 1e10)
             r.wanted = { copper = cp, reward = (not cp) and Clean(f[4], MAX_REWARD) or nil, note = Clean(f[5], MAX_NOTE),
-                by = Clean(f[6], 40) or from, t = t, forever = forever or nil }
-            if f[8] and f[8] ~= "" then r.wanted.claimed = { by = Clean(f[8], 40), t = tt(f[9]) or t, full = Clean(f[10], 60), zone = Clean(f[12], 60) } end
-            if r.wanted.claimed and f[11] == "1" then r.wanted.paid = time() end
-            recent[key .. t] = time()
-            if time() - t < 600 and not r.wanted.claimed then
-                Card("bountyNew", r.name or key, ns.WantedReward(r.wanted), "from " .. (r.wanted.by or "?"),
-                    "WANTED from " .. (r.wanted.by or "?") .. ": " .. (r.name or key)
+                by = by, t = t, forever = forever or nil }
+            local cby = Clean(f[8], 60)
+            if cby and not IsMe(cby) then
+                r.wanted.claimed = { by = cby, t = Int(f[9], 1, now + 300) or t, full = Clean(f[10], 60) or cby, zone = Clean(f[12], 40) }
+                local pt = f[11] ~= "0" and f[11] ~= "" and (Int(f[11], 1, now + 300) or (f[11] == "1" and now)) or nil
+                if pt then r.wanted.paid = pt end
+            end
+            if now - t < 600 and not r.wanted.claimed then
+                Card("bountyNew", r.name or key, ns.WantedReward(r.wanted), "from " .. Show(by),
+                    "WANTED from " .. Show(by) .. ": " .. (r.name or key)
                     .. (ns.WantedReward(r.wanted) and (" – " .. ns.WantedReward(r.wanted)) or "") .. (r.wanted.note and (" (" .. r.wanted.note .. ")") or ""), r.class)
             end
+            Changed()
         elseif op == "D" then
             local r = db.enemies[key]
-            if r and r.wanted and r.wanted.by == Clean(f[2], 40) and (tt(f[3]) or 0) >= (r.wanted.t or 0) then
+            local w = r and r.wanted
+            local t = Int(f[3], 1, now + 300)
+            if w and t and t >= (w.t or 0) and Same(from, w.by) then     -- only the poster takes it down
+                local gone = Gone(key)
+                gone[key] = { t = w.t or t, at = now }
                 r.wanted = nil
+                Changed()
             end
         elseif op == "C" then
             local r = db.enemies[key]
             local w = r and r.wanted
-            if w and not w.claimed and (tt(f[4]) or 0) == (w.t or 0) then
-                w.claimed = { by = Clean(f[2], 40) or from, t = tt(f[3]) or time(), full = Clean(f[5], 60), zone = Clean(f[6], 60) }
-                local where = w.claimed.zone and (" in " .. w.claimed.zone) or ""
-                if ns.WantedMine(w) then
-                    Card("bountyOwe", r.name or key, ns.WantedReward(w), "to " .. w.claimed.by,
-                        w.claimed.by .. " killed " .. (r.name or key) .. where .. " and claimed your bounty – you owe "
-                        .. (ns.WantedReward(w) or "the reward") .. ". Pay it at a mailbox.", r.class)
-                else
-                    Card("bountyKill", r.name or key, ns.WantedReward(w), "by " .. w.claimed.by,
-                        "Bounty claimed: " .. (r.name or key) .. " by " .. w.claimed.by .. where
-                        .. (ns.WantedReward(w) and (" – " .. ns.WantedReward(w)) or "") .. (w.by and (", from " .. w.by) or ""), r.class)
-                end
+            if not w or w.paid or Int(f[4], 0, now + 300) ~= (w.t or 0) or IsMe(from) then return end
+            local ct = Int(f[3], 1, now + 300) or now
+            -- two in a group both claim: the earliest kill wins (then the name), the same on every client
+            if w.claimed and ((w.claimed.t or 0) < ct or ((w.claimed.t or 0) == ct and Norm(w.claimed.full or w.claimed.by) <= Norm(from))) then return end
+            w.claimed = { by = from, full = from, t = ct, zone = Clean(f[6], 40) }   -- the claimer is the sender, always
+            local where = w.claimed.zone and (" in " .. w.claimed.zone) or ""
+            if ns.WantedMine(w) then
+                Card("bountyOwe", r.name or key, ns.WantedReward(w), "to " .. Show(from),
+                    Show(from) .. " killed " .. (r.name or key) .. where .. " and claimed your bounty – you owe "
+                    .. (ns.WantedReward(w) or "the reward") .. ". Pay it at a mailbox.", r.class)
+            else
+                Card("bountyKill", r.name or key, ns.WantedReward(w), "by " .. Show(from),
+                    "Bounty claimed: " .. (r.name or key) .. " by " .. Show(from) .. where
+                    .. (ns.WantedReward(w) and (" – " .. ns.WantedReward(w)) or "") .. (w.by and (", from " .. Show(w.by)) or ""), r.class)
             end
+            Changed()
         elseif op == "P" then
             local r = db.enemies[key]
             local w = r and r.wanted
-            if w and w.claimed and not w.paid and w.by == Clean(f[2], 40) and (tt(f[3]) or 0) == (w.t or 0) then
-                w.paid = time()
-                if w.claimed.by == Me() then
-                    Card("bountyPaid", r.name or key, ns.WantedReward(w), "from " .. (w.by or "?"),
-                        (w.by or "?") .. " paid you " .. (ns.WantedReward(w) or "the bounty") .. " for " .. (r.name or key) .. " – check your mail.", r.class)
+            if w and w.claimed and not w.paid and Same(from, w.by) and Int(f[3], 0, now + 300) == (w.t or 0) then
+                w.paid = now
+                if ClaimedByMe(w) then
+                    Card("bountyPaid", r.name or key, ns.WantedReward(w), "from " .. Show(w.by),
+                        Show(w.by) .. " paid you " .. (ns.WantedReward(w) or "the bounty") .. " for " .. (r.name or key) .. " – check your mail.", r.class)
                 end
+                Changed()
             end
         end
-        if ns.RefreshUI then ns.RefreshUI() end; if ns.RefreshHistory then ns.RefreshHistory() end
     end
 
-    -- Someone logged in: everyone sends what they know, a few seconds apart, skipping what was just sent.
-    local replyAt
+    -- Someone logged in: everyone sends what they know, a few seconds apart, skipping what was just sent (also
+    -- what someone else sends while ours waits). Your own take-downs go along, so they stay down everywhere.
+    local replyAt, lastReply
     local function Reply()
         replyAt = nil
+        if lastReply and time() - lastReply < 60 then return end
+        lastReply = time()
         local now = time()
         for key, r in pairs(db.enemies) do
             local w = r.wanted
-            if w and w.t and not (recent[key .. w.t] and now - recent[key .. w.t] < 60) then SendAdd(key, r) end
+            if w and w.t and not (recent[key .. w.t] and now - recent[key .. w.t] < 60) then SendAdd(key, r, true) end
+        end
+        for key, g in pairs(type(db.wantedGone) == "table" and db.wantedGone or {}) do
+            if g.mine and now - (g.at or 0) < GONE_DAYS * 86400 then Send({ VER, "D", key, MyFull(), now }) end
         end
     end
 
+    -- Per sender at most 40 messages a minute (a flood is dropped, not shown).
+    local buckets = {}
+    local function Allowed(from)
+        local now, b = GetTime(), buckets[from]
+        if not b or now - b.start > 60 then b = { start = now, n = 0 }; buckets[from] = b end
+        b.n = b.n + 1
+        return b.n <= 40
+    end
+
     local function OnMessage(prefix, text, channel, from)
-        if Plain(prefix) ~= PREFIX or not On() then return end
+        if not On() then return end
         text, channel, from = Plain(text), Plain(channel), Plain(from)
-        if type(text) ~= "string" or type(from) ~= "string" then return end
-        local short = from:match("^[^%-]+") or from
-        if short == Me() then return end
-        if channel == "WHISPER" then   -- only from your friends
-            if not next(friends) then Friends() end
-            if not (friends[from:lower()] or friends[short:lower()]) then return end
-        elseif channel ~= "GUILD" then
-            return
-        end
+        if type(text) ~= "string" or type(from) ~= "string" or #text > 255 or #from > 60 then return end
         local f = {}
         for part in (text .. SEP):gmatch("(.-)" .. SEP) do f[#f + 1] = part end
         if f[1] ~= VER then return end
+        -- your own message back from the guild channel: it tells how the others see your name
+        if f[2] == "H" and f[3] and f[3] == ns.helloNonce then
+            if Same(from, Me()) then ns.myFull = from end
+            return
+        end
+        if IsMe(from) then return end
+        if channel == "WHISPER" then   -- only from your friends
+            if db.wantedFriends == false or not IsFriend(from) then return end
+        elseif channel == "GUILD" then
+            if db.wantedGuild == false then return end
+        else
+            return
+        end
+        if not Allowed(from) then return end
         local op = table.remove(f, 1) and table.remove(f, 1)
         if op == "H" then
             if not replyAt then
@@ -2870,79 +3078,89 @@ end
                 C_Timer.After(2 + math.random() * 4, function() ns.Safe("wanted", Reply) end)
             end
         else
-            Apply(op, f, short)
+            Apply(op, f, from)
         end
     end
 
-    -- Old ones go: open bounties after two weeks, paid ones after three days, claimed-not-paid after two weeks.
+    -- Old ones go: open bounties after two weeks, paid ones after three days, claimed-not-paid after two weeks; and
+    -- they don't come back from someone who still has them. Old take-down notes go after a while too.
     local function Expire()
         local now = time()
-        for _, r in pairs(db.enemies) do
+        local gone = Gone("")
+        for key, r in pairs(db.enemies) do
             local w = r.wanted
             if w and ((w.paid and now - w.paid > CLAIMED_DAYS * 86400)
                     or (w.claimed and not w.paid and now - (w.claimed.t or 0) > OPEN_DAYS * 86400)
                     or (not w.claimed and not w.forever and now - (w.t or 0) > OPEN_DAYS * 86400)) then
+                gone[key] = { t = w.t or now, at = now, mine = ns.WantedMine(w) or nil }
                 r.wanted = nil
             end
         end
+        for key, g in pairs(gone) do
+            if type(g) ~= "table" or now - (g.at or 0) > GONE_DAYS * 86400 then gone[key] = nil end
+        end
+        for k, at in pairs(recent) do if now - at > 3600 then recent[k] = nil end end
     end
 
-    -- Paying by mail: at a mailbox a "Pay bounty" button under the mail window; it fills in the claimer, a subject
-    -- and the gold on the Send Mail tab, you press Send yourself. The mail that goes out with that subject and at
-    -- least that gold marks it paid. Nothing of Blizzard's is called or changed but the boxes' text.
-    local payBtn, pending, sentFor
-    local function Subject(key) return "Bounty: " .. ((db.enemies[key] and db.enemies[key].name) or key) end
-    local function Fill()
-        local o = pending and db.enemies[pending] and db.enemies[pending].wanted
-        if not (o and SendMailFrame and SendMailFrame:IsShown()) then return end
-        if SendMailNameEditBox then SendMailNameEditBox:SetText(o.claimed.full or o.claimed.by or "") end
-        if SendMailSubjectEditBox then SendMailSubjectEditBox:SetText(Subject(pending)) end
-        if SendMailRadioButton_OnClick then pcall(SendMailRadioButton_OnClick, 1) end   -- send money, not COD
-        if SendMailMoney and MoneyInputFrame_SetCopper then pcall(MoneyInputFrame_SetCopper, SendMailMoney, o.copper or 0) end
-    end
+    -- ---- paying by mail: at a mailbox a "Pay bounty" button under the mail window. A click asks once (who, how
+    -- much), then WatchX sends the mail itself through the game's mail functions – nothing of Blizzard's mail window
+    -- is touched. The mail that goes out marks it paid.
+    local payBtn, pending
+    local function Subject(key) return "Bounty: " .. (Clean((db.enemies[key] and db.enemies[key].name) or key, 40) or key) end
     local function UpdatePayButton()
         if not (MailFrame and MailFrame:IsShown()) then if payBtn then payBtn:Hide() end return end
         local owed = ns.OwedBounties()
         if #owed == 0 or not On() then if payBtn then payBtn:Hide() end return end
         if not payBtn then
             payBtn = CreateFrame("Button", "WatchXPayBounty", MailFrame, "UIPanelButtonTemplate")
-            payBtn:SetSize(300, 24)
+            payBtn:SetSize(320, 24)
             payBtn:SetPoint("TOP", MailFrame, "BOTTOM", 0, -4)
-            payBtn:SetScript("OnClick", function(self)
-                pending = self.key
-                if SendMailFrame and SendMailFrame:IsShown() then Fill()
-                else Print("Open the |cffffd100Send Mail|r tab – WatchX fills in the bounty, then press Send.") end
-            end)
-            if SendMailFrame and SendMailFrame.HookScript then SendMailFrame:HookScript("OnShow", function() ns.Safe("wanted", Fill) end) end
+            payBtn:SetScript("OnClick", function(self) ns.Safe("wanted", function()
+                local r = self.key and db.enemies[self.key]
+                local w = r and r.wanted
+                if not (w and w.claimed and not w.paid and ns.WantedMine(w)) then UpdatePayButton() return end
+                local to = w.claimed.full or w.claimed.by
+                StaticPopupDialogs["WATCHX_PAYBOUNTY"] = StaticPopupDialogs["WATCHX_PAYBOUNTY"] or {
+                    button1 = ACCEPT or "Send", button2 = CANCEL or "Cancel",
+                    timeout = 0, whileDead = true, hideOnEscape = true,
+                }
+                local d = StaticPopupDialogs["WATCHX_PAYBOUNTY"]
+                d.text = "Send %s by mail to |cffffd100" .. Show(to) .. "|r for the bounty on " .. (r.name or self.key) .. "?"
+                d.OnAccept = function() ns.Safe("wanted", function()
+                    if not (SetSendMailMoney and SendMail) then Print("Mail can't be sent from here.") return end
+                    local money = math.floor(w.copper or 0)
+                    if GetMoney and money > (tonumber(Plain(GetMoney())) or 0) then Print("You don't have " .. Money(money) .. ".") return end
+                    if not SetSendMailMoney(money) then Print("The game didn't take the money for the mail.") return end
+                    pending = self.key
+                    SendMail(to, Subject(self.key), "WatchX bounty on " .. (r.name or self.key) .. ".")
+                end) end
+                StaticPopup_Show("WATCHX_PAYBOUNTY", Money(w.copper or 0))
+            end) end)
         end
         local o = owed[1]
         payBtn.key = o.key
-        payBtn:SetText("Pay bounty: " .. (o.w.claimed.by or "?") .. " – " .. (ns.WantedReward(o.w) or "?")
+        payBtn:SetText("Pay bounty: " .. Show(o.w.claimed.full or o.w.claimed.by) .. " – " .. (ns.WantedReward(o.w) or "?")
             .. (#owed > 1 and ("  (+" .. (#owed - 1) .. ")") or ""))
         payBtn:Show()
-    end
-    if hooksecurefunc and SendMail then
-        hooksecurefunc("SendMail", function(_, subject)
-            sentFor = nil
-            local o = pending and db and db.enemies[pending] and db.enemies[pending].wanted
-            local money = GetSendMailMoney and tonumber(Plain(GetSendMailMoney())) or 0
-            if o and Plain(subject) == Subject(pending) and money >= (o.copper or 0) then sentFor = pending end
-        end)
     end
 
     local ev = CreateFrame("Frame")
     ev:RegisterEvent("PLAYER_LOGIN")
     ev:RegisterEvent("CHAT_MSG_ADDON")
     ev:RegisterEvent("FRIENDLIST_UPDATE")
-    for _, e in ipairs({ "MAIL_SHOW", "MAIL_CLOSED", "MAIL_SEND_SUCCESS" }) do pcall(ev.RegisterEvent, ev, e) end
+    for _, e in ipairs({ "MAIL_SHOW", "MAIL_CLOSED", "MAIL_SEND_SUCCESS", "MAIL_FAILED" }) do pcall(ev.RegisterEvent, ev, e) end
     ev:SetScript("OnEvent", function(_, event, ...)
-        if event == "PLAYER_LOGIN" then
+        if event == "CHAT_MSG_ADDON" then
+            if Plain((...)) ~= PREFIX or not db then return end   -- every addon's messages come here: ours only
+            ns.Safe("wanted", OnMessage, ...)
+        elseif event == "PLAYER_LOGIN" then
             if C_ChatInfo and C_ChatInfo.RegisterAddonMessagePrefix then pcall(C_ChatInfo.RegisterAddonMessagePrefix, PREFIX) end
             C_Timer.After(12, function() ns.Safe("wanted", function()
                 if not db then return end
                 Expire()
                 if On() then
-                    Send("H")
+                    ns.helloNonce = tostring(math.random(100000, 999999))
+                    Send({ VER, "H", ns.helloNonce })
                     local owed = ns.OwedBounties()
                     if #owed > 0 then
                         Print("|cffff8040You owe " .. #owed .. (#owed == 1 and " bounty" or " bounties") .. "|r – a Pay button shows at the mailbox.")
@@ -2950,22 +3168,22 @@ end
                     local due = ns.OwedToMe()
                     if #due > 0 then
                         local names = {}
-                        for i = 1, math.min(3, #due) do names[i] = (due[i].w.by or "?") .. " " .. (ns.WantedReward(due[i].w) or "") end
+                        for i = 1, math.min(3, #due) do names[i] = Show(due[i].w.by) .. " " .. (ns.WantedReward(due[i].w) or "") end
                         Print("|cffffd100Owed to you:|r " .. table.concat(names, ", ") .. (#due > 3 and (" and " .. (#due - 3) .. " more") or "")
                             .. " |cffaaaaaa(History > Wanted)|r")
                     end
                 end
             end) end)
         elseif event == "FRIENDLIST_UPDATE" then
-            wipe(friends)
+            friendsAt = -100
         elseif event == "MAIL_SHOW" or event == "MAIL_CLOSED" then
             if event == "MAIL_CLOSED" then pending = nil end
             ns.Safe("wanted", UpdatePayButton)
         elseif event == "MAIL_SEND_SUCCESS" then
-            if sentFor then ns.MarkPaid(sentFor); sentFor, pending = nil, nil end
+            if pending then ns.MarkPaid(pending); pending = nil end
             ns.Safe("wanted", UpdatePayButton)
-        elseif db then
-            ns.Safe("wanted", OnMessage, ...)
+        elseif event == "MAIL_FAILED" then
+            if pending then Print("|cffff6060The bounty mail wasn't sent.|r"); pending = nil end
         end
     end)
 end)()
@@ -3009,7 +3227,7 @@ local function CheckFriendlyPlayer(unit, name, source)
     if Plain(UnitInParty(unit)) == true or Plain(UnitInRaid(unit)) then return end
     if (IsInInstance and IsInInstance()) or (IsResting and IsResting()) then return end
     local now = time()
-    ns.lastFriend = { name = name, at = now }
+    if ns.lastFriend then ns.lastFriend.name, ns.lastFriend.at = name, now else ns.lastFriend = { name = name, at = now } end
     if friendSeen[name] and now - friendSeen[name] < ENEMY_COOLDOWN then return end
     friendSeen[name] = now
     local info = PlayerInfo(unit)
@@ -3118,7 +3336,7 @@ end
 -- countdown). WatchX counts from the AFK flag and warns 5 minutes before; the real time is learned
 -- from the countdown. The logout itself can't be sent from the game (it has stopped by then): the
 -- bridge sees the settings file being written at the logout and reads exitWhy.
-local afkSince, afkWarned, campingAfk, exitReason
+local afkSince, afkWarned, campingAfk, exitReason, afkEndedAt = nil, nil, nil, nil, 0
 
 local function CheckAfk()
     local afk = UnitIsAFK and Plain(UnitIsAFK("player")) == true
@@ -3149,7 +3367,8 @@ end
 
 local function OnCamping()
     CheckAfk()
-    if not afkSince then return end   -- you logged out yourself
+    -- you pressed Logout/Quit yourself (the hook below has set exitReason by now), or weren't AFK: not the AFK kick
+    if exitReason or not afkSince then return end
     campingAfk = true
     local min = math.floor((time() - afkSince + 20) / 60 + 0.5)
     if min >= 6 and min <= 90 and min ~= db.afkLogoutMin then
@@ -3276,7 +3495,7 @@ end
 -- the game sees no mouse, so that still counts as away.
 -- (Without the combat log the attacker is found through nameplates: whoever has you targeted.)
 local IDLE_FOR = 20          -- seconds without moving, casting, targeting or moving the mouse
-local lastActive, lastAttack, afkEndedAt = time(), 0, 0   -- a fresh login counts as active
+local lastActive, lastAttack = time(), 0   -- a fresh login counts as active
 
 function ns.MarkActive() lastActive = time() end
 
@@ -3352,14 +3571,21 @@ local TickJobs = {
     ns.Timed(function() Refresh() end, "tick: refresh"),
 }
 TickJobs.at = 0   -- which one runs next (in the table: the main chunk is at the 200-locals limit)
-ticker:SetScript("OnUpdate", function(_, dt)
+function TickJobs.Run()   -- (on the table: no new top-level local)
     if not db then return end
-    elapsed = elapsed + dt
-    if elapsed < 0.25 then return end
-    elapsed = 0
     TickJobs.at = TickJobs.at % #TickJobs + 1
     TickJobs[TickJobs.at]()
-end)
+end
+if C_Timer and C_Timer.NewTicker then
+    C_Timer.NewTicker(0.25, TickJobs.Run)   -- the game's own timer: no Lua at all on the frames in between
+else
+    ticker:SetScript("OnUpdate", function(_, dt)
+        elapsed = elapsed + dt
+        if elapsed < 0.25 then return end
+        elapsed = 0
+        TickJobs.Run()
+    end)
+end
 
 -- ---------------------------------------------------------------- events
 
@@ -3368,7 +3594,7 @@ for _, e in ipairs({
     "PLAYER_LOGIN", "PLAYER_ENTERING_WORLD", "ADDON_ACTION_FORBIDDEN", "ADDON_ACTION_BLOCKED",
     "NAME_PLATE_UNIT_ADDED", "UPDATE_MOUSEOVER_UNIT", "PLAYER_TARGET_CHANGED", "LOOT_OPENED",
     "UNIT_DIED", "PARTY_KILL", "CHAT_MSG_COMBAT_HOSTILE_DEATH", "CHAT_MSG_SYSTEM",
-    "PLAYER_FLAGS_CHANGED", "PLAYER_CAMPING", "PLAYER_LOGOUT",
+    "PLAYER_FLAGS_CHANGED", "PLAYER_CAMPING", "LOGOUT_CANCEL", "PLAYER_LOGOUT",
     "PLAYER_REGEN_DISABLED", "PLAYER_STARTED_MOVING", "UNIT_SPELLCAST_SENT", "PLAYER_ENTER_COMBAT",
     "NAME_PLATE_UNIT_REMOVED", "UNIT_SPELLCAST_SUCCEEDED", "PLAYER_DEAD", "INSPECT_READY",
 }) do
@@ -3415,6 +3641,13 @@ local function OnEvent(_, event, arg1, arg2, ...)
         end
         ns.db = db
         db.exitAt, db.exitWhy = nil, nil
+        if db.instantOK == false then db.instantOK = nil end   -- each session tries the instant way again
+        do   -- the player history kept to its size now, not in the middle of a busy nameplate moment
+            local n = 0
+            for _ in pairs(db.enemies or {}) do n = n + 1 end
+            ns.enemyCount = n
+            if n > ENEMY_MAX then ns.PruneEnemies() end
+        end
         ns.InitProfiles()
         ns.MigrateAvoid()
         for _, r in pairs(db.enemies) do r.healer = nil end   -- 2.3.0 guessed healers from heals; only proof now
@@ -3485,7 +3718,9 @@ local function OnEvent(_, event, arg1, arg2, ...)
     elseif event == "PLAYER_FLAGS_CHANGED" then
         CheckAfk()
     elseif event == "PLAYER_CAMPING" then
-        OnCamping()
+        C_Timer.After(0, function() ns.Safe("afk", OnCamping) end)   -- a frame later: the Logout hook has run
+    elseif event == "LOGOUT_CANCEL" then
+        exitReason, campingAfk = nil, nil   -- you moved: a later kick or disconnect must still be told
     elseif event == "SCREENSHOT_SUCCEEDED" or event == "SCREENSHOT_FAILED" then
         ns.OnScreenshot(event == "SCREENSHOT_SUCCEEDED")
     elseif event == "PLAYER_LOGOUT" then
@@ -3495,7 +3730,7 @@ local function OnEvent(_, event, arg1, arg2, ...)
         db.exitWhy = exitReason or (campingAfk and "afk") or "disconnect"
     end
 end
-ev:SetScript("OnEvent", function(...) ns.Safe("event", OnEvent, ...) end)
+ev:SetScript("OnEvent", function(self, event, ...) ns.Safe(event, OnEvent, self, event, ...) end)   -- timed per event
 
 -- ---------------------------------------------------------------- slash
 
@@ -3698,7 +3933,8 @@ local function OnSlash(input)
                 .. "  ·  /wx method auto|whisper|realm|dnd|reset")
         end
     elseif cmd == "reset" then
-        ns.ResetData()
+        if rest == "confirm" then ns.ResetData()
+        else Print("This forgets every respawn time WatchX has learned. Type |cffffd100/wx reset confirm|r to do it.") end
     elseif cmd == "log" then
         local lines = (rest == "previous" and db.previousLog) or db.log or {}
         Print((rest == "previous" and "Previous" or "This") .. " session's log (" .. #lines .. " lines):")
