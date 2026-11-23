@@ -1705,6 +1705,16 @@ local function Warn(msg)
     if PlaySound and SOUNDKIT then pcall(PlaySound, SOUNDKIT.RAID_WARNING, "Master") end
 end
 
+-- Good news (a buff is done): green mid-screen, a softer sound. (On ns: the main chunk is at the locals limit.)
+function ns.Done(msg)
+    Print("|cff40ff40" .. msg .. "|r")
+    if RaidNotice_AddMessage and RaidWarningFrame then
+        pcall(RaidNotice_AddMessage, RaidWarningFrame, msg, { r = 0.25, g = 1, b = 0.35 })
+    end
+    local snd = SOUNDKIT and (SOUNDKIT.IG_QUEST_LIST_COMPLETE or SOUNDKIT.RAID_WARNING)
+    if PlaySound and snd then pcall(PlaySound, snd, "Master") end
+end
+
 -- In a city or an inn (resting) the XP and buff warnings keep quiet: they're for when you're out playing.
 function ns.QuietHere()
     return db and db.warnInCity ~= true and IsResting and Plain(IsResting()) == true
@@ -1716,6 +1726,18 @@ local function CheckBoosts(now)
     if not was or db.levelWarn == false then return end
     if Plain(UnitIsDeadOrGhost("player")) == true then return end
     local function gone(k) return was[k] and not now[k] end
+    -- done: you can stop eating / get up / the tent has worked (shown at once, in town too: you just did it)
+    if now.fed and not was.fed and not fedGone then
+        ns.Done("Well Fed – +5% XP from kills for 15 min. You can stop eating.")
+    elseif now.fed and not was.fed and fedGone then
+        ns.Done("Well Fed again – topped up for 15 min.")
+    end
+    if (now.restedStacks or 0) >= 3 and (was.restedStacks or 0) < 3 then
+        ns.Done("Well-Rested 3/3 – the full +3% XP. You can get up.")
+    end
+    if now.boost and not was.boost then
+        ns.Done("Boosted Rest – the tent is done" .. (now.restedPct and (": rested " .. now.restedPct .. "%") or "") .. ".")
+    end
     -- Well Fed gone: eating a new dish takes the old one away and gives the new one 10 seconds later, so wait 20
     -- seconds (and while you're eating) before saying it's run out.
     if gone("fed") then
@@ -2049,6 +2071,7 @@ ComputeLevelStatus = function()
     local rested = tonumber(Plain(GetXPExhaustion and GetXPExhaustion())) or 0
     local pct = xpMax > 0 and rested / xpMax * 100 or 0
     seen.lowRested = pct < 5
+    seen.restedPct = math.floor(pct + 0.5)
     local tentTip = "Light a campfire (Cooking: Simple Wood + Flint and Tinder), put a Camp Tent by it and sit a "
         .. "minute: rested goes up to 5% of a level, for everyone sitting there. Then Boosted Rest blocks another tent "
         .. "for 1 hour. Made with Leatherworking 20 (5 Light Leather) – a friend's tent works too.\n\nRested: kills "
@@ -2144,6 +2167,7 @@ ComputeLevelStatus = function()
         .. "stays when you die. Party members can use yours."
     local wr = aura(WELL_RESTED)
     seen.rested = wr and true or nil
+    seen.restedStacks = wr and wr.stacks or 0
     name, icon, slot = "Cozy Sleeping Bag", ItemIcon(SLEEPING_BAG) or SpellIcon(WELL_RESTED) or "Interface\\Icons\\Spell_Nature_Sleep", "bag"
     local bags, toy = ItemCount(SLEEPING_BAG)
     options = {}
