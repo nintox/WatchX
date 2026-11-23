@@ -412,7 +412,9 @@ function ns.EnemyMenu(anchor, key)
         local gk = ns.db.kosGuilds[r.guild:lower()]
         items[#items + 1] = { (gk and "Guild off KOS: " or "KOS the guild: ") .. r.guild, function() ns.SetGuildKOS(r.guild, not gk) end }
     end
-    if r.wanted then
+    if r.wanted and not r.wanted.claimed and not ns.WantedMine(r.wanted) then
+        items[#items + 1] = { "|cff909090Bounty by " .. (r.wanted.by or "?") .. " – only they can change it|r", nil }
+    elseif r.wanted then
         items[#items + 1] = { "|cffffa000Edit bounty|r", function() ns.ShowBounty(key) end }
         items[#items + 1] = { "Take the bounty down", function() ns.RemoveWanted(key) end }
     else
@@ -577,7 +579,7 @@ do
         bw.coins[3]:SetText((c % 100) > 0 and tostring(c % 100) or "")
         bw.err:SetText("")
         bw.note:SetText(w and w.note or "")
-        bw.down:SetShown(w and true or false)
+        bw.down:SetShown((w and ns.WantedMine(w)) and true or false)
         local d = db()
         local to = (d.wantedGuild ~= false and d.wantedFriends ~= false) and "your guild and online friends"
             or d.wantedGuild ~= false and "your guild" or d.wantedFriends ~= false and "your online friends" or "nobody (sharing is off)"

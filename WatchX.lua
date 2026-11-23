@@ -976,7 +976,8 @@ function ns.SetNote(key, text)
 end
 
 function ns.ForgetEnemy(key)
-    if ns.RemoveWanted and db.enemies[key] and db.enemies[key].wanted then ns.RemoveWanted(key) end   -- yours: down for all
+    local fw = db.enemies[key] and db.enemies[key].wanted
+    if fw and ns.WantedMine and ns.WantedMine(fw) then ns.RemoveWanted(key) end   -- yours: down for all
     db.enemies[key] = nil
     if ns.AvoidChanged then ns.AvoidChanged() end
     ns.enemyCount = nil
@@ -2534,6 +2535,11 @@ do
             Print("A bounty needs a reward: gold, silver or copper (e.g. |cffffd100/wx wanted Name: 50g ninja looter|r).")
             return false
         end
+        local old = db.enemies[key] and db.enemies[key].wanted
+        if old and not old.claimed and not ns.WantedMine(old) then
+            Print((old.by or "Someone") .. " already has a bounty on " .. (db.enemies[key].name or key) .. " – only they can change it.")
+            return false
+        end
         local r = ns.EnemyRecord(key, name)
         r.wanted = { copper = copper, note = Clean(note, MAX_NOTE), by = Me(), t = time() }
         r.wantedHide = nil
@@ -2544,16 +2550,19 @@ do
         return true
     end
 
-    -- Your own bounty: taken down for everyone. Someone else's: hidden here only.
+    -- Is this bounty yours? Only the one who put it up can change it or take it down.
+    function ns.WantedMine(w) return w and (w.by == nil or w.by == Me()) end
+
+    -- Your own bounty: taken down for everyone. Someone else's can't be (it goes when it's claimed or old).
     function ns.RemoveWanted(key)
         local r = key and db.enemies[key]
         if not (r and r.wanted) then return end
         local w = r.wanted
-        if w.by == Me() then
-            Send("D", key, w.by, w.t or 0)
-        else
-            r.wantedHide = w.t
+        if not ns.WantedMine(w) then
+            Print("Only " .. (w.by or "the one who put it up") .. " can take this bounty down.")
+            return false
         end
+        Send("D", key, w.by or Me(), w.t or 0)
         r.wanted = nil
         -- only here for the bounty (never seen, nothing else on it): gone from History too
         if not (r.kos or r.avoid or r.note or (r.seen or 0) > 0 or (r.kills or 0) > 0 or (r.deaths or 0) > 0) and not r.wantedHide then
