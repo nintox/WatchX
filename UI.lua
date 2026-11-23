@@ -479,6 +479,9 @@ do
         CloseX(f)
         f.who = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightLarge")
         f.who:SetPoint("TOP", f, "TOP", 0, -26)
+        f.whoBox = Box(f, 200, 48, "Name Surname (or just the first name)")
+        f.whoBox:SetPoint("TOP", f, "TOP", 0, -24)
+        f.whoBox:Hide()
         local lr = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
         lr:SetPoint("TOPLEFT", f, "TOPLEFT", 18, -56)
         lr:SetText("Reward")
@@ -499,6 +502,8 @@ do
             x = x + c[2] + 26
         end
         f.reward = f.coins[1]
+        f.whoBox:SetScript("OnEnterPressed", function() f.coins[1]:SetFocus() end)
+        f.whoBox:SetScript("OnTabPressed", function() f.coins[1]:SetFocus() end)
         f.err = f:CreateFontString(nil, "OVERLAY", "GameFontRedSmall")
         f.err:SetPoint("LEFT", f.coins[3], "RIGHT", 22, 0)
         f.err:SetPoint("RIGHT", f, "RIGHT", -14, 0)
@@ -519,7 +524,13 @@ do
                 f.coins[1]:SetFocus()
                 return
             end
-            if ns.SetWanted(f.key, f.name, c, f.note:GetText()) then f:Hide() end
+            local key, name = f.key, f.name
+            if f.whoBox:IsShown() then
+                name = ns.Trim(f.whoBox:GetText() or "")
+                if name == "" then f.err:SetText("Who?"); f.whoBox:SetFocus() return end
+                key = ns.KeyFromName(name)
+            end
+            if ns.SetWanted(key, name, c, f.note:GetText()) then f:Hide() end
         end
         for i, e in ipairs(f.coins) do
             local nextBox = f.coins[i + 1] or f.note
@@ -541,13 +552,21 @@ do
         f:Hide()
         return f
     end
+    -- key: the player (from a menu); none: you type the name (your target is filled in).
     function ns.ShowBounty(key, name)
-        if not key then return end
         bw = bw or Build()
-        local r = db().enemies[key]
+        local typed = not key
+        if typed and UnitExists("target") and UnitIsPlayer("target") and not UnitIsUnit("target", "player") then
+            local tk, full = ns.PlayerKey("target")
+            if tk then key, name = tk, full end
+        end
+        local r = key and db().enemies[key]
         local w = r and r.wanted
         bw.key, bw.name = key, name or (r and r.name) or key
-        bw.who:SetText(bw.name)
+        bw.who:SetShown(not typed)
+        bw.whoBox:SetShown(typed)
+        bw.who:SetText(bw.name or "")
+        bw.whoBox:SetText(typed and (bw.name or "") or "")
         local c = w and w.copper or 0
         bw.coins[1]:SetText(c >= 10000 and tostring(math.floor(c / 10000)) or "")
         bw.coins[2]:SetText((c % 10000) >= 100 and tostring(math.floor(c / 100) % 100) or "")
@@ -561,7 +580,7 @@ do
         bw.shareHint:SetText("Sent to " .. to .. " who run WatchX.")
         bw:Show()
         bw:Raise()
-        bw.coins[1]:SetFocus()
+        if typed and (bw.name or "") == "" then bw.whoBox:SetFocus() else bw.coins[1]:SetFocus() end
     end
 end
 
@@ -1379,6 +1398,14 @@ local function BuildHistory()
     f.addG:SetScript("OnEditFocusLost", function(self) self.hint:SetShown(self:GetText() == "") end)
     f.addGB = FlatButton(f, "Blacklist", 70, 20, addGuild)
     f.addGB:SetPoint("LEFT", f.addG, "RIGHT", 6, 0)
+    f.addW = FlatButton(f, "+ Add bounty", 120, 22, function() ns.ShowBounty() end)
+    f.addW:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 240, 10)
+    f.addW:SetScript("OnEnter", function(self)
+        Tip(self, "Add a bounty", "Anyone: type the name (your target is filled in), a reward and a note. "
+            .. "It goes to your guild and friends who run WatchX.")
+    end)
+    f.addW:SetScript("OnLeave", GameTooltip_Hide)
+    f.addW:Hide()
 
     f:SetScript("OnShow", function() ns.RefreshHistory() end)
     f:Hide()
@@ -1465,6 +1492,7 @@ function ns.RefreshHistory()
     local cols = guildsTab and GCOLS or PCOLS
     for _, b in ipairs(f.tabs) do b:SetAlpha(b.key == f.tab and 1 or 0.5) end
     f.addG:SetShown(guildsTab); f.addGB:SetShown(guildsTab)
+    f.addW:SetShown(f.tab == "wanted")
     f.hint:SetText(guildsTab and "Click a guild: blacklist, show its players" or "Click a player: KOS, note, forget")
     -- headers
     local srt = f.sort[guildsTab and "guilds" or "all"]
