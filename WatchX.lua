@@ -2689,6 +2689,15 @@ end
         if ns.RefreshUI then ns.RefreshUI() end; if ns.RefreshHistory then ns.RefreshHistory() end
         return true
     end
+    -- The bounties others owe you (you claimed them, not paid yet): { key, r, w }.
+    function ns.OwedToMe()
+        local out = {}
+        for key, r in pairs(db and db.enemies or {}) do
+            local w = r.wanted
+            if w and w.claimed and not w.paid and w.claimed.by == Me() and not ns.WantedMine(w) then out[#out + 1] = { key = key, r = r, w = w } end
+        end
+        return out
+    end
     -- The claimed bounties you still owe: { key, r, w }.
     function ns.OwedBounties()
         local out = {}
@@ -2877,6 +2886,13 @@ end
                     local owed = ns.OwedBounties()
                     if #owed > 0 then
                         Print("|cffff8040You owe " .. #owed .. (#owed == 1 and " bounty" or " bounties") .. "|r – a Pay button shows at the mailbox.")
+                    end
+                    local due = ns.OwedToMe()
+                    if #due > 0 then
+                        local names = {}
+                        for i = 1, math.min(3, #due) do names[i] = (due[i].w.by or "?") .. " " .. (ns.WantedReward(due[i].w) or "") end
+                        Print("|cffffd100Owed to you:|r " .. table.concat(names, ", ") .. (#due > 3 and (" and " .. (#due - 3) .. " more") or "")
+                            .. " |cffaaaaaa(History > Wanted)|r")
                     end
                 end
             end) end)

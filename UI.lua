@@ -1698,14 +1698,16 @@ function ns.RefreshHistory()
     end
     for i = n + 1, #f.rows do f.rows[i]:Hide() end
     f.child:SetHeight(math.max(10, n * HIST_ROW_H))
-    local owe, oweC = 0, 0
+    local owe, oweC, due, dueC = 0, 0, 0, 0
     if wantedTab then
         for _, it in ipairs(items) do
             if it.group == 1 then owe, oweC = owe + 1, oweC + (it.r.wanted.copper or 0) end
+            if it.group == 2 then due, dueC = due + 1, dueC + (it.r.wanted.copper or 0) end
         end
     end
-    f.count:SetText((owe > 0 and ("|cffff9040You owe " .. owe .. (owe == 1 and " bounty" or " bounties") .. ": "
-            .. (ns.Money and ns.Money(oweC) or oweC) .. "|r   ") or "")
+    local M = ns.Money or tostring
+    f.count:SetText((owe > 0 and ("|cffff9040You owe " .. owe .. ": " .. M(oweC) .. "|r   ") or "")
+        .. (due > 0 and ("|cffffd100Owed to you " .. due .. ": " .. M(dueC) .. "|r   ") or "")
         .. "Showing " .. #items .. " of " .. total .. (guildsTab and " guilds" or " players")
         .. (#items > HIST_MAX and (" (first " .. HIST_MAX .. ")") or ""))
 end
