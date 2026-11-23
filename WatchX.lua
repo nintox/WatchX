@@ -190,7 +190,7 @@ function ns.cpu.Spent(label, dt, kb)
     C.ms = C.ms + dt
     C.by[label] = (C.by[label] or 0) + dt
     if dt > C.max then C.max, C.maxLabel = dt, label end
-    if dt > 5 then C.spikes = C.spikes + 1 end
+    if dt > 4 then C.spikes = C.spikes + 1 end
     if kb and kb > 0 then C.kb = C.kb + kb end
 end
 function ns.Timed(fn, label)
@@ -3331,22 +3331,27 @@ end
 -- Every second: scan nameplates and refresh the UI.
 local ticker = CreateFrame("Frame")
 local elapsed = 0
-local TickWork   -- the once-a-second work (timed); the frame-by-frame part below stays as small as it can be
+-- The once-a-second work, spread over four frames a quarter second apart (at 120 Hz a frame is 8.3 ms: no single
+-- frame gets all of it). Each part is timed on its own, so /wx mem shows which one costs what.
+local TickJobs = {
+    ns.Timed(function() ns.Safe("scan", ScanNameplates) end, "tick: nameplates"),
+    ns.Timed(function()
+        ns.Safe("afk", function() CheckCursor(); CheckAfk(); AfkTick() end)
+        -- the XP boost warnings also work with the list switched off (the list reads it every second itself)
+        if db.levelHelper == false and db.levelWarn ~= false then ns.Safe("xp boosts", ns.LevelStatus) end
+    end, "tick: afk & xp"),
+    ns.Timed(function() ns.Safe("buffs", ns.CheckBuffs) end, "tick: buffs"),
+    ns.Timed(function() Refresh() end, "tick: refresh"),
+}
+TickJobs.at = 0   -- which one runs next (in the table: the main chunk is at the 200-locals limit)
 ticker:SetScript("OnUpdate", function(_, dt)
     if not db then return end
     elapsed = elapsed + dt
-    if elapsed < 1 then return end
+    if elapsed < 0.25 then return end
     elapsed = 0
-    TickWork()
+    TickJobs.at = TickJobs.at % #TickJobs + 1
+    TickJobs[TickJobs.at]()
 end)
-TickWork = ns.Timed(function()
-    ns.Safe("scan", ScanNameplates)
-    ns.Safe("afk", function() CheckCursor(); CheckAfk(); AfkTick() end)
-    -- the XP boost warnings also work with the list switched off (the list reads it every second itself)
-    if db.levelHelper == false and db.levelWarn ~= false then ns.Safe("xp boosts", ns.LevelStatus) end
-    ns.Safe("buffs", ns.CheckBuffs)
-    Refresh()
-end, "1 s ticker")
 
 -- ---------------------------------------------------------------- events
 
@@ -3587,10 +3592,10 @@ local function OnSlash(input)
             if #top > 0 then Print("|cffaaaaaaMost of it:|r " .. table.concat(top, "  ·  ")
                 .. "  |cffaaaaaa(/wx mem reset: measure from now, without the login)|r") end
             local C = ns.cpu
-            local spikeCol = C.max > 16 and "|cffff4040" or C.max > 5 and "|cffffd100" or "|cff40ff40"
-            Print(("Longest single call: %s%.1f ms|r (%s)  ·  calls over 5 ms: %d  ·  garbage made: %.0f KB a second"):format(
+            local spikeCol = C.max >= 8.3 and "|cffff4040" or C.max >= 2 and "|cffffd100" or "|cff40ff40"
+            Print(("Longest single call: %s%.1f ms|r (%s)  ·  calls over 4 ms: %d  ·  garbage made: %.0f KB a second"):format(
                 spikeCol, C.max, C.maxLabel or "-", C.spikes, C.kb / up)
-                .. " |cffaaaaaa(a frame at 60 fps is 16.7 ms)|r")
+                .. " |cffaaaaaa(a frame at 120 Hz is 8.3 ms)|r")
         end
         local GetCPU = (C_AddOns and C_AddOns.GetAddOnCPUUsage) or GetAddOnCPUUsage
         if GetCVar("scriptProfile") == "1" and GetCPU then
