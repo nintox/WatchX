@@ -5252,23 +5252,40 @@ do (function()
         if font then fs:SetFont(font, size, "OUTLINE") end
         fs:SetShadowOffset(0, 0)
     end
+    local WATER, FOOD = "Interface\\Icons\\INV_Drink_18", "Interface\\Icons\\INV_Misc_Fork&Knife"   -- high-level water and food
     local function Tile(parent)
         local t = CreateFrame("Frame", nil, parent)
         t:SetSize(ICON, ICON)
-        t.edge = t:CreateTexture(nil, "BACKGROUND")
-        t.edge:SetPoint("TOPLEFT", -1, 1); t.edge:SetPoint("BOTTOMRIGHT", 1, -1)
-        t.edge:SetColorTexture(0, 0, 0, 0.9)
         t.icon = t:CreateTexture(nil, "ARTWORK")
         t.icon:SetAllPoints()
         t.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-        t.time = t:CreateFontString(nil, "OVERLAY", "GameFontHighlightLarge")
+        -- how full you are, as a colour rising in the icon (blue mana, green health)
+        t.fill = t:CreateTexture(nil, "ARTWORK", nil, 2)
+        t.fill:SetPoint("BOTTOMLEFT", t, "BOTTOMLEFT", 0, 0)
+        t.fill:SetPoint("BOTTOMRIGHT", t, "BOTTOMRIGHT", 0, 0)
+        t.fill:SetTexture("Interface\\Buttons\\WHITE8X8")
+        t.fill:SetHeight(1)
+        t.fillTop = t:CreateTexture(nil, "ARTWORK", nil, 3)   -- a bright line on the surface
+        t.fillTop:SetPoint("BOTTOMLEFT", t.fill, "TOPLEFT", 0, -1)
+        t.fillTop:SetPoint("BOTTOMRIGHT", t.fill, "TOPRIGHT", 0, -1)
+        t.fillTop:SetHeight(1)
+        t.fillTop:SetTexture("Interface\\Buttons\\WHITE8X8")
+        -- WoW Forever's gold edge, a little outside the icon
+        t.frame = CreateFrame("Frame", nil, t)
+        t.frame:SetPoint("TOPLEFT", -4, 4); t.frame:SetPoint("BOTTOMRIGHT", 4, -4)
+        t.frame:SetFrameLevel(t:GetFrameLevel() + 1)
+        if Backdrop(t.frame, { edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", edgeSize = 12,
+                bgFile = nil }) then
+            t.frame:SetBackdropBorderColor(EDGE[1], EDGE[2], EDGE[3], 1)
+        end
+        t.time = t.frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightLarge")
         t.time:SetPoint("CENTER", t, "CENTER", 0, 0)
         Big(t.time, 17)
-        t.pct = t:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-        t.pct:SetPoint("BOTTOM", t, "TOP", 0, 3)
+        t.pct = t.frame:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+        t.pct:SetPoint("BOTTOM", t, "TOP", 0, 6)
         Big(t.pct, 14)
-        t.info = t:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-        t.info:SetPoint("TOP", t, "BOTTOM", 0, -3)
+        t.info = t.frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        t.info:SetPoint("TOP", t, "BOTTOM", 0, -6)
         Big(t.info, 10)
         return t
     end
@@ -5303,10 +5320,15 @@ do (function()
     local function Paint(r, a, what, label, color)
         local cur = what == "mp" and N(UnitPower("player", 0)) or N(UnitHealth("player"))
         local max = what == "mp" and N(UnitPowerMax("player", 0)) or N(UnitHealthMax("player"))
-        r.icon:SetTexture(a.icon or (what == "mp" and "Interface\\Icons\\INV_Drink_07" or "Interface\\Icons\\INV_Misc_Food_15"))
+        r.icon:SetTexture(what == "mp" and WATER or FOOD)
         r.time:SetText(a.left and ("%.1f"):format(a.left) or "")
-        if not (cur and max and max > 0) then r.pct:SetText(""); r.info:SetText("") return end
+        if not (cur and max and max > 0) then r.pct:SetText(""); r.info:SetText(""); r.fill:Hide(); r.fillTop:Hide() return end
         r.pct:SetText(color .. math.floor(cur / max * 100 + 0.5) .. "%|r")
+        local fr, fg, fb = (what == "mp") and 0.15 or 0.15, (what == "mp") and 0.45 or 0.8, (what == "mp") and 1 or 0.2
+        r.fill:SetVertexColor(fr, fg, fb, 0.45)
+        r.fillTop:SetVertexColor(fr + 0.4, fg + 0.3, fb, 0.9)
+        r.fill:SetHeight(math.max(1, ICON * math.min(1, cur / max)))
+        r.fill:Show(); r.fillTop:Show()
         local s = seen[what]
         if not s then s = { v = cur, t = GetTime() }; seen[what] = s end
         if cur < s.v then s.v, s.t = cur, GetTime() end   -- took damage / cast: measure from here
@@ -5345,7 +5367,7 @@ do (function()
             if a.kind == "hp" or a.kind == "both" then lines[#lines + 1] = { a, "hp", "health", "|cff40ff40" } end
         end
         if #lines == 0 and moving then   -- unlocked: an example to place it by
-            lines[1] = { { icon = "Interface\\Icons\\INV_Drink_07", left = 20.2 }, "mp", "mana", "|cff4da6ff" }
+            lines[1] = { { left = 20.2 }, "mp", "mana", "|cff4da6ff" }
         end
         local n = math.min(2, #lines)
         for i, r in ipairs(f.rows) do
