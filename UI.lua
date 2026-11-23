@@ -4186,7 +4186,7 @@ uiEvents:SetScript("OnEvent", ns.Timed(function()
     RefreshNearby()
     ns.UpdateTargetButton()
     if promptPending then ns.UpdateChatLogPrompt() end
-end))
+end, "UI events"))
 
 -- After a profile switch: the bars' spot and size, and the settings page if it's open.
 function ns.ApplyLayout()
@@ -4527,7 +4527,7 @@ local function BuildLevel()
                 b.border:SetAlpha(1)
             end
         end
-    end))
+    end, "XP icons pulse"))
     -- any edge only changes the size (the icons keep their shape); the top-left corner stays put
     AddGrips(f, function(self, st, cx, cy)
         local sc
@@ -4775,7 +4775,7 @@ end
         else
             GameTooltip:AddDoubleLine(Key(0.25, 0.25, 0.25) .. "Rested", "none", 0.6, 0.6, 0.6, 0.6, 0.6, 0.6)
         end
-        GameTooltip:AddDoubleLine(Key(1, 0.82, 0) .. "Ready to hand in", (quests.done > 0 and ("+" .. Num(quests.done) .. ("  |cffaaaaaa→ %.1f%%|r"):format(withDone)) or "none"),
+        GameTooltip:AddDoubleLine(Key(1, 0.82, 0) .. "Ready to hand in", (quests.done > 0 and ("+" .. Num(quests.done) .. ("  |cffaaaaaa= %.1f%%|r"):format(withDone)) or "none"),
             1, 0.82, 0, 1, 1, 1)
         GameTooltip:AddDoubleLine(Key(0.55, 0.47, 0.2) .. "Quests in progress", quests.todo > 0 and Num(quests.todo) or "none", 0.8, 0.7, 0.4, 1, 1, 1)
         GameTooltip:AddLine(" ")
@@ -5560,7 +5560,7 @@ local function InitPlates()
         local d = db()
         if not (d.plateFriendly and d.plateHealer ~= false) or InCombatLockdown() then return end
         for unit in pairs(plateUnits) do ns.Safe("inspect", ns.MaybeInspect, unit) end
-    end))
+    end, "nameplate icons tick"))
     if C_NamePlate and C_NamePlate.GetNamePlates then   -- plates already up (after a /reload)
         local ok, plates = pcall(C_NamePlate.GetNamePlates)
         for _, plate in ipairs(ok and type(plates) == "table" and plates or {}) do

@@ -182,27 +182,33 @@ ns.Log = Log
 local reportedErrors = {}
 -- WatchX's own CPU time: every handler is timed once at its outermost call (debugprofilestop: microsecond clock,
 -- costs next to nothing). /wx mem shows it.
-local cpuDepth, clock = 0, debugprofilestop
-ns.cpu = { ms = 0 }
-function ns.Timed(fn)
+ns.cpu = { ms = 0, by = {}, depth = 0, clock = debugprofilestop }   -- one table: the main chunk is at Lua's 200-locals limit
+function ns.cpu.Spent(label, dt)
+    ns.cpu.ms = ns.cpu.ms + dt
+    ns.cpu.by[label] = (ns.cpu.by[label] or 0) + dt
+end
+function ns.Timed(fn, label)
+    label = label or "other"
     return function(...)
-        if not clock or cpuDepth > 0 then return fn(...) end
-        cpuDepth = 1
-        local t0 = clock()
+        local C = ns.cpu
+        if not C.clock or C.depth > 0 then return fn(...) end
+        C.depth = 1
+        local t0 = C.clock()
         local ok, a, b, c = pcall(fn, ...)
-        ns.cpu.ms = ns.cpu.ms + (clock() - t0)
-        cpuDepth = 0
+        C.Spent(label, C.clock() - t0)
+        C.depth = 0
         if not ok then error(a, 0) end
         return a, b, c
     end
 end
 
 function ns.Safe(label, fn, ...)
-    local top = clock and cpuDepth == 0
+    local C = ns.cpu
+    local top = C.clock and C.depth == 0
     local t0
-    if top then cpuDepth = 1; t0 = clock() end
+    if top then C.depth = 1; t0 = C.clock() end
     local ok, err = pcall(fn, ...)
-    if top then ns.cpu.ms = ns.cpu.ms + (clock() - t0); cpuDepth = 0 end
+    if top then C.Spent(label or "other", C.clock() - t0); C.depth = 0 end
     if not ok then
         err = tostring(err)
         if Log then Log("error", label, err) end
@@ -1903,7 +1909,7 @@ if CreateFrame then
         else
             bagState.dirty, statusCache.dirty = true, true
         end
-    end))
+    end, "bags & XP events"))
 end
 
 -- A campfire close by: a "...Campfire" buff on you, or one you put down here less than 10 minutes ago.
@@ -2483,7 +2489,7 @@ do
         if not m then self:Hide() return end
         wait = 0.3
         pcall(C_ChatInfo.SendAddonMessage, PREFIX, m[1], m[2], m[3])
-    end))
+    end, "WANTED sending"))
     local friends = {}   -- lower-case name -> true (online friends, rebuilt when sending)
     local function Friends()
         wipe(friends)
@@ -3054,7 +3060,7 @@ ticker:SetScript("OnUpdate", ns.Timed(function(_, dt)
     if db.levelHelper == false and db.levelWarn ~= false then ns.Safe("xp boosts", ns.LevelStatus) end
     ns.Safe("buffs", ns.CheckBuffs)
     Refresh()
-end))
+end, "1 s ticker"))
 
 -- ---------------------------------------------------------------- events
 
@@ -3261,6 +3267,9 @@ local function OnSlash(input)
         Print("XP boosts list: " .. (db.levelHelper and "|cff40ff40on|r" or "off")
             .. ((db.levelHelper and not ns.LevelStatus()) and " (it only shows below level " .. ns.MaxLevel() .. ")" or ""))
         if ns.RefreshUI then ns.RefreshUI() end
+    elseif (cmd == "mem" or cmd == "memory" or cmd == "cpu") and rest == "reset" then
+        ns.cpuStart, ns.cpu.ms, ns.cpu.by = GetTime(), 0, {}
+        Print("CPU clock reset – play a while, then type /wx mem.")
     elseif cmd == "mem" or cmd == "memory" or cmd == "cpu" then
         -- how much memory WatchX uses right now, and what it keeps between sessions
         local Upd = (C_AddOns and C_AddOns.UpdateAddOnMemoryUsage) or UpdateAddOnMemoryUsage
@@ -3273,7 +3282,7 @@ local function OnSlash(input)
             players = players + 1
             if r.note or r.kos or r.avoid or r.wanted then notes = notes + 1 end
         end
-        Print(("Memory: |cffffd100%s|r  ·  players remembered: %d (%d with KOS, avoid, WANTED or a note; the oldest "
+        Print(("Memory: |cffffd100%s|r |cffaaaaaa(with garbage Lua hasn't cleared yet)|r  ·  players remembered: %d (%d with KOS, avoid, WANTED or a note; the oldest "
             .. "plain ones go after 2000)  ·  log: %d lines (max %d)  ·  rare catalogue: %d mobs"):format(
             ok and kb and (kb >= 1024 and ("%.1f MB"):format(kb / 1024) or ("%d KB"):format(kb)) or "?",
             players, notes, logLines, LOG_MAX, #(ns.RARES or {})))
@@ -3281,6 +3290,15 @@ local function OnSlash(input)
         if debugprofilestop and up > 0 then
             Print(("CPU (WatchX's own clock): |cffffd100%.0f ms|r in %s  ·  %.2f ms a second  ·  |cffffd100%.3f%%|r of one CPU core"):format(
                 ns.cpu.ms, ns.Fmt and ns.Fmt(up) or (math.floor(up) .. " s"), ns.cpu.ms / up, ns.cpu.ms / up / 10))
+            local parts = {}
+            for k, v in pairs(ns.cpu.by) do parts[#parts + 1] = { k, v } end
+            table.sort(parts, function(a, b) return a[2] > b[2] end)
+            local top = {}
+            for i = 1, math.min(6, #parts) do
+                top[#top + 1] = ("%s |cffffd100%.0f%%|r"):format(parts[i][1], ns.cpu.ms > 0 and parts[i][2] / ns.cpu.ms * 100 or 0)
+            end
+            if #top > 0 then Print("|cffaaaaaaMost of it:|r " .. table.concat(top, "  ·  ")
+                .. "  |cffaaaaaa(/wx mem reset: measure from now, without the login)|r") end
         end
         local GetCPU = (C_AddOns and C_AddOns.GetAddOnCPUUsage) or GetAddOnCPUUsage
         if GetCVar("scriptProfile") == "1" and GetCPU then
