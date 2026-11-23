@@ -9,6 +9,13 @@ echo   Made by Rikerud
 echo ======================================
 echo.
 
+rem Opened straight from the zip, Windows copies only this file somewhere else: the bridge isn't next to it.
+if exist "%~dp0watchx_bridge.ps1" goto install
+echo Extract the zip first: right-click WatchX-Bridge.zip, choose "Extract All...",
+echo then double-click "Install (Windows).bat" in the folder that comes out.
+goto done
+
+:install
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0watchx_bridge.ps1" -Install
 if errorlevel 1 goto failed
 timeout /t 3 /nobreak >nul

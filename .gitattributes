@@ -1,0 +1,5 @@
+# Windows scripts need CRLF (cmd's goto labels break without it); Mac/Unix scripts need LF.
+*.bat     text eol=crlf
+*.sh      text eol=lf
+*.command text eol=lf
+*.lua     text eol=lf

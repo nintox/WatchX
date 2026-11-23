@@ -100,17 +100,26 @@ $Shots = Join-Path $Root 'Screenshots'
 $LogFile = Join-Path $env:LOCALAPPDATA 'WatchX-bridge.log'
 $Work = Join-Path $env:TEMP 'watchx-bridge'
 $UA = 'WatchX-bridge/2.0'
+$ProgressPreference = 'SilentlyContinue'   # the progress bar slows web requests a lot in Windows PowerShell 5.1
 $KeepShots = 30
 [void](New-Item -ItemType Directory -Force -Path $Work)
 
+$script:LastLog = ''; $script:LastLogAt = [DateTime]::MinValue
 function Log([string]$msg) {
+    # the same line again within a minute (an error that keeps coming back) isn't written again
+    if ($msg -eq $script:LastLog -and ((Get-Date) - $script:LastLogAt).TotalSeconds -lt 60) { return }
+    $script:LastLog = $msg; $script:LastLogAt = Get-Date
     $line = '[{0}] {1}' -f (Get-Date -Format 'HH:mm:ss'), $msg
     Write-Host $line
     try { Add-Content -LiteralPath $LogFile -Value $line -Encoding UTF8 } catch {}
 }
+# a log that grew big starts over (the last one is kept as .old)
+try { if ((Get-Item -LiteralPath $LogFile -ErrorAction Stop).Length -gt 1MB) { Move-Item -LiteralPath $LogFile ($LogFile + '.old') -Force } } catch {}
 
 function Get-SvFile {
-    Get-ChildItem -Path (Join-Path $Root 'WTF\Account\*\SavedVariables\WatchX.lua') -ErrorAction SilentlyContinue |
+    # the game folder taken literally ([ ] in a folder name aren't wildcards), only the account folder is one
+    $base = [Management.Automation.WildcardPattern]::Escape($Root)
+    Get-ChildItem -Path (Join-Path $base 'WTF\Account\*\SavedVariables\WatchX.lua') -ErrorAction SilentlyContinue |
         Sort-Object LastWriteTime -Descending | Select-Object -First 1
 }
 
@@ -120,6 +129,19 @@ function Get-SvValue([string]$text, [string]$key) {
     $m = [regex]::Match($text, '\["' + $key + '"\]\s*=\s*(\d+)')
     if ($m.Success) { return $m.Groups[1].Value }
     return ''
+}
+
+# WatchX's own key per WoW account (one game folder can hold several), as " key1 key2 ":
+# only chat-log lines with one of them are alerts.
+function Get-KnownKeys {
+    $base = [Management.Automation.WildcardPattern]::Escape($Root)
+    $keys = ' '
+    foreach ($f in @(Get-ChildItem -Path (Join-Path $base 'WTF\Account\*\SavedVariables\WatchX.lua') -ErrorAction SilentlyContinue)) {
+        $k = ''
+        try { $k = Get-SvValue ([IO.File]::ReadAllText($f.FullName, [Text.Encoding]::UTF8)) 'bridgeKey' } catch {}
+        if ($k) { $keys += $k + ' ' }
+    }
+    return $keys
 }
 
 function Get-Settings {
@@ -147,10 +169,10 @@ function Get-Targets($s) {
 
 # One HTTP request with retries. Returns the status code (0 = no answer).
 function Send-Request([string]$url, [string]$method, [byte[]]$body, [string]$contentType, $headers) {
-    for ($i = 1; $i -le 3; $i++) {
+    for ($i = 1; $i -le 2; $i++) {
         try {
             $r = Invoke-WebRequest -Uri $url -Method $method -Body $body -ContentType $contentType `
-                -Headers $headers -UserAgent $UA -UseBasicParsing -TimeoutSec 20
+                -Headers $headers -UserAgent $UA -UseBasicParsing -TimeoutSec 12
             return [int]$r.StatusCode
         } catch {
             $code = 0
@@ -172,6 +194,10 @@ function Send-Json([string]$url, $obj, [string]$token) {
 
 function Send-Notification([string]$kind, [string]$subject, [string]$text, [string]$image = '') {
     $s = Get-Settings   # always fresh URLs (changed in game + reload)
+    # a zero-width space after @ and between ] and (: names or notes someone else wrote can't ping or link
+    $zw = [string][char]0x200B
+    $subject = $subject.Replace('@', '@' + $zw).Replace('](', ']' + $zw + '(')
+    $text = $text.Replace('@', '@' + $zw).Replace('](', ']' + $zw + '(')
     switch ($kind) {
         'SPAWN'   { $title = "$subject is up!";   $prio = 5; $tags = [string[]]@('rotating_light') }
         'LOOT'    { $title = "$subject dropped!"; $prio = 5; $tags = [string[]]@('tada', 'gem') }
@@ -183,6 +209,7 @@ function Send-Notification([string]$kind, [string]$subject, [string]$text, [stri
         'AFK'     { $title = 'AFK logout soon – move!'; $prio = 5; $tags = [string[]]@('warning', 'hourglass') }
         'LOGOUT'  { $title = 'Logging out now!'; $prio = 5; $tags = [string[]]@('warning') }
         'OFFLINE' { $title = $subject;           $prio = 5; $tags = [string[]]@('electric_plug') }
+        'CLOSED'  { $title = $subject;           $prio = 3; $tags = [string[]]@('electric_plug') }   # a guess (crash?): no mention
         'TEST'    { $title = 'WatchX test';      $prio = 3; $tags = [string[]]@('test_tube') }
         default   { $title = "WatchX $kind";     $prio = 3; $tags = [string[]]@('bell') }
     }
@@ -404,13 +431,14 @@ function Check-Shots {
 # ---------------------------------------------------------------- logged out / game closed
 
 function Test-WowRunning {
-    $p = Get-Process -ErrorAction SilentlyContinue | Where-Object {
+    $p = Get-Process -Name 'Wow*', 'World*' -ErrorAction SilentlyContinue | Where-Object {
         try { $_.Path -and $_.Path.StartsWith($Root, [StringComparison]::OrdinalIgnoreCase) -and $_.Path -notmatch '\\Interface\\' } catch { $false }
     }
     return [bool]$p
 }
 
 $script:SvTime = $null; $script:LastExit = ''; $script:WowUp = $false; $script:NextWowCheck = [DateTime]::MinValue
+$script:WowSince = 0
 function Check-Exit {
     $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
     $sv = Get-SvFile
@@ -440,15 +468,19 @@ function Check-Exit {
     }
     if ((Get-Date) -lt $script:NextWowCheck) { return }
     $script:NextWowCheck = (Get-Date).AddSeconds(2)
-    if (Test-WowRunning) { $script:WowUp = $true }
+    if (Test-WowRunning) {
+        if (-not $script:WowUp) { $script:WowSince = $now }
+        $script:WowUp = $true
+    }
     elseif ($script:WowUp) {
         $script:WowUp = $false
         Start-Sleep -Seconds 3   # a normal quit writes the settings file first
         $sv = Get-SvFile; $at = ''
         if ($sv) { try { $at = Get-SvValue ([IO.File]::ReadAllText($sv.FullName, [Text.Encoding]::UTF8)) 'exitAt' } catch {} }
-        if (-not $at -or ([DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - [long]$at) -gt 60) {
+        # a crash = no logout written since the game started (sitting at character select for a while is fine)
+        if (-not $at -or [long]$at -lt $script:WowSince) {
             Log 'Game closed without logging out (crash?)'
-            Send-Notification 'OFFLINE' 'WoW closed' 'The game closed without logging out (crash?).'
+            Send-Notification 'CLOSED' 'WoW closed' 'The game closed without logging out (crash?).'
         }
         if ($sv) { $script:SvTime = $sv.LastWriteTimeUtc }
     }
@@ -456,8 +488,15 @@ function Check-Exit {
 
 # ---------------------------------------------------------------- slow fallback: chat log
 
-$re = [regex]'\[WatchX\]#(\d+) ([A-Z]+) (.*)$'
+# Only WatchX's own lines: "<key> [WatchX]#..." with this install's key (in any game language). Other players
+# can type "[WatchX]#..." in Trade, but they don't know the key. Before the game has saved a key (it does at the
+# next reload or logout) – and for the old tag without one – only a line that starts like your own
+# "You are now Busy:" message (or a whisper you sent) counts.
+$reKey = [regex]'(^|[^A-Za-z0-9])([A-Za-z0-9]+) \[WatchX\]#([0-9]+) ([A-Z]+) (.*)$'
+$reMine = [regex]'^[0-9/]+ [0-9:.]+  (You are now Busy: |To [^:]+: )([A-Za-z0-9]+ )?\[WatchX\]#'
+$reOld = [regex]'^[0-9/]+ [0-9:.]+  You are now Busy: \[WatchX\]#([0-9]+) ([A-Z]+) (.*)$'
 $script:Pos = -1
+if (-not (Test-Path -LiteralPath $ChatLog)) { $script:Pos = 0 }   # not there yet: read it from the start when it comes
 $script:Carry = ''
 function Check-ChatLog {
     if (-not (Test-Path -LiteralPath $ChatLog)) { if ($script:Pos -gt 0) { $script:Pos = 0 }; return }
@@ -476,13 +515,25 @@ function Check-ChatLog {
         $script:Carry = $lines[-1]
         if ($lines.Count -lt 2) { return }
         foreach ($line in $lines[0..($lines.Count - 2)]) {
-            $m = $re.Match($line.TrimEnd("`r"))
-            if (-not $m.Success) { continue }
-            $id = $m.Groups[1].Value
+            $l = $line.TrimEnd("`r")
+            if ($l.IndexOf('[WatchX', [StringComparison]::Ordinal) -lt 0) { continue }
+            $m = $reKey.Match($l)
+            if ($m.Success) {
+                $keys = Get-KnownKeys
+                if ($keys -eq ' ') { if (-not $reMine.IsMatch($l)) { continue } }
+                elseif (-not $keys.Contains(' ' + $m.Groups[2].Value + ' ')) { continue }
+                $id = $m.Groups[3].Value; $kind = $m.Groups[4].Value; $rest = $m.Groups[5].Value
+            } else {
+                $m = $reOld.Match($l)
+                if (-not $m.Success) { continue }
+                if ((Get-KnownKeys) -ne ' ') { continue }   # a key is saved: this WatchX always uses it, the old tag isn't from it
+                $id = $m.Groups[1].Value; $kind = $m.Groups[2].Value; $rest = $m.Groups[3].Value
+            }
+            # the id is the time + 3 digits: an old line (or a strange id) is skipped
+            if ($id.Length -lt 4 -or $id.Length -gt 16) { continue }
+            if (([DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - [long]$id.Substring(0, $id.Length - 3)) -gt 600) { continue }
             if ($script:Sent.Contains($id)) { continue }   # sent instantly already (or a whisper logged twice)
             Mark-Sent $id
-            $kind = $m.Groups[2].Value
-            $rest = $m.Groups[3].Value
             $cut = $rest.IndexOf('::')
             if ($cut -ge 0) { $subject = $rest.Substring(0, $cut); $text = $rest.Substring($cut + 2) }
             else { $subject = 'WatchX'; $text = $rest }
@@ -520,11 +571,12 @@ if (-not $created) { Log 'Bridge is already running – exiting.'; exit 0 }
 $sv0 = Get-SvFile
 if ($sv0) { $script:SvTime = $sv0.LastWriteTimeUtc }
 $script:WowUp = Test-WowRunning
+if ($script:WowUp) { $script:WowSince = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() }
 Log "Watching $Shots (instant), the game (logout) and $ChatLog (fallback)"
 
 while ($true) {
     Check-Shots
     Check-Exit
     Check-ChatLog
-    Start-Sleep -Milliseconds 300
+    if ($script:WowUp) { Start-Sleep -Milliseconds 300 } else { Start-Sleep -Seconds 2 }   # next to no CPU when not playing
 }

@@ -18,7 +18,8 @@ PHONE ALERTS (one-time setup)
 3. Download WatchX-Bridge.zip from  https://github.com/nintox/WatchX/releases
    Unzip it anywhere and double-click:
      Mac:      Install (Mac).command
-               (if your Mac says it can't be opened: right-click > Open)
+               (if your Mac says it can't be opened: System Settings > Privacy & Security,
+                scroll down, "Open Anyway" – on macOS 14 and older: right-click > Open)
      Windows:  Install (Windows).bat
                (SmartScreen: "More info" > "Run anyway")
    It finds the game by itself (or asks you for the _forever_ folder), copies itself to

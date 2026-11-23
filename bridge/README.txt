@@ -6,8 +6,9 @@ WoW addons can't use the internet, so this small helper does it for them.
 
 INSTALL (once)
   Mac:      double-click  Install (Mac).command
-            (if your Mac says it can't be opened: right-click > Open)
-  Windows:  double-click  Install (Windows).bat
+            (if your Mac says it can't be opened: System Settings > Privacy & Security,
+             scroll down, "Open Anyway" – on macOS 14 and older: right-click > Open)
+  Windows:  extract the zip first (right-click > Extract All), then double-click  Install (Windows).bat
             (SmartScreen: "More info" > "Run anyway")
 
 It finds World of Warcraft by itself (or asks you for the _forever_ folder), copies itself to

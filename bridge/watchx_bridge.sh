@@ -25,7 +25,7 @@ SHOTS="${NW_SHOTS:-$ROOT/Screenshots}"
 DECODE="$DIR/watchx_decode.js"
 WOW_PROC="$ROOT/World of Warcraft.app/Contents/MacOS/"
 PIDFILE="$HOME/.watchx-bridge.pid"
-WORK="${TMPDIR:-/tmp}/watchx-bridge"
+WORK="${TMPDIR:-$HOME/Library/Caches}/watchx-bridge"   # per user (never a shared /tmp folder)
 SENT_FILE="$WORK/sent"
 UA="WatchX-bridge/2.0"
 KEEP_SHOTS=30   # WatchX screenshots kept in Screenshots/WatchX
@@ -41,6 +41,14 @@ sv_get() {  # <file> <key>  (a string value)
 }
 sv_num() {  # <file> <key>  (a number value)
     sed -n "s/^[[:space:]]*\[\"$2\"\] = \([0-9][0-9]*\),[[:space:]]*\$/\1/p" "$1" | head -n 1
+}
+
+# WatchX's own key per WoW account (one game folder can hold several): only chat-log lines with one are alerts.
+known_keys() {
+    local f
+    for f in "$ROOT"/WTF/Account/*/SavedVariables/WatchX.lua; do
+        [ -f "$f" ] && sv_get "$f" bridgeKey
+    done | tr '\n' ' '
 }
 
 load_settings() {
@@ -86,8 +94,8 @@ urlencode() {  # byte by byte (bash 3.2 on macOS can't do UTF-8 bytes itself)
 
 curl_code() {  # <curl args...>  -> prints HTTP status, retries on network errors / 429 / 5xx
     local code i
-    for i in 1 2 3; do
-        code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 -A "$UA" "$@")"
+    for i in 1 2; do
+        code="$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 15 -A "$UA" "$@")"
         case "$code" in
             2*) break ;;
             429) ;;
@@ -106,8 +114,11 @@ mark_sent() {
     fi
 }
 
+ZWSP="$(printf '\342\200\213')"   # a zero-width space: breaks @mentions and [links](...) someone else wrote
 notify() {  # <kind> <subject> <text> [image]
     local kind="$1" subject="$2" text="$3" image="$4" title prio tags code
+    subject="${subject//@/@$ZWSP}" text="${text//@/@$ZWSP}"
+    subject="${subject//](/]$ZWSP(}" text="${text//](/]$ZWSP(}"
     load_settings  # always fresh URLs (changed in game + reload)
     case "$kind" in
         SPAWN)   title="$subject is up!";   prio=5; tags="rotating_light" ;;
@@ -120,6 +131,7 @@ notify() {  # <kind> <subject> <text> [image]
         AFK)     title="AFK logout soon – move!"; prio=5; tags="warning,hourglass" ;;
         LOGOUT)  title="Logging out now!";   prio=5; tags="warning" ;;
         OFFLINE) title="$subject";           prio=5; tags="electric_plug" ;;
+        CLOSED)  title="$subject";           prio=3; tags="electric_plug" ;;   # a guess (crash?): no mention
         TEST)    title="WatchX test";        prio=3; tags="test_tube" ;;
         *)       title="WatchX $kind";       prio=3; tags="bell" ;;
     esac
@@ -213,9 +225,13 @@ process_shot() {  # <file>
 }
 
 RECENT=""
+SHOTS_MTIME=""
 check_shots() {
     [ -d "$SHOTS" ] || return
-    local f name
+    local f name m
+    m="$(stat -f %Fm "$SHOTS" 2>/dev/null)"   # a new picture changes the folder: only then look inside (to the ns)
+    [ "$m" = "$SHOTS_MTIME" ] && return
+    SHOTS_MTIME="$m"
     touch "$WORK/stamp.next"
     while IFS= read -r f; do
         name="${f##*/}"
@@ -229,12 +245,17 @@ check_shots() {
 
 # ---------------------------------------------------------------- logged out / game closed
 
-wow_running() { pgrep -f "$WOW_PROC" >/dev/null 2>&1; }
+# The game's path at the start of a command line, as plain text (grep would also find its own command line).
+wow_running() {
+    ps -axo command= 2>/dev/null | P="$WOW_PROC" awk '{ sub(/^ +/, "") } index($0, ENVIRON["P"]) == 1 { f = 1 } END { exit !f }'
+}
 
-SV_MTIME="" LAST_EXIT="" WOW_UP=""
-check_exit() {
+SV_MTIME="" LAST_EXIT="" WOW_UP="" WOW_SINCE=0 WOW_CHECKED=0
+check_exit() {   # every 2 seconds (the settings file and the game process)
     local sv m why at now
     now="$(date +%s)"
+    [ $((now - WOW_CHECKED)) -lt 2 ] && return
+    WOW_CHECKED="$now"
     sv="$(sv_file)"
     if [ -n "$sv" ]; then
         m="$(stat -f %m "$sv" 2>/dev/null)"
@@ -263,14 +284,17 @@ check_exit() {
             fi
         fi
     fi
-    if wow_running; then WOW_UP=1
+    if wow_running; then
+        [ "$WOW_UP" = 1 ] || WOW_SINCE="$now"
+        WOW_UP=1
     elif [ "$WOW_UP" = 1 ]; then
         WOW_UP=0
         sleep 3   # a normal quit writes the settings file first
         sv="$(sv_file)"; at="$(sv_num "$sv" exitAt)"
-        if [ -z "$at" ] || [ $(( $(date +%s) - at )) -gt 60 ]; then
+        # a crash = no logout written since the game started (sitting at character select for a while is fine)
+        if [ -z "$at" ] || [ "$at" -lt "$WOW_SINCE" ]; then
             log "Game closed without logging out (crash?)"
-            notify OFFLINE "WoW closed" "The game closed without logging out (crash?)."
+            notify CLOSED "WoW closed" "The game closed without logging out (crash?)."
         fi
         SV_MTIME="$(stat -f %m "$sv" 2>/dev/null)"
     fi
@@ -279,11 +303,35 @@ check_exit() {
 # ---------------------------------------------------------------- slow fallback: chat log
 
 watch_chatlog() {
-    local RE='\[WatchX\]#([0-9]+) ([A-Z]+) (.*)$' line id kind rest subject text
+    # Only WatchX's own lines: "<key> [WatchX]#..." with this install's key (in any game language). Other players
+    # can type "[WatchX]#..." in Trade, but they don't know the key. Before the game has saved a key (it does at
+    # the next reload or logout) – and for the old tag without one – only a line that starts like your own
+    # "You are now Busy:" message (or a whisper you sent) counts.
+    local RE_KEY='(^|[^A-Za-z0-9])([A-Za-z0-9]+) \[WatchX\]#([0-9]+) ([A-Z]+) (.*)$'
+    local RE_MINE='^[0-9/]+ [0-9:.]+  (You are now Busy: |To [^:]+: )([A-Za-z0-9]+ )?\[WatchX\]#'
+    local RE_OLD='^[0-9/]+ [0-9:.]+  You are now Busy: \[WatchX\]#([0-9]+) ([A-Z]+) (.*)$'
+    local line id kind rest subject text now key keys
     while IFS= read -r line; do
         line="${line%$'\r'}"
-        [[ "$line" =~ $RE ]] || continue
-        id="${BASH_REMATCH[1]}" kind="${BASH_REMATCH[2]}" rest="${BASH_REMATCH[3]}"
+        case "$line" in *"[WatchX"*) ;; *) continue ;; esac
+        if [[ "$line" =~ $RE_KEY ]]; then
+            key="${BASH_REMATCH[2]}" id="${BASH_REMATCH[3]}" kind="${BASH_REMATCH[4]}" rest="${BASH_REMATCH[5]}"
+            keys=" $(known_keys) "
+            if [ "$keys" = "  " ]; then
+                [[ "$line" =~ $RE_MINE ]] || continue
+            else
+                case "$keys" in *" $key "*) ;; *) continue ;; esac
+            fi
+        elif [[ "$line" =~ $RE_OLD ]]; then
+            id="${BASH_REMATCH[1]}" kind="${BASH_REMATCH[2]}" rest="${BASH_REMATCH[3]}"
+            [ -z "$(known_keys)" ] || continue   # a key is saved: this WatchX always uses it, the old tag isn't from it
+        else
+            continue
+        fi
+        # the id is the time + 3 digits: an old line (or a strange id) is skipped
+        { [ ${#id} -ge 4 ] && [ ${#id} -le 16 ]; } || continue
+        now="$(date +%s)"
+        [ $((now - 10#${id:0:${#id}-3})) -gt 600 ] && continue
         already_sent "$id" && continue   # sent instantly already (or a whisper logged twice)
         mark_sent "$id"
         subject="${rest%%::*}" text="${rest#*::}"
@@ -308,8 +356,9 @@ if [ "$1" = "--decode" ]; then   # bash watchx_bridge.sh --decode <image>
 fi
 
 # Only one bridge at a time.
-if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
-    log "Bridge is already running (pid $(cat "$PIDFILE")) – exiting."
+OLDPID="$(cat "$PIDFILE" 2>/dev/null)"
+if [ -n "$OLDPID" ] && [ "$OLDPID" != "$$" ] && ps -p "$OLDPID" -o command= 2>/dev/null | grep -q "watchx_bridge.sh"; then
+    log "Bridge is already running (pid $OLDPID) – exiting."
     exit 0
 fi
 echo $$ > "$PIDFILE"
@@ -320,13 +369,14 @@ trap 'exit 0' TERM INT
 touch "$WORK/stamp"   # only screenshots from now on
 : > "$SENT_FILE"
 SV_MTIME="$(stat -f %m "$(sv_file)" 2>/dev/null)"
-wow_running && WOW_UP=1
+wow_running && WOW_UP=1 && WOW_SINCE="$(date +%s)"
 log "Watching $SHOTS (instant), the game (logout) and $CHATLOG (fallback)"
 
 watch_chatlog &
 
+# Quick while the game runs (alerts within a second); slower when it doesn't (next to no CPU all day).
 while true; do
     check_shots
     check_exit
-    sleep 0.3
+    if [ "$WOW_UP" = 1 ]; then sleep 0.3; else sleep 2; fi
 done

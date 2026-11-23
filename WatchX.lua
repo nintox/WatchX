@@ -14,7 +14,8 @@
 -- block in the corner (see "instant alerts"); the bridge (bridge/ in the source, WatchX-Bridge.zip on
 -- GitHub; set up once with its "Install" file, which copies it out of the game folder) sees the new file, reads the code and sends the alert to ntfy and Discord at once.
 -- Fallback when screenshots don't work: a tagged line in the chat log (/chatlog), which WoW writes in
--- big chunks (slow): [WatchX]#<id> <TYPE> <subject>::<text>
+-- big chunks (slow): <key> [WatchX]#<id> <TYPE> <subject>::<text>  (the key = db.bridgeKey, per install;
+-- in front, so bridges from before it still find "[WatchX]#")
 -- AFK: a warning 5 min before the AFK logout; the logout itself is seen by the bridge (exitWhy).
 --
 -- This file: data, detection, alerts, chat log state, session log, slash commands.
@@ -541,7 +542,10 @@ end
 -- The slow way (fallback): a tagged line in the chat log. WoW writes that file in big chunks, so it
 -- can take minutes to reach the phone – only used when screenshots don't work.
 local function Signal(kind, subject, text, epoch, ctr)
-    local msg = string.format("%s#%d%03d %s %s::%s", TAG, epoch, ctr, kind, subject, text or "")
+    -- this install's key in front: the bridge only takes chat-log lines with it (anyone can type "[WatchX]"),
+    -- and a bridge from before the key still finds the tag after it
+    local key = (type(db.bridgeKey) == "string" and db.bridgeKey ~= "") and (db.bridgeKey .. " ") or ""
+    local msg = string.format("%s%s#%d%03d %s %s::%s", key, TAG, epoch, ctr, kind, subject, text or "")
     if SendAlertLine(msg:sub(1, 240)) and ns.HasTargets() and db.chatlogOn ~= true then
         Print("|cffffd100The chat log may be off – click the yellow bar (or type /chatlog), "
             .. "otherwise alerts can't reach your phone.|r")
@@ -3642,6 +3646,11 @@ local function OnEvent(_, event, arg1, arg2, ...)
         ns.db = db
         db.exitAt, db.exitWhy = nil, nil
         if db.instantOK == false then db.instantOK = nil end   -- each session tries the instant way again
+        if type(db.bridgeKey) ~= "string" or not db.bridgeKey:find("^%w+$") then   -- once per install
+            local chars, k = "abcdefghijkmnpqrstuvwxyz23456789", {}
+            for i = 1, 12 do local n = math.random(1, #chars); k[i] = chars:sub(n, n) end
+            db.bridgeKey = table.concat(k)
+        end
         do   -- the player history kept to its size now, not in the middle of a busy nameplate moment
             local n = 0
             for _ in pairs(db.enemies or {}) do n = n + 1 end
