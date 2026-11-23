@@ -977,6 +977,10 @@ end
 
 function ns.ForgetEnemy(key)
     local fw = db.enemies[key] and db.enemies[key].wanted
+    if fw and not fw.paid and ns.WantedMine and not ns.WantedMine(fw) then
+        Print("Can't forget " .. (db.enemies[key].name or key) .. ": " .. (fw.by or "someone") .. " has a bounty on them.")
+        return false
+    end
     if fw and ns.WantedMine and ns.WantedMine(fw) then ns.RemoveWanted(key) end   -- yours: down for all
     db.enemies[key] = nil
     if ns.AvoidChanged then ns.AvoidChanged() end

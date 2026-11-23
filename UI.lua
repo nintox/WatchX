@@ -426,7 +426,11 @@ function ns.EnemyMenu(anchor, key)
         items[#items + 1] = { "|cffffa000WANTED|r – put a bounty on them", function() ns.ShowBounty(key) end }
     end
     items[#items + 1] = { r.note and "Edit note" or "Add note", function() StaticPopup_Show("WATCHX_NOTE", r.name, nil, key) end }
-    items[#items + 1] = { "|cff909090Forget this player|r", function() ns.ForgetEnemy(key) end }
+    if r.wanted and not r.wanted.paid and not ns.WantedMine(r.wanted) then   -- someone else's bounty keeps them here
+        items[#items + 1] = { "|cff606060Can't forget – " .. (r.wanted.by or "someone") .. " has a bounty on them|r", nil }
+    else
+        items[#items + 1] = { "|cff909090Forget this player|r", function() ns.ForgetEnemy(key) end }
+    end
     ns.ShowMenu(anchor, r.name, items)
 end
 
