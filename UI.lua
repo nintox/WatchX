@@ -2483,7 +2483,7 @@ local function SizeTo(f, st, cx, cy, naturalH, scaleKey, widthKey)
     local sc = f:GetScale() or 1
     if st.mode == "B" then sc = ClampScale((st.scale or sc) + ((st.y or cy) - cy) / 150) end
     db()[scaleKey] = sc
-    if st.mode ~= "B" then db()[widthKey] = math.max(60, math.floor((cx - st.left) / sc + 0.5)) end
+    if st.mode ~= "B" then db()[widthKey] = math.max(120, math.floor((cx - st.left) / sc + 0.5)) end
     f:SetScale(sc)
     f:ClearAllPoints()
     f:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", st.left / sc, st.top / sc)
@@ -2700,10 +2700,14 @@ function RefreshMini()
     mini.count = #lines
     mini.naturalH = math.max(MINI_H, 8 + #lines * LINE_H)
     if not MiniFrozen() then   -- in combat (when protected) the size waits; it's fixed right after
-        mini:SetWidth(math.max(100, 31 + nameW + (stateW > 0 and (14 + stateW) or 0) + 12, db().miniWidth or 0,
-            ns.NearbyAttachWidth and ns.NearbyAttachWidth() or 0))
+        -- the width you dragged it to wins (long text gets "..."); without one it fits the text and the Nearby list
+        local w = db().miniWidth and math.max(120, db().miniWidth)
+            or math.max(100, 31 + nameW + (stateW > 0 and (14 + stateW) or 0) + 12, ns.NearbyAttachWidth and ns.NearbyAttachWidth() or 0)
+        mini:SetWidth(w)
         mini:SetHeight(mini.naturalH)
     end
+    local roomW = (mini:GetWidth() or 200) - 31 - 12 - (stateW > 0 and (14 + stateW) or 0)
+    for _, row in ipairs(mini.rows) do row.name:SetWidth(math.max(20, roomW)) end
     if moving then
         miniLabel = miniLabel or MakeLabel("WatchXMiniLabel")
         miniLabel:Set(mini, "|cffffd100Mini bar|r · drag to move · right edge: width · bottom edge: text size (" .. Pct(mini:GetScale() or 1)
@@ -3077,7 +3081,12 @@ function ns.UnderMini(f, below)
         f:SetPoint("TOPLEFT", mini, "TOPLEFT", 0, -below)
     end
 end
-function ns.StackWidth() return mini and math.max(mini:GetWidth() or 0, NearbyWidth()) or NearbyWidth() end
+-- One width for the whole stack: the one you gave the mini bar, else the wider of the mini bar and the Nearby list.
+function ns.StackWidth()
+    if not mini then return NearbyWidth() end
+    if db().miniWidth then return mini:GetWidth() or NearbyWidth() end
+    return math.max(mini:GetWidth() or 0, NearbyWidth())
+end
 function ns.StackKey()
     return mini and (tostring(mini.visible) .. tostring(TargetShown() and not OwnSpot())) or ""
 end
