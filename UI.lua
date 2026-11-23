@@ -176,7 +176,12 @@ local function Tip(owner, title, ...)
 end
 
 local function SavePoint(frame, key)
-    local p, _, rp, x, y = frame:GetPoint()
+    local p, rel, rp, x, y = frame:GetPoint()
+    if rel and rel ~= UIParent then   -- hangs on another frame: keep where it is now, against the screen
+        local l, t = frame:GetLeft(), frame:GetTop()
+        if not (l and t) then return end
+        p, rp, x, y = "TOPLEFT", "BOTTOMLEFT", l, t
+    end
     db()[key] = { p, rp, x, y }
 end
 
@@ -2771,7 +2776,7 @@ local function BuildMini()
     m:SetScale(MiniScale())
     LoadPoint(m, "miniPoint", { "TOP", "TOP", 0, -120 })
     m:SetScript("OnMouseWheel", function(self, delta)
-        if not moving then return end
+        if not moving or InCombatLockdown() then return end
         Rescale(self, "miniScale", delta)
         SavePoint(self, "miniPoint")
         RefreshMini()
@@ -2802,15 +2807,22 @@ local function BuildMini()
     m.count = 0
     m.naturalH = MINI_H
     AddGrips(m, function(self, st, cx, cy)
+        if InCombatLockdown() then return end
         SizeTo(self, st, cx, cy, self.naturalH, "miniScale", "miniWidth")
         RefreshMini()
     end, function(self)
+        if InCombatLockdown() then return end
         SavePoint(self, "miniPoint")
         ns.UpdateTargetButton()
         ns.UpdateChatLogPrompt()
     end)
-    m:SetScript("OnDragStart", function(self) if moving then self:StartMoving() end end)
+    -- only a drag that really started moves and saves it (never a stray drag while locked, never in combat)
+    m:SetScript("OnDragStart", function(self)
+        if moving and not InCombatLockdown() then self.dragging = true; self:StartMoving() end
+    end)
     m:SetScript("OnDragStop", function(self)
+        if not self.dragging then return end
+        self.dragging = nil
         self:StopMovingOrSizing()
         if ns.Snap then ns.Snap(self) end
         SavePoint(self, "miniPoint")
@@ -2819,7 +2831,7 @@ local function BuildMini()
     end)
     m:SetScript("OnClick", function(_, button)
         if moving then   -- unlocked: dragging only; right-click puts the size back
-            if button == "RightButton" then
+            if button == "RightButton" and not InCombatLockdown() then
                 db().miniScale, db().miniWidth = nil, nil
                 SetScaleKeepTop(mini, 1)
                 SavePoint(mini, "miniPoint")
@@ -2976,8 +2988,10 @@ local function BuildAlertSpot()
         local x, top, sc = self:GetCenter(), self:GetTop(), self:GetScale() or 1
         if x and top then db().alertPoint = { x = x * sc, top = top * sc } end
     end
-    f:SetScript("OnDragStart", f.StartMoving)
+    f:SetScript("OnDragStart", function(self) self.dragging = true; self:StartMoving() end)
     f:SetScript("OnDragStop", function(self)
+        if not self.dragging then return end
+        self.dragging = nil
         self:StopMovingOrSizing()
         if ns.Snap then ns.Snap(self) end
         Remember(self)
@@ -3060,9 +3074,12 @@ function ns.ToggleUnlock()
     if moving then ns.StopMove() else ns.StartMove() end
 end
 
-function ns.StopMove()
+function ns.StopMove(why)
     if not moving then return end
     moving = false
+    for _, f in ipairs({ mini, alertSpot or false, ns.levelFrame or false }) do   -- (the list and card: NearbyMove)
+        if f and f.dragging then f.dragging = nil; f:StopMovingOrSizing() end   -- a drag still going (a fight starts)
+    end
     if ns.ShowGrid then ns.ShowGrid(false) end
     mini:SetFrameStrata("MEDIUM")
     mini:EnableMouseWheel(false)   -- otherwise it eats camera zoom
@@ -3076,7 +3093,7 @@ function ns.StopMove()
     if ns.NearbyMove then ns.NearbyMove(false) end
     if ns.LevelMove then ns.LevelMove(false) end
     if ns.EatingMove then ns.EatingMove(false) end
-    ns.Print("Locked.")
+    ns.Print(why or "Locked.")
     ns.RefreshUI()
     ns.UpdateTargetButton()
     ns.UpdateChatLogPrompt()
@@ -3189,11 +3206,10 @@ local function BuildNearby()
     -- ms and fps after the title, once a second (two cheap calls): green / yellow / red by how good it is
     f.stats = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     f.stats:SetPoint("RIGHT", f.count, "LEFT", -8, 0)   -- left of the count, so the two never overlap
-    local statsT = 1
-    f:HookScript("OnUpdate", function(self, elapsed)
-        statsT = statsT + elapsed
-        if statsT < 1 then return end
-        statsT = 0
+    -- a timer, not a check every frame; nothing to do while the list is hidden
+    local function Stats()
+        local self = f
+        if not self:IsShown() then return end
         if db().nearbyStats == false then self.stats:SetText("") return end
         local ms = select(4, GetNetStats())
         ms = tonumber(ms) or 0
@@ -3204,7 +3220,9 @@ local function BuildNearby()
         -- no room next to the title: leave it out rather than write over it
         local tr, sl = self.title:GetRight(), self.stats:GetLeft()
         if tr and sl and sl < tr + 4 then self.stats:SetText("") end
-    end)
+    end
+    if C_Timer and C_Timer.NewTicker then C_Timer.NewTicker(1, function() ns.Safe("nearby stats", Stats) end) end
+    f:HookScript("OnShow", function() ns.Safe("nearby stats", Stats) end)   -- right away when it comes up
     f.empty = f:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
     f.empty:SetPoint("TOPLEFT", f, "TOPLEFT", 9, -26)
     f.empty:SetText("No enemy players seen")
@@ -3250,15 +3268,17 @@ local function BuildNearby()
     end)
     f:SetScript("OnLeave", GameTooltip_Hide)
     f:SetScript("OnDragStart", function(self)
-        if moving and not self.attached and not InCombatLockdown() then self:StartMoving() end
+        if moving and not self.attached and not InCombatLockdown() then self.dragging = true; self:StartMoving() end
     end)
     f:SetScript("OnDragStop", function(self)
+        if not self.dragging then return end   -- a stray drag (locked, attached, in combat) doesn't touch it
+        self.dragging = nil
         self:StopMovingOrSizing()
         if ns.Snap then ns.Snap(self) end
         SavePoint(self, "nearbyPoint")
     end)
     f:SetScript("OnMouseWheel", function(self, delta)
-        if not moving or InCombatLockdown() then return end
+        if not moving or self.attached or InCombatLockdown() then return end   -- attached: sized with the mini bar
         Rescale(self, "nearbyScale", delta)
         SavePoint(self, "nearbyPoint")
         if ns.NearbyLabel then ns.NearbyLabel() end
@@ -3268,14 +3288,15 @@ local function BuildNearby()
         SizeTo(self, st, cx, cy, self:GetHeight(), "nearbyScale", "nearbyWidth")
         self:SetWidth(NearbyWidth())
         if ns.NearbyLabel then ns.NearbyLabel() end
-    end, function(self) SavePoint(self, "nearbyPoint") end)
+    end, function(self) if not InCombatLockdown() then SavePoint(self, "nearbyPoint") end end)
     f:Hide()
     return f
 end
 
 -- Attached: the list hangs under the mini bar – same width and size, it moves with it. (Not in combat:
--- the list holds secure rows, so it can't be moved then.)
-function Attached() return db().nearbyAttach ~= false and mini ~= nil end
+-- the list holds secure rows, so it can't be moved then.) Only with the list switched on: a list hanging
+-- under it makes the mini bar count as protected in combat.
+function Attached() return db().nearbyAttach ~= false and db().nearby and mini ~= nil and true or false end
 
 function ns.NearbyAttachWidth()   -- what the mini bar should be at least, so the two line up
     if not (nb and Attached() and db().nearby and nb:IsShown()) then return 0 end
@@ -3302,14 +3323,15 @@ end
 function ns.StackWidth()
     if not mini then return NearbyWidth() end
     if db().miniWidth then return mini:GetWidth() or NearbyWidth() end
-    return math.max(mini:GetWidth() or 0, NearbyWidth())
+    return math.max(mini:GetWidth() or 0, ns.NearbyAttachWidth())   -- (a list that isn't there doesn't widen it)
 end
 function ns.StackKey()
     return mini and (tostring(mini.visible) .. tostring(TargetShown() and not OwnSpot())) or ""
 end
 
 function ns.AttachNearby()
-    if ns.PlaceXPBar then ns.PlaceXPBar() end
+    -- in a fight the attached list can't move: the XP bar above it stays put too, so it can't slide over the list
+    if ns.PlaceXPBar and not (InCombatLockdown() and nb and nb.attached) then ns.PlaceXPBar() end
     if not nb or InCombatLockdown() then return end
     if Attached() then
         local sc = mini:GetScale() or 1
@@ -3359,7 +3381,8 @@ local PlaceToast
 local function RefreshNearby()
     if not nb then return end
     nb:SetAlpha((not moving and ns.NearbyZoneMode() == "fade") and 0.35 or 1)   -- alpha is fine in combat
-    if toast and toast:IsShown() and PlaceToast then PlaceToast() end
+    -- the warning card follows the list once it's shown/hidden and placed (out of combat: it can't move then)
+    local function Card() if toast and toast:IsShown() and PlaceToast then PlaceToast() end end
     local d = db()
     local combat = InCombatLockdown()
     local list = d.nearby and ns.NearbyList() or {}
@@ -3372,13 +3395,14 @@ local function RefreshNearby()
         local zone = ns.NearbyZoneMode()
         local want = d.nearby and (moving or (zone ~= "hide" and (#list > 0 or d.nearbyShowEmpty == true)))
         nb:SetShown(want and true or false)
-        if not want then nb.rowSig = nil return end
+        if not want then nb.rowSig = nil; Card() return end
         local n = math.min(#list, NearbyMax())
         local keys = {}
         for i = 1, n do keys[i] = list[i].key end
         local sig = table.concat(keys, "|") .. "#" .. n .. tostring(moving)
         if sig == nb.rowSig then   -- the same players: just repaint what changed
             for i = 1, n do PaintNearbyRow(nb.rows[i], list[i], now) end
+            Card()
             return
         end
         nb.rowSig = sig
@@ -3392,23 +3416,29 @@ local function RefreshNearby()
         nb.empty:Hide()   -- empty = just the header, no text
         nb:SetHeight(n > 0 and (26 + n * NB_ROW_H) or 24)
         if nb.attached or Attached() then ns.AttachNearby() else nb:SetWidth(NearbyWidth()) end
+        Card()
     elseif nb:IsShown() then
         nb.rowSig = nil   -- redo the rows properly after the fight
         -- secure rows can't change in combat: each row keeps its player, newcomers fill the empty rows
+        -- (shown only – a click there does nothing until the fight is over)
         local onRow = {}
         for _, r in ipairs(nb.rows) do
             local e = r.key and ns.nearby[r.key]
             if e then PaintNearbyRow(r, e, now); onRow[e.key] = true end
         end
-        local i = 1
+        local i, painted = 1, {}
         for _, e in ipairs(list) do
             if not onRow[e.key] then
                 while nb.rows[i] and nb.rows[i].key do i = i + 1 end
                 local r = i <= NearbyMax() and nb.rows[i]
                 if not r then break end
                 PaintNearbyRow(r, e, now)
+                painted[r] = true
                 i = i + 1
             end
+        end
+        for _, r in ipairs(nb.rows) do   -- a newcomer that left again: its row empties (alpha is fine in combat)
+            if not r.key and not painted[r] and r.shownKey then r.shownKey = nil; r:SetAlpha(0) end
         end
         nb.empty:Hide()
     end
@@ -3448,6 +3478,7 @@ function PlaceToast()
         toast:SetWidth(math.max(200, toast.name:GetStringWidth() + 60, toast.head:GetStringWidth() + 60))
         toast.docked = false
     end
+    if ns.PlaceCard then ns.PlaceCard() end   -- the click on it goes along (out of combat)
 end
 
 function ns.ShowStealthToast(e, kind)
@@ -3458,11 +3489,16 @@ function ns.ShowStealthToast(e, kind)
         toast:SetMovable(true)
         toast:SetClampedToScreen(true)
         toast:RegisterForDrag("LeftButton")
-        toast:SetScript("OnDragStart", function(self) if moving and not self.docked then self:StartMoving() end end)
+        toast:SetScript("OnDragStart", function(self)
+            if moving and not self.docked and not InCombatLockdown() then self.dragging = true; self:StartMoving() end
+        end)
         toast:SetScript("OnDragStop", function(self)
+            if not self.dragging then return end
+            self.dragging = nil
             self:StopMovingOrSizing()
             if ns.Snap then ns.Snap(self) end
             SavePoint(self, "toastPoint")
+            if ns.PlaceCard then ns.PlaceCard() end
         end)
         Flat(toast)
         toast.edge = toast:CreateTexture(nil, "BORDER")
@@ -3483,10 +3519,18 @@ function ns.ShowStealthToast(e, kind)
         toast:SetScript("OnUpdate", function(self)
             if moving and self.sample then self:SetAlpha(1) return end   -- stays while unlocked
             if self.waitCombat and InCombatLockdown() then self:SetAlpha(1) return end   -- clickable after combat
+            -- its secure click can't be taken away in a fight: the card stays up as long as that click is there,
+            -- so what you click is what you see
+            if self.armed and InCombatLockdown() then self:SetAlpha(1) return end
             local left = (self.untilT or 0) - GetTime()
             if left <= 0 then self:Hide() elseif left < 1 then self:SetAlpha(left) end
         end)
         toast:SetScript("OnHide", function() if ns.DisarmCard then ns.DisarmCard() end end)
+    end
+    -- a card with a click on it can't change player in a fight: the newest one waits until it's over
+    if InCombatLockdown() and toast.armed and toast:IsShown() and not e.sample then
+        toast.queue = function() return ns.ShowStealthToast(e, kind) end
+        return false
     end
     local k = TOAST_KINDS[kind or "stealth"] or TOAST_KINDS.stealth
     toast.head:SetText(k.head)
@@ -3522,7 +3566,10 @@ function ns.ShowStealthToast(e, kind)
         else
             ns.ArmCard()
         end
+    elseif ns.DisarmCard then
+        ns.DisarmCard()   -- the example card: no click left over from the last one
     end
+    return true
 end
 
 -- Click the card = target the player. The card itself isn't secure (it moves and fades freely), so a
@@ -3545,7 +3592,7 @@ function ns.ArmCard()
             if button == "RightButton" and toast and not InCombatLockdown() then toast:Hide() end
         end)
         cardBtn:SetScript("OnEnter", function(self)
-            local p = toast and toast.player
+            local p = self.player   -- the one its click targets (the card may show someone newer)
             Tip(self, p and p.name or "?", "|cffffd100Click:|r target", "|cffffd100Right-click:|r dismiss")
         end)
         cardBtn:SetScript("OnLeave", GameTooltip_Hide)
@@ -3554,19 +3601,32 @@ function ns.ArmCard()
         end)
     end
     cardBtn:SetAttribute("macrotext1", ns.TargetMacro(e.first or e.name, e.name, e.key or e.name))
-    local l, t, r, b = toast:GetLeft(), toast:GetTop(), toast:GetRight(), toast:GetBottom()
-    if not (l and t and r and b) then return end
-    local sc = toast:GetScale() or 1
-    cardBtn:ClearAllPoints()
-    cardBtn:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", l * sc, t * sc)
-    cardBtn:SetSize((r - l) * sc, (t - b) * sc)
+    cardBtn.player = e
+    if not ns.PlaceCard() then return end
     cardBtn:Show()
+    toast.armed = true
     toast.hint:SetText("click: target")
     toast.waitCombat = false
 end
 
+-- Lay the click exactly over the card (out of combat only: it's a secure button). False when the card has no spot yet.
+function ns.PlaceCard()
+    if not (cardBtn and toast) or InCombatLockdown() then return false end
+    local l, t, r, b = toast:GetLeft(), toast:GetTop(), toast:GetRight(), toast:GetBottom()
+    if not (l and t and r and b) then return false end
+    local sc = toast:GetScale() or 1
+    cardBtn:ClearAllPoints()
+    cardBtn:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", l * sc, t * sc)
+    cardBtn:SetSize((r - l) * sc, (t - b) * sc)
+    return true
+end
+
 function ns.DisarmCard()
-    if cardBtn and not InCombatLockdown() then cardBtn:Hide() end
+    if cardBtn and not InCombatLockdown() then
+        cardBtn:Hide()
+        cardBtn.player = nil
+        if toast then toast.armed = nil end
+    end
 end
 
 -- A KOS player showed up: the KOS card always wins, with a sound.
@@ -3583,8 +3643,14 @@ function ns.OnWantedSeen(e, w)
     local rw = ns.WantedReward(w)
     ns.Print("|cffffa000WANTED|r nearby: " .. e.name .. (rw and (" – " .. rw) or "") .. (w.by and (" (from " .. w.by .. ")") or ""))
     if db().stealthSound ~= false then PlaySound(SOUNDKIT.RAID_WARNING, "Master") end
-    ns.ShowStealthToast(e, "wanted")
-    if toast and rw then toast.head:SetText("WANTED!  " .. rw) end
+    local function Card()   -- (waits until the fight is over when a card with a click is up)
+        if not ns.ShowStealthToast(e, "wanted") then
+            if toast then toast.queue = Card end
+        elseif rw then
+            toast.head:SetText("WANTED!  " .. rw)
+        end
+    end
+    Card()
 end
 
 -- Bounty news as a card, like the stealth one: kind = bountyNew / bountyKill / bountyOwe / bountyPaid.
@@ -3592,12 +3658,18 @@ end
 function ns.BountyCard(kind, who, reward, from, class)
     local k = TOAST_KINDS[kind]
     if not k then return false end
-    ns.ShowStealthToast({ name = who or "?", class = class }, kind)
+    local function Card()   -- (waits until the fight is over when a card with a click is up)
+        if not ns.ShowStealthToast({ name = who or "?", class = class }, kind) then
+            if toast then toast.queue = Card end
+            return
+        end
+        toast.head:SetText(k.head .. (reward and ("   " .. reward) or ""))
+        toast.hint:SetText(from and ("|cffcccccc" .. from .. "|r") or "")
+        toast.untilT = GetTime() + 9
+        toast.bountyUntil = toast.untilT   -- a new-enemy card doesn't push it away
+    end
+    Card()
     if not toast then return false end
-    toast.head:SetText(k.head .. (reward and ("   " .. reward) or ""))
-    toast.hint:SetText(from and ("|cffcccccc" .. from .. "|r") or "")
-    toast.untilT = GetTime() + 9
-    toast.bountyUntil = toast.untilT   -- a new-enemy card doesn't push it away
     local snd = SOUNDKIT and (SOUNDKIT.LOOT_WINDOW_COIN_SOUND or SOUNDKIT.RAID_WARNING)
     if snd and db().stealthSound ~= false then pcall(PlaySound, snd, "Master") end
     return true
@@ -3631,8 +3703,13 @@ end
 
 function ns.NearbyMove(on)
     if not nb or InCombatLockdown() then return end
+    if not on then   -- a drag still going (a fight starts): stopped while that's still allowed
+        for _, f in ipairs({ nb, toast or false }) do
+            if f and f.dragging then f.dragging = nil; f:StopMovingOrSizing() end
+        end
+    end
     ShowGrips(nb, on and db().nearby and not nb.attached)
-    nb:EnableMouseWheel(on and true or false)
+    nb:EnableMouseWheel((on and not nb.attached) and true or false)   -- attached: sized with the mini bar
     if on and db().nearby then
         nbLabel = nbLabel or MakeLabel("WatchXNearbyLabel")
         RefreshNearby()
@@ -3787,6 +3864,8 @@ local function BarSpot()
     if nb and nb.attached and nb:IsShown() and nb:GetBottom() then   -- under the list that hangs under it
         return x, nb:GetBottom() * (nb:GetScale() or 1) - 2
     end
+    local xpBottom = ns.XPBarBottom and ns.XPBarBottom()   -- or under the small XP bar there
+    if xpBottom then return x, xpBottom - 2 end
     if TargetShown() and not OwnSpot() then return x, top - TARGET_H * AlertScale() - 2 end
     if mini.visible then return x, bottom - 2 end
     return x, top
@@ -4365,7 +4444,12 @@ local function RefreshUIInner()
     if ns.RefreshAvoidCount and nearbyPage and nearbyPage:IsShown() then ns.RefreshAvoidCount() end
     local wasShown = TargetShown()
     ns.UpdateTargetButton()
-    if (TargetShown() or false) ~= (wasShown or false) then ns.UpdateChatLogPrompt() end
+    -- the red bar came or went: the stack under it moves now (it was placed before the bar changed)
+    if (TargetShown() or false) ~= (wasShown or false) and ns.AttachNearby then ns.AttachNearby() end
+    -- the yellow bar sits under the stack: placed again whenever the stack's bottom moved (a line more, the list…)
+    local bx, btop = BarSpot()
+    local spot = math.floor(bx + 0.5) .. ":" .. math.floor(btop + 0.5)
+    if spot ~= ns.barSpotKey then ns.barSpotKey = spot; ns.UpdateChatLogPrompt() end
     if panel and panel:IsShown() then RefreshPanel() end
 end
 -- Guarded: an error is shown once in chat (and in /wx log) instead of stopping the bars and the panel.
@@ -4388,15 +4472,26 @@ end
 -- a chat log bar that couldn't be made or moved in combat is done once combat ends
 local uiEvents = CreateFrame("Frame")
 uiEvents:RegisterEvent("PLAYER_REGEN_ENABLED")
-uiEvents:SetScript("OnEvent", ns.Timed(function()
+uiEvents:RegisterEvent("PLAYER_REGEN_DISABLED")
+uiEvents:SetScript("OnEvent", ns.Timed(function(_, event)
     if not ns.db then return end
-    if toast and toast:IsShown() and toast.waitCombat then
+    if event == "PLAYER_REGEN_DISABLED" then
+        -- a fight starts (the last moment protected frames may still change): unlocked bars lock now
+        if moving then ns.StopMove("Locked – a fight started (the bars can't move in combat).") end
+        return
+    end
+    if toast and toast.queue then   -- the newest card, which waited for the fight to end
+        local q = toast.queue
+        toast.queue = nil
+        q()
+    elseif toast and toast:IsShown() and toast.waitCombat then
         toast.untilT = GetTime() + 6
         ns.ArmCard()
     elseif not (toast and toast:IsShown()) then
         ns.DisarmCard()   -- a card that went away during combat
     end
     if not nb then nb = BuildNearby() end
+    if ns.layoutPending then ns.layoutPending = nil; ns.ApplyLayout() end   -- a profile switched during the fight
     RefreshNearby()
     ns.UpdateTargetButton()
     if promptPending then ns.UpdateChatLogPrompt() end
@@ -4404,17 +4499,26 @@ end, "UI events"))
 
 -- After a profile switch: the bars' spot and size, and the settings page if it's open.
 function ns.ApplyLayout()
+    if InCombatLockdown() then ns.layoutPending = true end   -- what can't change in a fight is done right after it
     if mini and not MiniFrozen() then
         mini:SetScale(MiniScale())
         LoadPoint(mini, "miniPoint", { "TOP", "TOP", 0, -120 })
+        mini.sig = nil
         RefreshMini()
     end
     ns.UpdateTargetButton()
     if nb and not InCombatLockdown() then
-        nb:SetScale(NearbyScale())
-        LoadPoint(nb, "nearbyPoint", { "TOPRIGHT", "TOPRIGHT", -240, -220 })
+        nb.rowSig = nil   -- the rows and the spot are worked out again
+        if Attached() or nb.attached then ns.AttachNearby() end   -- under the mini bar, or back to its own spot
+        if not nb.attached then
+            nb:SetScale(NearbyScale())
+            nb:SetWidth(NearbyWidth())
+            LoadPoint(nb, "nearbyPoint", { "TOPRIGHT", "TOPRIGHT", -240, -220 })
+        end
         RefreshNearby()
     end
+    if ns.ApplyLevelLayout then ns.ApplyLevelLayout() end
+    if toast and toast:IsShown() and not InCombatLockdown() then PlaceToast() end
     for _, pg in ipairs({ settingsPage or false, settingsPage and settingsPage.alerts or false }) do
         if pg and pg:IsShown() then
             local fn = pg:GetScript("OnShow")
@@ -4721,15 +4825,20 @@ local function BuildLevel()
             "|cffffd100Right-click:|r settings  ·  gone at level " .. ns.MaxLevel())
     end)
     f:SetScript("OnLeave", GameTooltip_Hide)
-    f:SetScript("OnDragStart", function(self) if moving then self:StartMoving() end end)
+    -- (secure icons inside: it can't move in a fight, and a stray drag while locked doesn't move or save it)
+    f:SetScript("OnDragStart", function(self)
+        if moving and not InCombatLockdown() then self.dragging = true; self:StartMoving() end
+    end)
     f:SetScript("OnDragStop", function(self)
+        if not self.dragging then return end
+        self.dragging = nil
         self:StopMovingOrSizing()
         if ns.Snap then ns.Snap(self) end
         SavePoint(self, "levelPoint")
         LevelLabel()
     end)
     f:SetScript("OnMouseWheel", function(self, delta)
-        if not moving then return end
+        if not moving or InCombatLockdown() then return end
         Rescale(self, "levelScale", delta)
         SavePoint(self, "levelPoint")
         LevelLabel()
@@ -4754,6 +4863,7 @@ local function BuildLevel()
     end
     -- any edge only changes the size (the icons keep their shape); the top-left corner stays put
     AddGrips(f, function(self, st, cx, cy)
+        if InCombatLockdown() then return end
         local sc
         if st.mode == "R" then sc = ClampScale((cx - st.left) / (self.naturalW or LevelWidth(3)))
         else sc = ClampScale((st.top - cy) / LV_H) end
@@ -4762,7 +4872,7 @@ local function BuildLevel()
         self:ClearAllPoints()
         self:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", st.left / sc, st.top / sc)
         LevelLabel()
-    end, function(self) SavePoint(self, "levelPoint") end)
+    end, function(self) if not InCombatLockdown() then SavePoint(self, "levelPoint") end end)
     f:Hide()
     return f
 end
@@ -4864,6 +4974,11 @@ local lvEvents = CreateFrame("Frame")
 lvEvents:RegisterEvent("PLAYER_REGEN_DISABLED")
 lvEvents:RegisterEvent("PLAYER_REGEN_ENABLED")
 lvEvents:SetScript("OnEvent", function(_, event) ns.Safe("xp boosts", function()
+    if event == "PLAYER_REGEN_ENABLED" and ns.levelPending and ns.db then   -- a reload in a fight: made now
+        ns.levelPending = nil
+        lv = BuildLevel()
+        ns.levelFrame = lv
+    end
     if not (ns.db and lv) then return end
     if event == "PLAYER_REGEN_DISABLED" then
         if lvMenu then lvMenu:Hide() end
@@ -4877,7 +4992,7 @@ lvEvents:SetScript("OnEvent", function(_, event) ns.Safe("xp boosts", function()
 end) end)
 
 function ns.LevelMove(on)
-    if not lv then return end
+    if not lv or InCombatLockdown() then return end
     ShowGrips(lv, on)
     lv:EnableMouseWheel(on and true or false)
     if not on then
@@ -4886,6 +5001,15 @@ function ns.LevelMove(on)
     end
     ns.RefreshLevel()
     if ns.XPBarMove then ns.XPBarMove(on) end
+end
+
+-- A profile switch: its spot and size (out of combat – it holds secure icons).
+function ns.ApplyLevelLayout()
+    if not lv or InCombatLockdown() then return end
+    lv:SetScale(LevelScale())
+    LoadPoint(lv, "levelPoint", { "TOPRIGHT", "TOPRIGHT", -240, -440 })
+    lv.painted = nil
+    ns.RefreshLevel()
 end
 
 -- ---------------------------------------------------------------- XP bar (until max level)
@@ -5072,9 +5196,12 @@ end
         f.bot2:SetWordWrap(false)
         f:EnableMouse(true)
         f:RegisterForDrag("LeftButton")
-        f:SetScript("OnDragStart", function(self) if moving and not self.compact then self:StartMoving() end end)
+        f:SetScript("OnDragStart", function(self)
+            if moving and not self.compact then self.dragging = true; self:StartMoving() end
+        end)
         f:SetScript("OnDragStop", function(self)
-            if self.compact then return end
+            if not self.dragging then return end   -- a stray drag while locked doesn't move or save it
+            self.dragging = nil
             self:StopMovingOrSizing()
             if ns.Snap then ns.Snap(self) end
             SavePoint(self, "xpBarPoint")
@@ -5115,6 +5242,12 @@ end
     function ns.XPBarSlot()
         if xb and xb.compact and xb:IsShown() then return (xb:GetHeight() or 0) + 1 end
         return 0
+    end
+    -- the bottom of the small one in the stack (UIParent units), for the yellow bar under it
+    function ns.XPBarBottom()
+        if not (xb and xb.compact and xb:IsShown()) then return nil end
+        local b = xb:GetBottom()
+        return b and b * (xb:GetScale() or 1) or nil
     end
     local function Position()
         xb:ClearAllPoints()
@@ -5212,8 +5345,11 @@ end
 
     function ns.XPBarMove(on)
         if not xb then return end
+        if not on and xb.dragging then xb.dragging = nil; xb:StopMovingOrSizing() end
         ShowGrips(xb, on and not xb.compact)
-        if not on and not xb.compact then SavePoint(xb, "xpBarPoint") end
+        -- saved only when it has its own spot (dragged there): one still hanging under the icons keeps following them
+        local rel = select(2, xb:GetPoint())
+        if not on and not xb.compact and (rel == nil or rel == UIParent) then SavePoint(xb, "xpBarPoint") end
         ns.RefreshXPBar()
     end
     function ns.ResetXPBar()
@@ -5223,49 +5359,56 @@ end
         ns.RefreshXPBar()
     end
 
-    -- XP this session (level-ups included), time this level (/played, without the chat lines), quests.
+    -- XP this session (level-ups included), time this level, quests.
+    -- Time this level: /played is asked once per character (it prints its two lines in chat, as if you typed it –
+    -- the chat windows aren't touched), then counted here and kept per character in the saved settings.
+    local function PlayedKey() return (UnitName("player") or "?") .. "-" .. ((GetRealmName and GetRealmName()) or "") end
+    local function SavePlayed(level)   -- level: the new one at a level-up (UnitLevel still says the old one then)
+        if not (ns.db and played.level and played.at) then return end
+        if type(ns.db.playedLevel) ~= "table" then ns.db.playedLevel = {} end
+        ns.db.playedLevel[PlayedKey()] = { lvl = level or N(UnitLevel("player")) or 0, secs = played.level + (time() - played.at) }
+    end
     local ev = CreateFrame("Frame")
     for _, e in ipairs({ "PLAYER_ENTERING_WORLD", "PLAYER_XP_UPDATE", "PLAYER_LEVEL_UP", "UPDATE_EXHAUSTION",
-                         "QUEST_LOG_UPDATE", "TIME_PLAYED_MSG" }) do
+                         "QUEST_LOG_UPDATE", "TIME_PLAYED_MSG", "PLAYER_LOGOUT" }) do
         pcall(ev.RegisterEvent, ev, e)
     end
     local asked
-    -- the clocks on it, once a second (cheap: quests every 30 s, looking for Blizzard's bar every 10 s until found)
-    local tick = 0
-    ev:SetScript("OnUpdate", function(_, elapsed)
-        tick = tick + elapsed
-        if tick >= 1 then tick = 0; ns.Safe("xp bar", ns.RefreshXPBar) end
-    end)
+    -- the clocks on it, once a second (a timer, not a check every frame; quests at most every 30 s or when they changed)
+    if C_Timer and C_Timer.NewTicker then
+        C_Timer.NewTicker(1, function() ns.Safe("xp bar", ns.RefreshXPBar) end)
+    end
     ev:SetScript("OnEvent", function(_, event, a1, a2) ns.Safe("xp bar", function()
-        if event == "PLAYER_XP_UPDATE" or event == "PLAYER_LEVEL_UP" or event == "PLAYER_ENTERING_WORLD" then
+        if event == "QUEST_LOG_UPDATE" then
+            -- comes in bursts: the quest log is read on the next tick (within a second), once
+            quests.at = math.min(quests.at, GetTime() - 29.5)   -- read on the first refresh half a second on
+            return
+        elseif event == "PLAYER_LOGOUT" then
+            SavePlayed()
+            return
+        elseif event == "PLAYER_XP_UPDATE" or event == "PLAYER_LEVEL_UP" or event == "PLAYER_ENTERING_WORLD" then
             local cur, max = N(UnitXP("player")) or 0, N(UnitXPMax("player")) or 0
             if lastXP then
                 local gain = (cur >= lastXP) and (cur - lastXP) or ((lastMax or 0) - lastXP + cur)
                 if gain > 0 and gain < max * 2 then session.xp = session.xp + gain end
             end
             lastXP, lastMax = cur, max
-            if event == "PLAYER_LEVEL_UP" then played.level, played.at = 0, time() end
-            if event == "PLAYER_ENTERING_WORLD" and not asked and RequestTimePlayed then
-                asked = true
-                C_Timer.After(4, function()
-                    -- ask quietly: the chat windows print /played, so they don't hear this one answer
-                    local muted = {}
-                    for i = 1, (NUM_CHAT_WINDOWS or 10) do
-                        local cf = _G["ChatFrame" .. i]
-                        if cf and cf.IsEventRegistered and cf:IsEventRegistered("TIME_PLAYED_MSG") then
-                            cf:UnregisterEvent("TIME_PLAYED_MSG")
-                            muted[#muted + 1] = cf
-                        end
-                    end
-                    pcall(RequestTimePlayed)
-                    C_Timer.After(3, function() for _, cf in ipairs(muted) do cf:RegisterEvent("TIME_PLAYED_MSG") end end)
-                end)
+            if event == "PLAYER_LEVEL_UP" then
+                played.level, played.at = 0, time()
+                SavePlayed(N(a1))
             end
-        elseif event == "TIME_PLAYED_MSG" then
+            if event == "PLAYER_ENTERING_WORLD" and not asked then
+                asked = true
+                local saved = ns.db and type(ns.db.playedLevel) == "table" and ns.db.playedLevel[PlayedKey()]
+                if type(saved) == "table" and saved.lvl == N(UnitLevel("player")) and N(saved.secs) then
+                    played.level, played.at = N(saved.secs), time()   -- counted on from last time
+                elseif RequestTimePlayed then
+                    C_Timer.After(4, function() pcall(RequestTimePlayed) end)   -- once for this character
+                end
+            end
+        elseif event == "TIME_PLAYED_MSG" then   -- (also when you type /played: it sets the clock right)
             local lvlTime = N(a2)
-            if lvlTime then played.level, played.at = lvlTime, time() end
-        elseif event == "QUEST_LOG_UPDATE" then
-            quests.at = 0
+            if lvlTime then played.level, played.at = lvlTime, time(); SavePlayed() end
         end
         ns.RefreshXPBar()
     end) end)
@@ -5276,7 +5419,7 @@ end)()
 -- or mana you'll get – and whether you'll be full. The rate comes from the buff's text ("... mana per second"), or is
 -- measured while you sit. Moves with the other bars (Unlock). Its own function: the main chunk is at the locals limit.
 do (function()
-    local f, ft
+    local f, ft, Draw
     local KINDS = { Food = "hp", Drink = "mp", ["Food & Drink"] = "both", Refreshment = "both" }
     local seen = {}   -- kind -> { start value, start time } while it's up
 
@@ -5350,9 +5493,13 @@ do (function()
         return { kind = "bag", stacks = stacks, left = math.max(0, nextAt - now), full = math.max(0, nextAt - now) + (2 - stacks) * 60 }
     end
 
-    local function Find()
-        local out = {}
-        if not (C_UnitAuras and C_UnitAuras.GetAuraDataByIndex) then return out end
+    -- One look at your buffs: when they change (UNIT_AURA, gathered), not on every tick. The ticks work out the
+    -- times from it (the end times don't change between two looks).
+    local scan
+    local function Scan()
+        local s = { list = {} }
+        scan = s
+        if not (C_UnitAuras and C_UnitAuras.GetAuraDataByIndex) then return s end
         for i = 1, 40 do
             local ok, a = pcall(C_UnitAuras.GetAuraDataByIndex, "player", i, "HELPFUL")
             if not ok or type(a) ~= "table" then break end
@@ -5362,22 +5509,31 @@ do (function()
             local lower = name and name:lower() or ""
             -- the fire's own buff (with a clock, by the fire); "Campfire Nearby" reaches far and lingers: only a hint
             if not kind and lower:find("campfire", 1, true) then
-                if lower:find("nearby", 1, true) then out.nearFire = true else kind = "fire" end
+                if lower:find("nearby", 1, true) then s.nearFire = true else kind = "fire" end
             end
             -- lying on the bag: Forever gives "Resting" (no end); a "sleep" buff counts too
             if not kind and (lower == "resting" or N(a.spellId) == 1331671
-                    or (lower:find("sleep", 1, true) and not lower:find("well", 1, true))) then out.lying = true end
+                    or (lower:find("sleep", 1, true) and not lower:find("well", 1, true))) then s.lying = true end
             if lower == "well-rested" or lower == "well rested" or N(a.spellId) == 429959 then
-                out.wr = math.max(out.wr or 0, N(a.applications) or 1)
-                -- each new stack gives it its full time again: how long since the last stack
+                s.wr = math.max(s.wr or 0, N(a.applications) or 1)
+                -- each new stack gives it its full time again: its end time says how long since the last stack
                 local ex, dur = N(a.expirationTime), N(a.duration)
-                if ex and ex > 0 and dur and dur > 0 then out.wrAge = math.max(0, dur - (ex - GetTime())) end
+                if ex and ex > 0 and dur and dur > 0 then s.wrEx, s.wrDur = ex, dur end
             end
             if kind then
-                local ex = N(a.expirationTime)
-                local left = (ex and ex > 0) and math.max(0, ex - GetTime()) or nil   -- 0 = no end
-                out[#out + 1] = { kind = kind, index = i, icon = a.icon, left = left, dur = N(a.duration) }
+                s.list[#s.list + 1] = { kind = kind, index = i, icon = a.icon, ex = N(a.expirationTime), dur = N(a.duration) }
             end
+        end
+        return s
+    end
+
+    local function Find()
+        local s = scan or Scan()
+        local now = GetTime()
+        local out = {}
+        for _, a in ipairs(s.list) do
+            local left = (a.ex and a.ex > 0) and math.max(0, a.ex - now) or nil   -- nil = no end
+            out[#out + 1] = { kind = a.kind, index = a.index, icon = a.icon, left = left, dur = a.dur, src = a }
         end
         -- one Campfire tile, however many campfire buffs: the one with a clock (it renews each minute by the fire)
         local fire, keep = nil, {}
@@ -5389,14 +5545,14 @@ do (function()
             end
         end
         if fire then keep[#keep + 1] = fire end
-        keep.lying, keep.wr, keep.wrAge, keep.nearFire = out.lying, out.wr, out.wrAge, out.nearFire
         out = keep
-        local b = BagState(out.lying, out.wr, out.wrAge)
+        local wrAge = (s.wrEx and s.wrDur) and math.max(0, s.wrDur - (s.wrEx - now)) or nil
+        local b = BagState(s.lying, s.wr, wrAge)
         if b then out[#out + 1] = b end
         -- a fire you lit here, when there's no Campfire buff to show
         local hasFire = false
         for _, a in ipairs(out) do if a.kind == "fire" then hasFire = true end end
-        if not hasFire and out.nearFire and ns.CampFireLit then
+        if not hasFire and s.nearFire and ns.CampFireLit then
             local ago = ns.CampFireLit()
             if ago then out[#out + 1] = { kind = "fire", lit = ago } end
         end
@@ -5459,33 +5615,38 @@ do (function()
         f:RegisterForDrag("LeftButton")
         LoadPoint(f, "eatPoint", { "CENTER", "CENTER", 0, -170 })
         f.rows = { Tile(f), Tile(f), Tile(f), Tile(f) }
-        f:SetScript("OnDragStart", function(self) if moving then self:StartMoving() end end)
+        f:SetScript("OnDragStart", function(self) if moving then self.dragging = true; self:StartMoving() end end)
         f:SetScript("OnDragStop", function(self)
+            if not self.dragging then return end
+            self.dragging = nil
             self:StopMovingOrSizing()
             if ns.Snap then ns.Snap(self) end
             SavePoint(self, "eatPoint")
         end)
         local t = 0
-        local work = ns.Timed(function() ns.RefreshEating() end, "eating timer")
-        f:SetScript("OnUpdate", function(_, elapsed)
+        local work = ns.Timed(function() ns.Safe("eating timer", Draw) end, "eating timer")
+        f:SetScript("OnUpdate", function(self, elapsed)
             t = t + elapsed
-            if t < 0.1 then return end   -- the tenths tick
+            if t < (self.every or 0.1) then return end   -- tenths (eating, blinking) or a quarter second (camp)
             t = 0
             work()
         end)
         f:Hide()
     end
 
-    -- Damage over time on you (debuffs with a clock): how many.
+    -- Damage over time on you (debuffs with a clock): how many. Counted once per look at the auras.
     local function Dots()
+        if scan and scan.dots then return scan.dots end
         local n = 0
-        if not (C_UnitAuras and C_UnitAuras.GetAuraDataByIndex) then return 0 end
-        for i = 1, 40 do
-            local ok, a = pcall(C_UnitAuras.GetAuraDataByIndex, "player", i, "HARMFUL")
-            if not ok or type(a) ~= "table" then break end
-            local ex = N(a.expirationTime)
-            if ex and ex > 0 then n = n + 1 end
+        if C_UnitAuras and C_UnitAuras.GetAuraDataByIndex then
+            for i = 1, 40 do
+                local ok, a = pcall(C_UnitAuras.GetAuraDataByIndex, "player", i, "HARMFUL")
+                if not ok or type(a) ~= "table" then break end
+                local ex = N(a.expirationTime)
+                if ex and ex > 0 then n = n + 1 end
+            end
         end
+        if scan then scan.dots = n end
         return n
     end
     -- The real change per second over the last few seconds (food minus whatever is hurting you).
@@ -5516,7 +5677,15 @@ do (function()
         local s = seen[what]
         if not s then s = { v = cur, t = GetTime() }; seen[what] = s end
         if cur < s.v then s.v, s.t = cur, GetTime() end   -- took damage / cast: measure from here
-        local rate = a.index and RateFromText(a.index, label)   -- per second ("X over Y sec" is divided already)
+        -- per second ("X over Y sec" is divided already); read from the buff's text once, then kept with it
+        local rate
+        if a.src and a.index then
+            local k = "rate" .. label
+            if a.src[k] == nil then a.src[k] = RateFromText(a.index, label) or false end
+            rate = a.src[k] or nil
+        elseif a.index then
+            rate = RateFromText(a.index, label)
+        end
         if not rate and GetTime() - s.t >= 2 then rate = (cur - s.v) / (GetTime() - s.t) end
         local missing = max - cur
         -- eating with damage over time on you: will the food keep you alive?
@@ -5585,7 +5754,7 @@ do (function()
         end
     end
 
-    function ns.RefreshEating()
+    function Draw()
         if not ns.db then return end
         if db().eatTimer == false and not moving then
             if f then f:Hide() end
@@ -5627,6 +5796,13 @@ do (function()
                 r:Hide()
             end
         end
+        -- the tick: tenths while eating or drinking (and for blinking), else a quarter second is plenty
+        local quick = false
+        for i = 1, n do
+            local l = lines[i]
+            if l[2] ~= "camp" or l[1].done or f.rows[i].danger then quick = true end
+        end
+        f.every = quick and 0.1 or 0.25
         f:EnableMouse(moving and true or false)
         f:Show()
         if moving then
@@ -5636,12 +5812,19 @@ do (function()
             ft:Hide()
         end
     end
+    function ns.RefreshEating() scan = nil; Draw() end   -- a fresh look at the buffs, drawn now
     function ns.EatingMove() ns.RefreshEating() end
 
-    local ev = CreateFrame("Frame")
+    -- Your buffs changed: looked at again on the next tick – or, while nothing shows, once a moment later (a burst
+    -- of aura changes in a fight is one look, not dozens).
+    local ev, waiting = CreateFrame("Frame"), false
     if not pcall(ev.RegisterUnitEvent, ev, "UNIT_AURA", "player") then ev:RegisterEvent("UNIT_AURA") end
     ev:SetScript("OnEvent", function(_, _, unit)
-        if unit == "player" then ns.Safe("eating timer", ns.RefreshEating) end
+        if unit ~= "player" then return end
+        scan = nil
+        if (f and f:IsShown()) or waiting or not C_Timer then return end
+        waiting = true
+        C_Timer.After(0.2, function() waiting = false; ns.Safe("eating timer", Draw) end)
     end)
 end)() end
 
@@ -6177,12 +6360,16 @@ local function InitPlates()
         if not (d.plateFriendly and d.plateHealer ~= false) or InCombatLockdown() then return end
         for unit in pairs(plateUnits) do ns.Safe("inspect", ns.MaybeInspect, unit) end
     end, "nameplate icons tick")
-    f:SetScript("OnUpdate", function(_, elapsed)   -- every 3 s (only the work is timed, not every frame)
-        wait = wait + elapsed
-        if wait < 3 then return end
-        wait = 0
-        work()
-    end)
+    if C_Timer and C_Timer.NewTicker then   -- every 3 s (a timer, not a check every frame)
+        C_Timer.NewTicker(3, function() ns.Safe("nameplate icons", work) end)
+    else
+        f:SetScript("OnUpdate", function(_, elapsed)
+            wait = wait + elapsed
+            if wait < 3 then return end
+            wait = 0
+            work()
+        end)
+    end
     if C_NamePlate and C_NamePlate.GetNamePlates then   -- plates already up (after a /reload)
         local ok, plates = pcall(C_NamePlate.GetNamePlates)
         for _, plate in ipairs(ok and type(plates) == "table" and plates or {}) do
@@ -6203,8 +6390,12 @@ function ns.InitUI()
     CreateTargetButton()
     if not InCombatLockdown() then nb = BuildNearby() end
     ns.HookTooltip()
-    lv = BuildLevel()
-    ns.levelFrame = lv
+    if InCombatLockdown() then   -- a reload in a fight: its secure icons are made when it's over
+        ns.levelPending = true
+    else
+        lv = BuildLevel()
+        ns.levelFrame = lv
+    end
     ns.Safe("nameplate icons", InitPlates)
     ns.Safe("map pins", ns.UpdateMapPins)
     ns.UpdateChatLogPrompt()
