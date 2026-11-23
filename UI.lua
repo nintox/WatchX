@@ -5266,20 +5266,34 @@ do (function()
         start, dur = ok and N(start), ok and N(dur)
         return start and dur and start > 0 and dur > 60 and GetTime() - start < 600 or false
     end
-    local function BagState(lying, wr)
+    local function BagState(lying, wr, wrAge)
         local now = GetTime()
         lying = lying and BagUsedLately()
+        -- a stack less than 70 s ago means you're on the bag: the next one is a minute after it
+        if wr and wr > 0 and wr < 3 and wrAge and wrAge < 70 then
+            if not ns.bagStart then ns.bagStart = now - wrAge end
+            bag.start, bag.at, bag.stacks = ns.bagStart, now - wrAge, wr
+        end
         local stacks = wr or 0   -- Well-Rested's stacks, found by name in Find (its spell ID differs between clients)
         if bag.stacks == nil then bag.stacks = stacks end                       -- first look: just the baseline
         if lying and not ns.bagStart then ns.bagStart = now end
         if ns.bagStart and bag.start ~= ns.bagStart then bag.start, bag.at = ns.bagStart, ns.bagStart end
-        if stacks > bag.stacks then                                             -- a new stack: you're lying on it
+        if stacks > bag.stacks and not (wrAge and wrAge >= 70) then              -- a new stack: you're lying on it
             if not ns.bagStart then ns.bagStart = now; bag.start = now end
             bag.at = now
         end
         bag.stacks = stacks
+        -- full: the tile blinks "get up!" until you do (the Resting buff goes), for at most 30 seconds
+        if stacks >= 3 and (ns.bagStart or bag.doneAt) then
+            ns.bagStart = nil
+            bag.doneAt = bag.doneAt or now
+            if now - bag.doneAt < 30 and (lying or now - bag.doneAt < 3) then
+                return { kind = "bag", stacks = 3, done = true }
+            end
+            return nil
+        end
+        bag.doneAt = nil
         if not ns.bagStart then return nil end
-        if stacks >= 3 then ns.bagStart = nil return nil end                    -- full: done
         local nextAt = (bag.at or now) + 60
         if now > nextAt + 15 and not lying then ns.bagStart = nil return nil end -- no new stack: you got up
         return { kind = "bag", stacks = stacks, left = math.max(0, nextAt - now), full = math.max(0, nextAt - now) + (2 - stacks) * 60 }
@@ -5301,6 +5315,9 @@ do (function()
                     or (lower:find("sleep", 1, true) and not lower:find("well", 1, true))) then out.lying = true end
             if lower == "well-rested" or lower == "well rested" or N(a.spellId) == 429959 then
                 out.wr = math.max(out.wr or 0, N(a.applications) or 1)
+                -- each new stack gives it its full time again: how long since the last stack
+                local ex, dur = N(a.expirationTime), N(a.duration)
+                if ex and ex > 0 and dur and dur > 0 then out.wrAge = math.max(0, dur - (ex - GetTime())) end
             end
             if kind then
                 local ex = N(a.expirationTime)
@@ -5318,9 +5335,9 @@ do (function()
             end
         end
         if fire then keep[#keep + 1] = fire end
-        keep.lying, keep.wr = out.lying, out.wr
+        keep.lying, keep.wr, keep.wrAge = out.lying, out.wr, out.wrAge
         out = keep
-        local b = BagState(out.lying, out.wr)
+        local b = BagState(out.lying, out.wr, out.wrAge)
         if b then out[#out + 1] = b end
         -- a fire you lit here, when there's no Campfire buff to show
         local hasFire = false
@@ -5438,7 +5455,14 @@ do (function()
     local BAGICON, FIREICON = "Interface\\Icons\\INV_Misc_Bag_08", "Interface\\Icons\\Spell_Fire_Fire"
     local function PaintCamp(r, a)
         r.fill:Hide(); r.fillTop:Hide()
-        if a.kind == "bag" then
+        r:SetAlpha(1)
+        if a.kind == "bag" and a.done then
+            r.icon:SetTexture((ns.ItemIcon and ns.ItemIcon(211527)) or BAGICON)
+            r.pct:SetText("|cff40ff403/3|r")
+            r.time:SetText("|cff40ff40OK|r")
+            r.info:SetText("|cff40ff40get up!|r")
+            r:SetAlpha(0.35 + 0.65 * math.abs(math.sin(GetTime() * 4)))   -- blinks until you get up
+        elseif a.kind == "bag" then
             r.icon:SetTexture((ns.ItemIcon and ns.ItemIcon(211527)) or BAGICON)
             r.pct:SetText("|cffffd100" .. a.stacks .. "/3|r")
             r.time:SetText(tostring(math.ceil(a.left)))
