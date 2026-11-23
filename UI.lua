@@ -625,6 +625,8 @@ end
 local profileLabels = {}   -- fn(name) for each place that shows the active profile
 function ns.UpdateProfileLabels()
     local name = db().profile or "?"
+    if name == profileLabels.shown and #profileLabels == profileLabels.n then return end   -- nothing new
+    profileLabels.shown, profileLabels.n = name, #profileLabels
     for _, fn in ipairs(profileLabels) do fn(name) end
 end
 
@@ -2856,6 +2858,19 @@ end
 
 function RefreshMini()
     local lines = MiniLines(moving)   -- unlocked: everything it can show, so the size is easy to judge
+    -- the very same as last time (most seconds): only its visibility may have changed
+    local parts = { tostring(moving), tostring(mini:GetScale()), tostring(db().miniWidth),
+        tostring(ns.NearbyAttachWidth and ns.NearbyAttachWidth() or 0), tostring(MiniFrozen()) }
+    for i, l in ipairs(lines) do parts[#parts + 1] = l[1] .. "\1" .. l[2] end
+    local sig = table.concat(parts, "\2")
+    if sig == mini.sig then
+        ApplyMini()
+        -- the mini bar shown/hidden or the red bar up/down: the stack under it moves
+        local k = ns.StackKey and ns.StackKey()
+        if k ~= mini.stackKey then mini.stackKey = k; if ns.AttachNearby then ns.AttachNearby() end end
+        return
+    end
+    mini.sig = sig
     local nameW, stateW = 0, 0
     for i, row in ipairs(mini.rows) do
         local l = lines[i]
@@ -2892,6 +2907,7 @@ function RefreshMini()
         miniLabel:Hide()
     end
     ApplyMini()
+    mini.stackKey = ns.StackKey and ns.StackKey()
     if ns.AttachNearby then ns.AttachNearby() end
 end
 
@@ -3307,25 +3323,32 @@ function ns.AttachNearby()
     end
 end
 
+-- A row is only touched where something changed (it's painted every second, mostly the same).
 local function PaintNearbyRow(r, e, now)
     local cr, cg, cb = ClassColor(e.class)
     local near = now - e.last <= ns.NEARBY_ACTIVE
-    r.bar:SetColorTexture(cr * 0.6, cg * 0.6, cb * 0.6, near and 0.9 or 0.35)
     local rec = ns.db.enemies[e.key]
     local healer = ns.db.plateHealer ~= false and ns.IsHealer(e.key)
     local wanted = ns.Wanted and ns.Wanted(e.key)   -- also a bounty on just the first name
-    r.name:SetText((e.kos and "|cffff3030KOS|r " or "") .. (wanted and "|cffffa000WANTED|r " or "")
+    local name = (e.kos and "|cffff3030KOS|r " or "") .. (wanted and "|cffffa000WANTED|r " or "")
         .. ((rec and rec.avoid) and "|cffff8040AVOID|r " or "")
         .. (healer and "|cff40ff60+|r " or "") .. e.name
-        .. ((rec and rec.note) and " |cffffd100*|r" or ""))
-    r.name:SetTextColor(near and 1 or 0.7, near and 1 or 0.7, near and 1 or 0.7)
+        .. ((rec and rec.note) and " |cffffd100*|r" or "")
     local tags = ""
     if e.stealth and now - e.stealth < 60 then tags = tags .. "|cffd8a0ffSTEALTH|r  " end
     if e.targetingMe and now - e.targetingMe < 10 then tags = tags .. "|cffff5050> you|r  " end
     local lvl = (e.level and e.level > 0) and tostring(e.level) or "??"
-    r.info:SetText(tags .. lvl .. " " .. ClassName(e.class) .. (near and "" or ("  |cffaaaaaa" .. Ago(now - e.last) .. "|r")))
+    local info = tags .. lvl .. " " .. ClassName(e.class) .. (near and "" or ("  |cffaaaaaa" .. Ago(now - e.last) .. "|r"))
+    local look = (e.class or "") .. (near and "1" or "0")
+    if r.look ~= look then
+        r.look = look
+        r.bar:SetColorTexture(cr * 0.6, cg * 0.6, cb * 0.6, near and 0.9 or 0.35)
+        r.name:SetTextColor(near and 1 or 0.7, near and 1 or 0.7, near and 1 or 0.7)
+    end
+    if r.nameText ~= name then r.nameText = name; r.name:SetText(name) end
+    if r.infoText ~= info then r.infoText = info; r.info:SetText(info) end
     r.shownKey = e.key
-    r:SetAlpha(1)
+    if r:GetAlpha() ~= 1 then r:SetAlpha(1) end
 end
 
 local PlaceToast
@@ -3345,8 +3368,16 @@ local function RefreshNearby()
         local zone = ns.NearbyZoneMode()
         local want = d.nearby and (moving or (zone ~= "hide" and (#list > 0 or d.nearbyShowEmpty == true)))
         nb:SetShown(want and true or false)
-        if not want then return end
+        if not want then nb.rowSig = nil return end
         local n = math.min(#list, NearbyMax())
+        local keys = {}
+        for i = 1, n do keys[i] = list[i].key end
+        local sig = table.concat(keys, "|") .. "#" .. n .. tostring(moving)
+        if sig == nb.rowSig then   -- the same players: just repaint what changed
+            for i = 1, n do PaintNearbyRow(nb.rows[i], list[i], now) end
+            return
+        end
+        nb.rowSig = sig
         for i, r in ipairs(nb.rows) do
             local e = i <= n and list[i] or nil
             r.key = e and e.key or nil
@@ -3358,6 +3389,7 @@ local function RefreshNearby()
         nb:SetHeight(n > 0 and (26 + n * NB_ROW_H) or 24)
         if nb.attached or Attached() then ns.AttachNearby() else nb:SetWidth(NearbyWidth()) end
     elseif nb:IsShown() then
+        nb.rowSig = nil   -- redo the rows properly after the fight
         -- secure rows can't change in combat: each row keeps its player, newcomers fill the empty rows
         local onRow = {}
         for _, r in ipairs(nb.rows) do
