@@ -987,7 +987,8 @@ end
 function ns.NearbyList()
     local list, now = {}, time()
     for key, e in pairs(ns.nearby) do
-        if now - e.last > NearbyKeep() then ns.nearby[key] = nil else list[#list + 1] = e end
+        if now - e.last > NearbyKeep() or (e.example and now >= e.example) then ns.nearby[key] = nil
+        else list[#list + 1] = e end
     end
     table.sort(list, function(a, b) if a.last ~= b.last then return a.last > b.last end return a.key < b.key end)
     return list
@@ -2621,14 +2622,16 @@ function ns.NearbyTest()
                           { "Example Mage", "MAGE", 60 }, { "Example Druid", "DRUID", -1 } }) do
         local key = ex[1]:gsub(" ", "-")
         ns.nearby[key] = { key = key, name = ex[1], first = ex[1]:match("^%S+"), class = ex[2], level = ex[3],
-            firstSeen = now - i * 20, last = (i == 4) and (now - 90) or now, guild = (i == 2) and "Example Guild" or nil }
+            firstSeen = now - i * 20, last = (i == 4) and (now - 90) or now, guild = (i == 2) and "Example Guild" or nil,
+            example = now + 60 }
     end
     local rogue = ns.nearby["Example-Rogue"]
     rogue.stealth, rogue.stealthHow = now, "Stealth"
     ns.roles["Example-Druid"] = { role = "healer", how = "Wild Growth", at = now }   -- this session only
-    Print("Example Nearby list and stealth card shown (made-up names – they go away by themselves).")
+    Print("Example Nearby list and stealth card shown (made-up names – gone in a minute).")
     if ns.ShowStealthToast then ns.ShowStealthToast(rogue) end
     Refresh()
+    if C_Timer then C_Timer.After(61, function() ns.roles["Example-Druid"] = nil; Refresh() end) end
 end
 
 function ns.SetNearby(on)
