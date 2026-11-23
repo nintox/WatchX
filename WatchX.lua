@@ -845,6 +845,24 @@ local friendSeen = {}   -- friendly player name -> last announced
 ns.lastEnemy = nil      -- { name =, at = } for the panel and mini bar
 ns.lastFriend = nil     -- the same for friendly players
 
+-- When a player was last announced. A long session in a busy place doesn't keep every name it ever saw: past
+-- 500 the ones whose wait is over are forgotten. (On ns: the main chunk is at the 200-locals limit.)
+function ns.Stamp(seen, name, now)
+    if seen[name] == nil then
+        local c = ns.stampN or setmetatable({}, { __mode = "k" })
+        ns.stampN = c
+        c[seen] = (c[seen] or 0) + 1
+        if c[seen] > 500 then
+            local n = 0
+            for k, at in pairs(seen) do
+                if now - at >= ENEMY_COOLDOWN then seen[k] = nil else n = n + 1 end
+            end
+            c[seen] = n
+        end
+    end
+    seen[name] = now
+end
+
 -- Any hostile player (PvP), when "Any enemy player" is on. Not in instances or battlegrounds,
 -- and the same player only once every ENEMY_COOLDOWN seconds.
 local function CheckEnemyPlayer(unit, name, source)
@@ -855,7 +873,7 @@ local function CheckEnemyPlayer(unit, name, source)
     local now = time()
     if ns.lastEnemy then ns.lastEnemy.name, ns.lastEnemy.at = name, now else ns.lastEnemy = { name = name, at = now } end
     if enemySeen[name] and now - enemySeen[name] < ENEMY_COOLDOWN then return end
-    enemySeen[name] = now
+    ns.Stamp(enemySeen, name, now)
     local info = PlayerInfo(unit)
     Log("enemy", name, source)
     Alert("ENEMY", name, string.format("Enemy player: %s (%s%s)", name, info ~= "" and (info .. " – ") or "", Location()),
@@ -1488,7 +1506,7 @@ local function ReadAuras()
             if filter == "HELPFUL" and AuraIsXP and id ~= WELL_RESTED and sid ~= WELL_FED then
                 local xp = AuraIsXP(i, sid, name)
                 if id == WELL_FED and xp == false then id = nil          -- stat food's Well Fed
-                elseif not id and xp then id = WELL_FED end              -- an XP buff by another name
+                elseif not id and xp == "kill" then id = WELL_FED end    -- an XP-from-kills buff by another name
             end
             if id and not found[id] then
                 local left = (type(expires) == "number" and expires > 0) and math.max(0, expires - GetTime()) or nil
@@ -1522,7 +1540,11 @@ local function IsXPText(t)
 end
 ns.IsXPText = IsXPText
 
-local function Secret(v) return Plain(v) == nil and v ~= nil end
+local function Secret(v)
+    if type(issecretvalue) ~= "function" then return false end
+    local ok, s = pcall(issecretvalue, v)
+    return ok and s and true or false
+end
 local RETRIEVING = type(RETRIEVING_ITEM_INFO) == "string" and RETRIEVING_ITEM_INFO or "Retrieving item information"
 
 -- The tooltip's text as one string, or nil (not loaded yet / can't be read).
@@ -1587,7 +1609,7 @@ local function ItemTooltipText(itemID, bag, slot)
         local ok, data = pcall(T.GetItemByID, itemID)
         if ok then text = TooltipText(data) end
     end
-    if not text then text = ScanTipText(itemID) end
+    if not text and not T.GetHyperlink then text = ScanTipText(itemID) end   -- old clients only
     if not text and T.GetBagItem and bag then
         local ok, data = pcall(T.GetBagItem, bag, slot)
         if ok then text = TooltipText(data) end
@@ -1606,7 +1628,8 @@ local function ItemSpellText(itemID)
     if not desc then return nil end
     local okD, t = pcall(desc, sid)
     t = okD and Plain(t)
-    return type(t) == "string" and t ~= "" and t or nil
+    if type(t) == "string" and t ~= "" then return t end
+    return nil, true   -- it has a spell, its words aren't loaded yet
 end
 
 -- A buff's text: its tooltip, or its spell's description. Cached per spell (it doesn't change).
@@ -1615,7 +1638,7 @@ AuraIsXP = function(index, sid, name)
     local key = sid or name
     if key == nil then return nil end
     local c = auraXPCache[key]
-    if type(c) == "boolean" then return c end
+    if c ~= nil and type(c) ~= "number" then return c end
     if c and GetTime() < c then return nil end   -- couldn't be read a moment ago
     local text
     local T = C_TooltipInfo
@@ -1636,7 +1659,9 @@ AuraIsXP = function(index, sid, name)
     if not text then auraXPCache[key] = GetTime() + 60 return nil end
     -- the name line alone isn't the description
     local body = name and text:gsub("^" .. name:gsub("%p", "%%%0") .. "\n?", "") or text
+    -- "kill": more XP from kills (the XP food's buff); "rest": only about rested XP (resting, a bed…); false: no XP
     local yes = IsXPText(body)
+    if yes then yes = body:lower():find("kill", 1, true) and "kill" or "rest" end
     auraXPCache[key] = yes
     return yes
 end
@@ -1653,12 +1678,18 @@ local function IsXPFood(itemID, bag, slot)
     local known = xpFoodCache[itemID]
     if known == true then return true end
     if db and type(db.xpFoods) == "table" and db.xpFoods[itemID] then xpFoodCache[itemID] = true return true end
+    if known == false then return false end
     if type(known) == "number" and GetTime() < known then return false end
-    if NOT_FOOD[itemID] or not IsConsumable(itemID) then xpFoodCache[itemID] = GetTime() + 3600 return false end
+    if NOT_FOOD[itemID] or not IsConsumable(itemID) then xpFoodCache[itemID] = false return false end
     local text = ItemTooltipText(itemID, bag, slot)
     if not text then bagState.pending = true return false end   -- not loaded yet: ask again a bit later
-    local yes = IsXPText(text) or IsXPText(ItemSpellText(itemID))
-    xpFoodCache[itemID] = yes or (GetTime() + 120)   -- a "no" is checked again in 2 minutes
+    local spell, spellLoading = ItemSpellText(itemID)
+    local yes = IsXPText(text) or IsXPText(spell)
+    -- a "no" read from the item's own text is kept for the session (it doesn't change); only when the spell's
+    -- words weren't loaded yet is it asked again a little later
+    if yes then xpFoodCache[itemID] = true
+    elseif spellLoading then xpFoodCache[itemID] = GetTime() + 120
+    else xpFoodCache[itemID] = false end
     if yes and db then   -- kept: inside instances the item text may not be readable
         if type(db.xpFoods) ~= "table" then db.xpFoods = {} end
         db.xpFoods[itemID] = true
@@ -1779,6 +1810,8 @@ function ns.QuietHere()
 end
 
 local function CheckBoosts(now)
+    -- right after a loading screen auras and bags can read empty for a moment: no news from that
+    if bagState.loadingUntil and GetTime() < bagState.loadingUntil then return end
     local was = lastBoost
     lastBoost = now
     if not was or db.levelWarn == false then return end
@@ -1808,8 +1841,11 @@ local function CheckBoosts(now)
         pendingWarn.fed = now.food and now.food > 0 and ("Well Fed has run out – eat " .. (now.foodName or "XP food") .. ".")
             or "Well Fed has run out – and you have no XP food in your bags!"
     end
-    if (was.food or 0) > 0 and now.food == 0 and not pendingWarn.fed and not now.eating then
-        pendingWarn.food = "You've used your last XP food – cook or buy more."
+    -- the last XP food: said once you stop eating (the count drops while you still sit and eat it)
+    if ((was.food or 0) > 0 or was.foodOut) and (now.food or 0) == 0 then now.foodOut = true end
+    if now.foodOut and not now.eating then
+        if not pendingWarn.fed then pendingWarn.food = "You've used your last XP food – cook or buy more." end
+        now.foodOut = nil
     end
     if gone("rested") then pendingWarn.bag = "Well-Rested (Sleeping Bag) has run out." end
     if gone("boost") and now.lowRested then pendingWarn.tent = "Camp Tent works again – your rested is under 5%." end
@@ -1864,8 +1900,8 @@ function ns.LevelDirty() statusCache.dirty = true; bagState.dirty = true end
         return type(link) == "string" and tonumber(link:match("item:(%d+)")) or nil
     end
     local function Kind(id)
-        if id == CAMP_TENT or CAMP_KNOWN[id] then return "tent" end
         for _, c in ipairs(CAMPFIRES) do if c[1] == id then return "fire" end end
+        if id == CAMP_TENT or CAMP_KNOWN[id] then return "tent" end
         if IsCampExtra(id) then return "tent" end
         if IsXPFood(id) then return "food" end
     end
@@ -1877,11 +1913,17 @@ function ns.LevelDirty() statusCache.dirty = true; bagState.dirty = true end
         local prof = Plain(type(base) == "table" and base.professionName)
         if type(prof) ~= "string" or prof == "" then return end
         if T.IsTradeSkillLinked and Plain(T.IsTradeSkillLinked()) == true then return end   -- someone else's
-        local found = {}
+        if T.IsTradeSkillGuild and Plain(T.IsTradeSkillGuild()) == true then return end     -- a guild view
+        if T.IsNPCCrafting and Plain(T.IsNPCCrafting()) == true then return end             -- an NPC's
+        local found, learned = {}, 0
         for _, rid in ipairs(T.GetAllRecipeIDs() or {}) do
             local okI, info = pcall(T.GetRecipeInfo, rid)
-            local okS, sch = pcall(T.GetRecipeSchematic, rid, false)
-            if okI and type(info) == "table" and info.learned and okS and type(sch) == "table" then
+            local okS, sch = false, nil
+            if okI and type(info) == "table" and info.learned then
+                learned = learned + 1
+                okS, sch = pcall(T.GetRecipeSchematic, rid, false)
+            end
+            if okS and type(sch) == "table" then
                 local id = tonumber(Plain(sch.outputItemID))
                 local what = id and Kind(id)
                 if what then
@@ -1898,30 +1940,42 @@ function ns.LevelDirty() statusCache.dirty = true; bagState.dirty = true end
                 end
             end
         end
-        return prof, found
+        return prof, found, learned
+    end
+
+    -- Keep what was found. A list that isn't all there yet (fewer recipes than last time – still loading, or the
+    -- window closed) only adds; nothing you know is ever taken away by an empty or half list.
+    local function Keep(mine, prof, found, seen)
+        if seen <= 0 then return end
+        mine.seen = mine.seen or {}
+        local full = seen >= (mine.seen[prof] or 0)
+        if full then
+            mine.seen[prof] = seen
+            for id, r in pairs(mine.items) do if r.prof == prof and not found[id] then mine.items[id] = nil end end
+        end
+        for id, r in pairs(found) do mine.items[id] = r end
+        mine.profs[prof] = time()
+        ns.LevelDirty()
     end
 
     local function Scan()
         local mine = Mine()
         local prof, found
         if C_TradeSkillUI and C_TradeSkillUI.GetAllRecipeIDs and C_TradeSkillUI.GetRecipeSchematic then
-            prof, found = ScanModern()
-            if prof then
-                for id, r in pairs(mine.items) do if r.prof == prof and not found[id] then mine.items[id] = nil end end
-                for id, r in pairs(found) do mine.items[id] = r end
-                mine.profs[prof] = time()
-                ns.LevelDirty()
-                return
-            end
+            local seen
+            prof, found, seen = ScanModern()
+            if prof then Keep(mine, prof, found, seen or 0) return end
         end
         if not (GetNumTradeSkills and GetTradeSkillInfo and GetTradeSkillItemLink) then return end
         prof = Plain(GetTradeSkillLine and (GetTradeSkillLine()))
         if type(prof) ~= "string" or prof == "" or prof == "UNKNOWN" then return end
         found = {}
+        local seen = 0
         for i = 1, (tonumber(Plain(GetNumTradeSkills())) or 0) do
             local ok, name, kind = pcall(GetTradeSkillInfo, i)
             name, kind = Plain(name), Plain(kind)
             if ok and type(name) == "string" and kind ~= "header" then
+                seen = seen + 1
                 local id = LinkID(GetTradeSkillItemLink(i))
                 local what = id and Kind(id)
                 if what then
@@ -1935,10 +1989,7 @@ function ns.LevelDirty() statusCache.dirty = true; bagState.dirty = true end
                 end
             end
         end
-        for id, r in pairs(mine.items) do if r.prof == prof and not found[id] then mine.items[id] = nil end end
-        for id, r in pairs(found) do mine.items[id] = r end
-        mine.profs[prof] = time()
-        ns.LevelDirty()
+        Keep(mine, prof, found, seen)
     end
 
     ns.ScanRecipes = Scan
@@ -1976,8 +2027,10 @@ function ns.LevelDirty() statusCache.dirty = true; bagState.dirty = true end
         local want = {}
         for _, p in ipairs(CRAFT_PROFS) do want[p] = true end
         if GetProfessions and GetProfessionInfo then   -- modern
-            for _, idx in ipairs({ GetProfessions() }) do
-                local ok, name = pcall(GetProfessionInfo, idx)
+            local idx = { GetProfessions() }
+            for i = 1, 6 do   -- (nil where you have none – archaeology – so not ipairs: it would stop there)
+                local ok, name = false, nil
+                if idx[i] then ok, name = pcall(GetProfessionInfo, idx[i]) end
                 name = ok and Plain(name)
                 if type(name) == "string" and want[name] and not (mine and mine.profs[name]) then out[#out + 1] = name end
             end
@@ -1996,7 +2049,8 @@ function ns.LevelDirty() statusCache.dirty = true; bagState.dirty = true end
 
     if CreateFrame then
         local ev = CreateFrame("Frame")
-        for _, e in ipairs({ "TRADE_SKILL_SHOW", "TRADE_SKILL_UPDATE", "TRADE_SKILL_LIST_UPDATE", "TRADE_SKILL_DATA_SOURCE_CHANGED" }) do
+        -- (TRADE_SKILL_UPDATE / LIST_UPDATE keep coming while you craft: not those)
+        for _, e in ipairs({ "TRADE_SKILL_SHOW", "TRADE_SKILL_DATA_SOURCE_CHANGED" }) do
             pcall(ev.RegisterEvent, ev, e)
         end
         local queued
@@ -2013,14 +2067,18 @@ end)()
 
 if CreateFrame then
     local bagEvents = CreateFrame("Frame")
-    for _, e in ipairs({ "BAG_UPDATE_DELAYED", "BAG_UPDATE", "PLAYER_ENTERING_WORLD", "TOYS_UPDATED", "UNIT_AURA",
-                         "PLAYER_LEVEL_UP", "PLAYER_XP_UPDATE", "UPDATE_EXHAUSTION" }) do
+    for _, e in ipairs({ "BAG_UPDATE_DELAYED", "BAG_UPDATE", "PLAYER_ENTERING_WORLD", "TOYS_UPDATED",
+                         "PLAYER_LEVEL_UP", "PLAYER_XP_UPDATE", "UPDATE_EXHAUSTION", "GET_ITEM_INFO_RECEIVED" }) do
         pcall(bagEvents.RegisterEvent, bagEvents, e)
+    end
+    -- your auras only (all units' would wake this for every nameplate in a busy city)
+    if not pcall(bagEvents.RegisterUnitEvent, bagEvents, "UNIT_AURA", "player") then
+        pcall(bagEvents.RegisterEvent, bagEvents, "UNIT_AURA")
     end
     if not pcall(bagEvents.RegisterUnitEvent, bagEvents, "UNIT_SPELLCAST_SUCCEEDED", "player") then
         pcall(bagEvents.RegisterEvent, bagEvents, "UNIT_SPELLCAST_SUCCEEDED")
     end
-    bagEvents:SetScript("OnEvent", ns.Timed(function(_, event, unit, _, spellID)
+    local timed = ns.Timed(function(_, event, unit, _, spellID)
         if event == "UNIT_SPELLCAST_SUCCEEDED" then
             if unit == "player" and ns.OnCampCast then pcall(ns.OnCampCast, spellID) end
         elseif event == "UNIT_AURA" then
@@ -2032,7 +2090,15 @@ if CreateFrame then
             if event == "PLAYER_ENTERING_WORLD" then bagState.loadingUntil = GetTime() + 5 end
             bagState.dirty, statusCache.dirty = true, true
         end
-    end, "bags & XP events"))
+    end, "bags & XP events")
+    bagEvents:SetScript("OnEvent", function(self, event, ...)
+        -- item text arriving (it can come by the hundred at an auction house): only a flag, nothing timed
+        if event == "GET_ITEM_INFO_RECEIVED" then
+            if bagState.pending then bagState.dirty = true end   -- an item's text we waited for has come
+            return
+        end
+        timed(self, event, ...)
+    end)
 end
 
 -- A campfire close by: a "...Campfire" buff on you, or one you put down here less than 10 minutes ago.
@@ -2373,9 +2439,14 @@ function ns.CheckBuffs()
                 if g then
                     local k = a.name:lower()
                     here[k] = true
-                    if buffPendingGone[k] then   -- back again within a few seconds: it renews by itself
+                    local p = buffPendingGone[k]
+                    if p then
                         buffPendingGone[k] = nil
-                        buffSelfRenew[k] = true
+                        -- back within a couple of checks with the same length: it renews by itself (camp buffs by
+                        -- the fire) – for one more round only; put back by hand later, it keeps its warnings
+                        if now - p.at <= 3 and math.abs((p.t.dur or 0) - (a.dur or 0)) <= 1 then
+                            buffSelfRenew[k] = now + (a.dur or 0) + 30
+                        end
                     end
                     local t = buffTracked[k]
                     if not t or a.expires > t.expires + 1 then   -- new, or renewed
@@ -2397,7 +2468,7 @@ function ns.CheckBuffs()
         local left = t.expires - now
         if left <= 0 then
             if fight then BuffGoneNow(k, t, now) end   -- can't see it in a fight: by the clock it's gone
-        elseif not t.soon and soon > 0 and left <= soon and t.dur > soon + 5 and not buffSelfRenew[k] then
+        elseif not t.soon and soon > 0 and left <= soon and t.dur > soon + 5 and not (buffSelfRenew[k] and now < buffSelfRenew[k]) then
             t.soon = true
             if not ns.QuietHere() then Warn(BuffMsg(t, left)) end
         end
@@ -3233,7 +3304,7 @@ local function CheckFriendlyPlayer(unit, name, source)
     local now = time()
     if ns.lastFriend then ns.lastFriend.name, ns.lastFriend.at = name, now else ns.lastFriend = { name = name, at = now } end
     if friendSeen[name] and now - friendSeen[name] < ENEMY_COOLDOWN then return end
-    friendSeen[name] = now
+    ns.Stamp(friendSeen, name, now)
     local info = PlayerInfo(unit)
     Log("friend", name, source)
     Alert("FRIEND", name, string.format("Friendly player: %s (%s%s)", name, info ~= "" and (info .. " – ") or "",
