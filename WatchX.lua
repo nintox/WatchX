@@ -260,8 +260,9 @@ function ns.SetScan(on)
     Refresh()
 end
 
-function ns.SetWatched(name, on)
-    db.watch[name] = on and true or nil
+-- on: true; off: nil (off the list for the built-in rares) or false with keep (switched off, still listed).
+function ns.SetWatched(name, on, keep)
+    if on then db.watch[name] = true elseif keep then db.watch[name] = false else db.watch[name] = nil end
     ns.RebuildWatch()
     if ns.UpdateMapPins then ns.Safe("map pins", ns.UpdateMapPins) end
     Refresh()

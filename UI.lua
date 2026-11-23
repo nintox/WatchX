@@ -875,8 +875,16 @@ local function BuildSettings()
         local hl = c:CreateTexture(nil, "HIGHLIGHT")
         hl:SetAllPoints()
         hl:SetColorTexture(1, 1, 1, 0.06)
+        -- on/off: a check box at the left (off keeps the name on the list; × takes it off)
+        c.box = c:CreateTexture(nil, "ARTWORK")
+        c.box:SetSize(16, 16)
+        c.box:SetPoint("LEFT", c, "LEFT", 4, 0)
+        c.box:SetTexture("Interface\\Buttons\\UI-CheckBox-Up")
+        c.check = c:CreateTexture(nil, "OVERLAY")
+        c.check:SetAllPoints(c.box)
+        c.check:SetTexture("Interface\\Buttons\\UI-CheckBox-Check")
         c.text = c:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-        c.text:SetPoint("LEFT", c, "LEFT", 7, 0)
+        c.text:SetPoint("LEFT", c, "LEFT", 23, 0)
         c.text:SetPoint("RIGHT", c, "RIGHT", -18, 0)
         c.text:SetJustifyH("LEFT")
         c.text:SetWordWrap(false)
@@ -889,17 +897,17 @@ local function BuildSettings()
         if dt then dt:SetVertexColor(0.6, 0.6, 0.6) end
         c.del:SetScript("OnClick", function()
             if not c.name then return end
-            if c.preset then ns.SetWatched(c.name, false) else ns.RemoveCustom(c.name) end
+            if c.preset then ns.SetWatched(c.name, nil) else ns.RemoveCustom(c.name) end
             chips:Refresh()
         end)
         c.del:SetScript("OnEnter", function(self) Tip(self, "Remove", "Take " .. (c.name or "?") .. " off the list.") end)
         c.del:SetScript("OnLeave", GameTooltip_Hide)
         c:SetScript("OnClick", function()
-            if c.name then ns.SetWatched(c.name, not db().watch[c.name]); chips:Refresh() end
+            if c.name then ns.SetWatched(c.name, not db().watch[c.name], true); chips:Refresh() end
         end)
         c:SetScript("OnEnter", function(self)
-            Tip(self, c.name or "?", db().watch[c.name or ""] and "Watched." or "Switched off.",
-                "|cffffd100Click:|r on/off", "|cffffd100×:|r remove")
+            Tip(self, c.name or "?", db().watch[c.name or ""] and "On – it's looked for." or "Off – kept on the list, not looked for.",
+                "|cffffd100Click:|r on/off", "|cffffd100×:|r take it off the list")
         end)
         c:SetScript("OnLeave", GameTooltip_Hide)
         c:Hide()
@@ -908,8 +916,8 @@ local function BuildSettings()
     function chips:Refresh()
         -- the built-in rares you watch (Prince Nazjak – he has map spots), then your own names
         local names, preset = {}, {}
-        for _, p in ipairs(ns.PRESETS) do
-            if db().watch[p.name] then names[#names + 1] = p.name; preset[p.name] = true end
+        for _, p in ipairs(ns.PRESETS) do   -- on (true) or switched off but kept (false)
+            if db().watch[p.name] ~= nil then names[#names + 1] = p.name; preset[p.name] = true end
         end
         for _, n in ipairs(db().custom) do names[#names + 1] = n end
         for i, c in ipairs(self.list) do
@@ -918,6 +926,8 @@ local function BuildSettings()
             if name then
                 local on = db().watch[name] and true or false
                 c.text:SetText(on and name or ("|cff808080" .. name .. "|r"))
+                c.check:SetShown(on)
+                c.box:SetAlpha(on and 1 or 0.6)
                 c.edge:SetColorTexture(on and ACCENT[1] or 0.4, on and ACCENT[2] or 0.4, on and ACCENT[3] or 0.4, 1)
                 c:Show()
             else
