@@ -5244,37 +5244,45 @@ do (function()
         return out
     end
 
-    local function Row(parent, y)
-        local r = CreateFrame("Frame", nil, parent)
-        r:SetSize(230, 32)
-        r:SetPoint("TOPLEFT", parent, "TOPLEFT", 6, y)
-        r.icon = r:CreateTexture(nil, "ARTWORK")
-        r.icon:SetSize(28, 28)
-        r.icon:SetPoint("LEFT", r, "LEFT", 0, 0)
-        r.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-        r.time = r:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-        r.time:SetPoint("LEFT", r.icon, "RIGHT", 8, 0)
-        r.time:SetWidth(44)
-        r.time:SetJustifyH("LEFT")
-        r.info = r:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-        r.info:SetPoint("LEFT", r.time, "RIGHT", 2, 0)
-        r.info:SetPoint("RIGHT", r, "RIGHT", -4, 0)
-        r.info:SetJustifyH("LEFT")
-        r.info:SetWordWrap(false)
-        return r
+    -- One icon per buff, like the classic drinking aura: the % above it, the seconds left big on it, and under it
+    -- whether you'll be full (or where you'll end).
+    local ICON = 46
+    local function Big(fs, size)
+        local font = fs:GetFont()
+        if font then fs:SetFont(font, size, "OUTLINE") end
+        fs:SetShadowOffset(0, 0)
+    end
+    local function Tile(parent)
+        local t = CreateFrame("Frame", nil, parent)
+        t:SetSize(ICON, ICON)
+        t.edge = t:CreateTexture(nil, "BACKGROUND")
+        t.edge:SetPoint("TOPLEFT", -1, 1); t.edge:SetPoint("BOTTOMRIGHT", 1, -1)
+        t.edge:SetColorTexture(0, 0, 0, 0.9)
+        t.icon = t:CreateTexture(nil, "ARTWORK")
+        t.icon:SetAllPoints()
+        t.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+        t.time = t:CreateFontString(nil, "OVERLAY", "GameFontHighlightLarge")
+        t.time:SetPoint("CENTER", t, "CENTER", 0, 0)
+        Big(t.time, 17)
+        t.pct = t:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+        t.pct:SetPoint("BOTTOM", t, "TOP", 0, 3)
+        Big(t.pct, 14)
+        t.info = t:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        t.info:SetPoint("TOP", t, "BOTTOM", 0, -3)
+        Big(t.info, 10)
+        return t
     end
 
     local function Build()
         f = CreateFrame("Frame", "WatchXEating", UIParent)
         f:SetFrameStrata("MEDIUM")
-        f:SetSize(242, 44)
+        f:SetSize(ICON * 2 + 24, ICON + 40)
         f:SetClampedToScreen(true)
         f:SetMovable(true)
         f:EnableMouse(false)
         f:RegisterForDrag("LeftButton")
         LoadPoint(f, "eatPoint", { "CENTER", "CENTER", 0, -170 })
-        Flat(f)
-        f.rows = { Row(f, -6), Row(f, -40) }
+        f.rows = { Tile(f), Tile(f) }
         f:SetScript("OnDragStart", function(self) if moving then self:StartMoving() end end)
         f:SetScript("OnDragStop", function(self)
             self:StopMovingOrSizing()
@@ -5284,20 +5292,21 @@ do (function()
         local t = 0
         f:SetScript("OnUpdate", ns.Timed(function(self, elapsed)
             t = t + elapsed
-            if t < 0.25 then return end
+            if t < 0.1 then return end   -- the tenths tick
             t = 0
             ns.RefreshEating()
         end, "eating timer"))
         f:Hide()
     end
 
-    -- One line: the power it restores (0 health, 0 mana), what's left of the buff, and how far it'll get you.
+    -- One tile: the power it restores (health or mana), what's left of the buff, and how far it'll get you.
     local function Paint(r, a, what, label, color)
         local cur = what == "mp" and N(UnitPower("player", 0)) or N(UnitHealth("player"))
         local max = what == "mp" and N(UnitPowerMax("player", 0)) or N(UnitHealthMax("player"))
         r.icon:SetTexture(a.icon or (what == "mp" and "Interface\\Icons\\INV_Drink_07" or "Interface\\Icons\\INV_Misc_Food_15"))
-        r.time:SetText(a.left and (math.ceil(a.left) .. "s") or "")
-        if not (cur and max and max > 0) then r.info:SetText("") return end
+        r.time:SetText(a.left and ("%.1f"):format(a.left) or "")
+        if not (cur and max and max > 0) then r.pct:SetText(""); r.info:SetText("") return end
+        r.pct:SetText(color .. math.floor(cur / max * 100 + 0.5) .. "%|r")
         local s = seen[what]
         if not s then s = { v = cur, t = GetTime() }; seen[what] = s end
         if cur < s.v then s.v, s.t = cur, GetTime() end   -- took damage / cast: measure from here
@@ -5305,14 +5314,13 @@ do (function()
         if not rate and GetTime() - s.t >= 2 then rate = (cur - s.v) / (GetTime() - s.t) end
         local missing = max - cur
         if missing <= 0 then
-            r.info:SetText(color .. "full|r")
+            r.info:SetText("|cff40ff40full|r")
         elseif rate and rate > 0 and a.left then
-            local more = math.min(missing, rate * a.left)
             local fullIn = missing / rate
-            r.info:SetText(color .. "+" .. Short(more) .. " " .. label .. "|r  " .. (fullIn <= a.left
-                and ("|cff40ff40full in " .. math.ceil(fullIn) .. "s|r") or ("|cffaaaaaa" .. Short(missing - more) .. " short|r")))
+            r.info:SetText(fullIn <= a.left and ("|cff40ff40full in " .. math.ceil(fullIn) .. "s|r")
+                or ("|cffccccccends at " .. math.floor((cur + rate * a.left) / max * 100) .. "%|r"))
         else
-            r.info:SetText("|cffaaaaaa" .. Short(missing) .. " " .. label .. " to go|r")
+            r.info:SetText("")
         end
     end
 
@@ -5330,18 +5338,27 @@ do (function()
         end
         if not f then Build() end
         local lines = {}
+        for _, a in ipairs(list) do   -- drink first (the one you sit for), then food
+            if a.kind == "mp" or a.kind == "both" then lines[#lines + 1] = { a, "mp", "mana", "|cff4da6ff" } end
+        end
         for _, a in ipairs(list) do
             if a.kind == "hp" or a.kind == "both" then lines[#lines + 1] = { a, "hp", "health", "|cff40ff40" } end
-            if a.kind == "mp" or a.kind == "both" then lines[#lines + 1] = { a, "mp", "mana", "|cff60a0ff" } end
         end
         if #lines == 0 and moving then   -- unlocked: an example to place it by
-            lines[1] = { { icon = "Interface\\Icons\\INV_Drink_07", left = 18 }, "mp", "mana", "|cff60a0ff" }
+            lines[1] = { { icon = "Interface\\Icons\\INV_Drink_07", left = 20.2 }, "mp", "mana", "|cff4da6ff" }
         end
+        local n = math.min(2, #lines)
         for i, r in ipairs(f.rows) do
             local l = lines[i]
-            if l then Paint(r, l[1], l[2], l[3], l[4]); r:Show() else r:Hide() end
+            if l then
+                Paint(r, l[1], l[2], l[3], l[4])
+                r:ClearAllPoints()
+                r:SetPoint("CENTER", f, "CENTER", (i - (n + 1) / 2) * (ICON + 18), 0)
+                r:Show()
+            else
+                r:Hide()
+            end
         end
-        f:SetHeight(12 + math.min(2, #lines) * 34)
         f:EnableMouse(moving and true or false)
         f:Show()
         if moving then
