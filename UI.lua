@@ -5291,10 +5291,23 @@ do (function()
                 out.wr = math.max(out.wr or 0, N(a.applications) or 1)
             end
             if kind then
-                local left = N(a.expirationTime) and math.max(0, N(a.expirationTime) - GetTime()) or nil
+                local ex = N(a.expirationTime)
+                local left = (ex and ex > 0) and math.max(0, ex - GetTime()) or nil   -- 0 = no end
                 out[#out + 1] = { kind = kind, index = i, icon = a.icon, left = left, dur = N(a.duration) }
             end
         end
+        -- one Campfire tile, however many campfire buffs: the one with a clock (it renews each minute by the fire)
+        local fire, keep = nil, {}
+        for _, a in ipairs(out) do
+            if a.kind == "fire" then
+                if not fire or (a.left and not fire.left) then fire = a end
+            else
+                keep[#keep + 1] = a
+            end
+        end
+        if fire then keep[#keep + 1] = fire end
+        keep.lying, keep.wr = out.lying, out.wr
+        out = keep
         local b = BagState(out.lying, out.wr)
         if b then out[#out + 1] = b end
         -- a fire you lit here, when there's no Campfire buff to show
@@ -5424,10 +5437,13 @@ do (function()
             if a.lit then   -- one you lit: how long ago
                 r.time:SetText(a.lit >= 60 and (math.floor(a.lit / 60) .. "m") or tostring(math.floor(a.lit)))
                 r.info:SetText("|cffcccccclit " .. (a.lit >= 60 and (math.floor(a.lit / 60) .. " min") or (math.floor(a.lit) .. " s")) .. " ago|r")
-            else
-                local l = a.left or 0
+            elseif a.left then
+                local l = a.left
                 r.time:SetText(l >= 60 and (math.floor(l / 60) .. "m") or tostring(math.ceil(l)))
-                r.info:SetText("|cffccccccbuff left|r")
+                r.info:SetText("|cffccccccby the fire|r")
+            else
+                r.time:SetText("")
+                r.info:SetText("|cffccccccby the fire|r")
             end
         end
     end
