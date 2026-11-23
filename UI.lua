@@ -475,7 +475,7 @@ do
     end
     local function Build()
         local f = CreateFrame("Frame", "WatchXBounty", UIParent)
-        f:SetSize(320, 150)
+        f:SetSize(340, 196)
         f:SetPoint("CENTER", 0, 120)
         f:SetFrameStrata("DIALOG")
         f:SetToplevel(true)
@@ -488,42 +488,46 @@ do
         f.title = Window(f, "WANTED", 160)
         tinsert(UISpecialFrames, "WatchXBounty")
         CloseX(f)
+        -- three rows, label at the left and the boxes lined up after it
+        local LX, BX = 22, 96   -- label x, box x
+        local function Label(text, y)
+            local l = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+            l:SetPoint("TOPLEFT", f, "TOPLEFT", LX, y - 4)
+            l:SetText(text)
+            return l
+        end
+        Label("Player", -40)
         f.who = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightLarge")
-        f.who:SetPoint("TOP", f, "TOP", 0, -26)
-        f.whoBox = Box(f, 200, 48, "Name Surname (or just the first name)")
-        f.whoBox:SetPoint("TOP", f, "TOP", 0, -24)
+        f.who:SetPoint("TOPLEFT", f, "TOPLEFT", BX, -42)
+        f.whoBox = Box(f, 222, 48, "Name Surname")
+        f.whoBox:SetPoint("TOPLEFT", f, "TOPLEFT", BX + 4, -40)
         f.whoBox:Hide()
-        local lr = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-        lr:SetPoint("TOPLEFT", f, "TOPLEFT", 18, -56)
-        lr:SetText("Reward")
+        Label("Reward", -72)
         -- gold, silver, copper: numbers only, a coin after each (like Blizzard's money boxes)
         f.coins = {}
-        local x = 80
-        for i, c in ipairs({ { "gold", 56, 6, "Interface\\MoneyFrame\\UI-GoldIcon" }, { "silver", 30, 2, "Interface\\MoneyFrame\\UI-SilverIcon" },
-                             { "copper", 30, 2, "Interface\\MoneyFrame\\UI-CopperIcon" } }) do
-            local e = Box(f, c[2], c[3], "")
+        local x = BX + 4
+        for i, c in ipairs({ { 60, 6, "Interface\\MoneyFrame\\UI-GoldIcon" }, { 34, 2, "Interface\\MoneyFrame\\UI-SilverIcon" },
+                             { 34, 2, "Interface\\MoneyFrame\\UI-CopperIcon" } }) do
+            local e = Box(f, c[1], c[2], "")
             e:SetNumeric(true)
             e:SetJustifyH("RIGHT")
-            e:SetPoint("TOPLEFT", f, "TOPLEFT", x, -52)
+            if e.SetTextInsets then e:SetTextInsets(0, 4, 0, 0) end
+            e:SetPoint("TOPLEFT", f, "TOPLEFT", x, -72)
             local icon = f:CreateTexture(nil, "ARTWORK")
-            icon:SetSize(13, 13)
-            icon:SetPoint("LEFT", e, "RIGHT", 3, 0)
-            icon:SetTexture(c[4])
+            icon:SetSize(14, 14)
+            icon:SetPoint("LEFT", e, "RIGHT", 4, 0)
+            icon:SetTexture(c[3])
             f.coins[i] = e
-            x = x + c[2] + 26
+            x = x + c[1] + 30
         end
         f.reward = f.coins[1]
         f.whoBox:SetScript("OnEnterPressed", function() f.coins[1]:SetFocus() end)
         f.whoBox:SetScript("OnTabPressed", function() f.coins[1]:SetFocus() end)
         f.err = f:CreateFontString(nil, "OVERLAY", "GameFontRedSmall")
-        f.err:SetPoint("LEFT", f.coins[3], "RIGHT", 22, 0)
-        f.err:SetPoint("RIGHT", f, "RIGHT", -14, 0)
-        f.err:SetJustifyH("LEFT")
-        local ln = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-        ln:SetPoint("TOPLEFT", f, "TOPLEFT", 18, -82)
-        ln:SetText("Note")
-        f.note = Box(f, 216, 100, "why – ninja looter, camps the flight path...")
-        f.note:SetPoint("TOPLEFT", f, "TOPLEFT", 80, -78)
+        f.err:SetPoint("TOP", f, "TOP", 0, -128)
+        Label("Note", -104)
+        f.note = Box(f, 222, 100, "why? e.g. ninja looter")
+        f.note:SetPoint("TOPLEFT", f, "TOPLEFT", BX + 4, -104)
         local function copper()
             local g, sv, cp = tonumber(f.coins[1]:GetText()) or 0, tonumber(f.coins[2]:GetText()) or 0, tonumber(f.coins[3]:GetText()) or 0
             return g * 10000 + math.min(99, sv) * 100 + math.min(99, cp)
@@ -552,14 +556,14 @@ do
         end
         f.note:SetScript("OnEnterPressed", post)
         f.note:SetScript("OnTabPressed", function() f.coins[1]:SetFocus() end)
-        f.post = Button(f, "Post bounty", 110, 22, post)
-        f.post:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 16, 14)
-        f.down = Button(f, "Take down", 90, 22, function() ns.RemoveWanted(f.key); f:Hide() end)
-        f.down:SetPoint("LEFT", f.post, "RIGHT", 6, 0)
-        local cancel = Button(f, CANCEL or "Cancel", 80, 22, function() f:Hide() end)
-        cancel:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -16, 14)
+        f.post = Button(f, "Post bounty", 120, 24, post)
+        f.post:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 18, 16)
+        f.down = Button(f, "Take down", 96, 24, function() ns.RemoveWanted(f.key); f:Hide() end)
+        f.down:SetPoint("BOTTOM", f, "BOTTOM", 0, 16)
+        local cancel = Button(f, CANCEL or "Cancel", 96, 24, function() f:Hide() end)
+        cancel:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -18, 16)
         f.shareHint = f:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-        f.shareHint:SetPoint("BOTTOM", f, "BOTTOM", 0, 40)
+        f.shareHint:SetPoint("BOTTOM", f, "BOTTOM", 0, 48)
         f:Hide()
         return f
     end
