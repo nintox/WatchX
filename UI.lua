@@ -479,7 +479,7 @@ do
     end
     local function Build()
         local f = CreateFrame("Frame", "WatchXBounty", UIParent)
-        f:SetSize(340, 196)
+        f:SetSize(340, 216)
         f:SetPoint("CENTER", 0, 120)
         f:SetFrameStrata("DIALOG")
         f:SetToplevel(true)
@@ -527,8 +527,14 @@ do
         f.reward = f.coins[1]
         f.whoBox:SetScript("OnEnterPressed", function() f.coins[1]:SetFocus() end)
         f.whoBox:SetScript("OnTabPressed", function() f.coins[1]:SetFocus() end)
+        f.forever = CreateFrame("CheckButton", nil, f, "UICheckButtonTemplate")
+        f.forever:SetSize(22, 22)
+        f.forever:SetPoint("TOPLEFT", f, "TOPLEFT", BX, -128)
+        local fl = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        fl:SetPoint("LEFT", f.forever, "RIGHT", 2, 1)
+        fl:SetText("No end date  |cff808080(else it ends after 14 days)|r")
         f.err = f:CreateFontString(nil, "OVERLAY", "GameFontRedSmall")
-        f.err:SetPoint("TOP", f, "TOP", 0, -128)
+        f.err:SetPoint("TOP", f, "TOP", 0, -152)
         Label("Note", -104)
         f.note = Box(f, 222, 100, "why? e.g. ninja looter")
         f.note:SetPoint("TOPLEFT", f, "TOPLEFT", BX + 4, -104)
@@ -549,7 +555,7 @@ do
                 if name == "" then f.err:SetText("Who?"); f.whoBox:SetFocus() return end
                 key = ns.KeyFromName(name)
             end
-            if ns.SetWanted(key, name, c, f.note:GetText()) then f:Hide() end
+            if ns.SetWanted(key, name, c, f.note:GetText(), f.forever:GetChecked() and true or false) then f:Hide() end
         end
         for i, e in ipairs(f.coins) do
             local nextBox = f.coins[i + 1] or f.note
@@ -591,6 +597,7 @@ do
         bw.coins[2]:SetText((c % 10000) >= 100 and tostring(math.floor(c / 100) % 100) or "")
         bw.coins[3]:SetText((c % 100) > 0 and tostring(c % 100) or "")
         bw.err:SetText("")
+        bw.forever:SetChecked(w and w.forever and true or false)
         bw.note:SetText(w and w.note or "")
         bw.down:SetShown((w and ns.WantedMine(w)) and true or false)
         local d = db()

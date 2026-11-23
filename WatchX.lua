@@ -2527,6 +2527,10 @@ end
         local rw = ns.WantedReward(w) or "?"
         tip:AddLine(" ")
         tip:AddDoubleLine("|cffffa000WANTED|r " .. rw, (w.by == Me() and "by you" or ("by " .. (w.by or "?"))) .. ", " .. Ago(w.t), 1, 1, 1, 0.7, 0.7, 0.7)
+        if not w.claimed then
+            tip:AddLine(w.forever and "No end date – until it's claimed or taken down"
+                or ("Ends in " .. math.max(0, math.ceil(((w.t or time()) + OPEN_DAYS * 86400 - time()) / 86400)) .. " days if nobody claims it"), 0.6, 0.6, 0.6)
+        end
         if w.note then tip:AddLine("\"" .. w.note .. "\"", 1, 0.85, 0.5, true) end
         local c = w.claimed
         if c then
@@ -2584,11 +2588,12 @@ end
         recent[key .. (w.t or 0)] = time()
         Send("A", key, r.name or key, r.class or "", (w.copper and tostring(w.copper)) or w.reward or "", w.note or "", w.by or "", w.t or 0,
             w.claimed and w.claimed.by or "", w.claimed and w.claimed.t or 0, w.claimed and w.claimed.full or "", w.paid and 1 or 0,
-            w.claimed and w.claimed.zone or "")
+            w.claimed and w.claimed.zone or "", w.forever and 1 or 0)
     end
 
-    -- reward: copper, or text like "50g 20s"; a bounty needs one.
-    function ns.SetWanted(key, name, reward, note)
+    -- reward: copper, or text like "50g 20s"; a bounty needs one. forever: no end date (stays until claimed or
+    -- taken down).
+    function ns.SetWanted(key, name, reward, note, forever)
         if not key then return false end
         local copper = type(reward) == "number" and math.floor(reward) or ns.ParseMoney(tostring(reward or ""))
         if not copper or copper <= 0 then
@@ -2601,7 +2606,7 @@ end
             return false
         end
         local r = ns.EnemyRecord(key, name)
-        r.wanted = { copper = copper, note = Clean(note, MAX_NOTE), by = Me(), t = time() }
+        r.wanted = { copper = copper, note = Clean(note, MAX_NOTE), by = Me(), t = time(), forever = forever and true or nil }
         r.wantedHide = nil
         SendAdd(key, r)
         Print("|cffffa000WANTED|r posted: " .. r.name .. " – " .. Money(copper)
@@ -2675,7 +2680,8 @@ end
         local tt = tonumber
         if op == "A" then
             local t = tt(f[7]) or 0
-            if t <= 0 or time() - t > OPEN_DAYS * 86400 then return end
+            local forever = f[13] == "1"
+            if t <= 0 or (not forever and time() - t > OPEN_DAYS * 86400) then return end
             local r = db.enemies[key]
             if r and ((r.wanted and (r.wanted.t or 0) >= t) or (r.wantedHide and r.wantedHide >= t)) then
                 -- known; a claim or a payment we missed still counts
@@ -2692,7 +2698,7 @@ end
             if (not r.class) and f[3] ~= "" then r.class = Clean(f[3], 20) end
             local cp = (f[4] or ""):match("^%d+$") and tonumber(f[4]) or nil
             r.wanted = { copper = cp, reward = (not cp) and Clean(f[4], MAX_REWARD) or nil, note = Clean(f[5], MAX_NOTE),
-                by = Clean(f[6], 40) or from, t = t }
+                by = Clean(f[6], 40) or from, t = t, forever = forever or nil }
             if f[8] and f[8] ~= "" then r.wanted.claimed = { by = Clean(f[8], 40), t = tt(f[9]) or t, full = Clean(f[10], 60), zone = Clean(f[12], 60) } end
             if r.wanted.claimed and f[11] == "1" then r.wanted.paid = time() end
             recent[key .. t] = time()
@@ -2776,7 +2782,7 @@ end
             local w = r.wanted
             if w and ((w.paid and now - w.paid > CLAIMED_DAYS * 86400)
                     or (w.claimed and not w.paid and now - (w.claimed.t or 0) > OPEN_DAYS * 86400)
-                    or (not w.claimed and now - (w.t or 0) > OPEN_DAYS * 86400)) then
+                    or (not w.claimed and not w.forever and now - (w.t or 0) > OPEN_DAYS * 86400)) then
                 r.wanted = nil
             end
         end
