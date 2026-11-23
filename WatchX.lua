@@ -1692,6 +1692,176 @@ end
 
 function ns.LevelDirty() statusCache.dirty = true; bagState.dirty = true end
 
+-- ---------------------------------------------------------------- what you can make (XP boosts)
+-- When you open a profession, the recipes that make XP things (camp tent, campfires, camp features, XP food) are
+-- kept for that character. The XP icons then also show what you can make when you have none: how many you have
+-- the reagents for, or what's missing, and a click opens the profession. Its own function: the main chunk is
+-- close to Lua's 200-locals limit.
+(function()
+    local CRAFT_PROFS = { "Cooking", "Leatherworking", "Tailoring", "Engineering", "Blacksmithing", "Alchemy",
+        "Woodworking", "Survival" }
+    local function CharKey()
+        local n = Plain(UnitName("player"))
+        return type(n) == "string" and n or "?"
+    end
+    local function Mine()
+        db.recipes = db.recipes or {}
+        local k = CharKey()
+        db.recipes[k] = db.recipes[k] or { items = {}, profs = {} }
+        return db.recipes[k]
+    end
+    local function LinkID(link)
+        link = Plain(link)
+        return type(link) == "string" and tonumber(link:match("item:(%d+)")) or nil
+    end
+    local function Kind(id)
+        if id == CAMP_TENT or CAMP_KNOWN[id] then return "tent" end
+        for _, c in ipairs(CAMPFIRES) do if c[1] == id then return "fire" end end
+        if IsCampExtra(id) then return "tent" end
+        if IsXPFood(id) then return "food" end
+    end
+
+    -- The modern profession window (C_TradeSkillUI, what WoW Forever has): recipe IDs and their schematics.
+    local function ScanModern()
+        local T = C_TradeSkillUI
+        local base = T.GetBaseProfessionInfo and T.GetBaseProfessionInfo()
+        local prof = Plain(type(base) == "table" and base.professionName)
+        if type(prof) ~= "string" or prof == "" then return end
+        if T.IsTradeSkillLinked and Plain(T.IsTradeSkillLinked()) == true then return end   -- someone else's
+        local found = {}
+        for _, rid in ipairs(T.GetAllRecipeIDs() or {}) do
+            local okI, info = pcall(T.GetRecipeInfo, rid)
+            local okS, sch = pcall(T.GetRecipeSchematic, rid, false)
+            if okI and type(info) == "table" and info.learned and okS and type(sch) == "table" then
+                local id = tonumber(Plain(sch.outputItemID))
+                local what = id and Kind(id)
+                if what then
+                    local reagents = {}
+                    for _, slot in ipairs(sch.reagentSlotSchematics or {}) do
+                        local r1 = slot.reagents and slot.reagents[1]
+                        local rid2 = r1 and tonumber(Plain(r1.itemID))
+                        if rid2 and (slot.reagentType == nil or slot.reagentType == 1) then
+                            reagents[#reagents + 1] = { id = rid2, name = ItemName(rid2, "reagent"),
+                                count = tonumber(Plain(slot.quantityRequired)) or 1 }
+                        end
+                    end
+                    found[id] = { prof = prof, name = Plain(info.name) or ItemName(id, "?"), kind = what, reagents = reagents }
+                end
+            end
+        end
+        return prof, found
+    end
+
+    local function Scan()
+        local mine = Mine()
+        local prof, found
+        if C_TradeSkillUI and C_TradeSkillUI.GetAllRecipeIDs and C_TradeSkillUI.GetRecipeSchematic then
+            prof, found = ScanModern()
+            if prof then
+                for id, r in pairs(mine.items) do if r.prof == prof and not found[id] then mine.items[id] = nil end end
+                for id, r in pairs(found) do mine.items[id] = r end
+                mine.profs[prof] = time()
+                ns.LevelDirty()
+                return
+            end
+        end
+        if not (GetNumTradeSkills and GetTradeSkillInfo and GetTradeSkillItemLink) then return end
+        prof = Plain(GetTradeSkillLine and (GetTradeSkillLine()))
+        if type(prof) ~= "string" or prof == "" or prof == "UNKNOWN" then return end
+        found = {}
+        for i = 1, (tonumber(Plain(GetNumTradeSkills())) or 0) do
+            local ok, name, kind = pcall(GetTradeSkillInfo, i)
+            name, kind = Plain(name), Plain(kind)
+            if ok and type(name) == "string" and kind ~= "header" then
+                local id = LinkID(GetTradeSkillItemLink(i))
+                local what = id and Kind(id)
+                if what then
+                    local reagents = {}
+                    for j = 1, (tonumber(Plain(GetTradeSkillNumReagents and GetTradeSkillNumReagents(i))) or 0) do
+                        local rName, _, rCount = GetTradeSkillReagentInfo(i, j)
+                        reagents[#reagents + 1] = { id = LinkID(GetTradeSkillReagentItemLink and GetTradeSkillReagentItemLink(i, j)),
+                            name = Plain(rName), count = tonumber(Plain(rCount)) or 1 }
+                    end
+                    found[id] = { prof = prof, name = name, kind = what, reagents = reagents }
+                end
+            end
+        end
+        for id, r in pairs(mine.items) do if r.prof == prof and not found[id] then mine.items[id] = nil end end
+        for id, r in pairs(found) do mine.items[id] = r end
+        mine.profs[prof] = time()
+        ns.LevelDirty()
+    end
+
+    ns.ScanRecipes = Scan
+
+    -- The things you can make for one icon ("tent": tent, campfires, camp features; "food"), not the ones you
+    -- already carry. { id, name, count = 0, fire, craft = { prof, can, missing } }, the ones you can make first.
+    function ns.CraftOptions(kind, have)
+        local list = {}
+        local mine = db and db.recipes and db.recipes[CharKey()]
+        if not mine then return list end
+        for id, r in pairs(mine.items) do
+            if (r.kind == kind or (kind == "tent" and r.kind == "fire")) and not (have and have[id]) then
+                local can, miss = nil, {}
+                for _, g in ipairs(r.reagents or {}) do
+                    local n = g.id and ItemCount(g.id) or 0
+                    local k = math.floor(n / math.max(1, g.count))
+                    can = can and math.min(can, k) or k
+                    if n < g.count then miss[#miss + 1] = (g.count - n) .. " " .. (g.name or "?") end
+                end
+                list[#list + 1] = { id = id, name = r.name or ItemName(id, "?"), count = 0, fire = r.kind == "fire" or nil,
+                    craft = { prof = r.prof, can = can or 0, missing = table.concat(miss, ", ") } }
+            end
+        end
+        table.sort(list, function(a, b)
+            if (a.craft.can > 0) ~= (b.craft.can > 0) then return a.craft.can > 0 end
+            return a.name < b.name
+        end)
+        return list
+    end
+
+    -- Professions you have that WatchX hasn't seen open yet (it can't read recipes before that).
+    function ns.UnseenProfessions()
+        local out = {}
+        local mine = db and db.recipes and db.recipes[CharKey()]
+        local want = {}
+        for _, p in ipairs(CRAFT_PROFS) do want[p] = true end
+        if GetProfessions and GetProfessionInfo then   -- modern
+            for _, idx in ipairs({ GetProfessions() }) do
+                local ok, name = pcall(GetProfessionInfo, idx)
+                name = ok and Plain(name)
+                if type(name) == "string" and want[name] and not (mine and mine.profs[name]) then out[#out + 1] = name end
+            end
+            return out
+        end
+        if not (GetNumSkillLines and GetSkillLineInfo) then return out end
+        for i = 1, (tonumber(Plain(GetNumSkillLines())) or 0) do
+            local ok, name, isHeader = pcall(GetSkillLineInfo, i)
+            name = ok and Plain(name)
+            if type(name) == "string" and not isHeader and want[name] and not (mine and mine.profs[name]) then
+                out[#out + 1] = name
+            end
+        end
+        return out
+    end
+
+    if CreateFrame then
+        local ev = CreateFrame("Frame")
+        for _, e in ipairs({ "TRADE_SKILL_SHOW", "TRADE_SKILL_UPDATE", "TRADE_SKILL_LIST_UPDATE", "TRADE_SKILL_DATA_SOURCE_CHANGED" }) do
+            pcall(ev.RegisterEvent, ev, e)
+        end
+        local queued
+        ev:SetScript("OnEvent", function()
+            if queued or not db then return end
+            queued = true
+            -- a moment later (the list fills in), and once more for item text that wasn't loaded yet
+            C_Timer.After(0.5, function() queued = nil; ns.Safe("recipes", Scan) end)
+            C_Timer.After(3, function() ns.Safe("recipes", Scan) end)
+        end)
+    end
+end)()
+
+
 if CreateFrame then
     local bagEvents = CreateFrame("Frame")
     for _, e in ipairs({ "BAG_UPDATE_DELAYED", "BAG_UPDATE", "PLAYER_ENTERING_WORLD", "TOYS_UPDATED", "UNIT_AURA",
@@ -1830,10 +2000,17 @@ ComputeLevelStatus = function()
     options = {}
     for _, o in ipairs(fires) do options[#options + 1] = o end
     for _, o in ipairs(feats) do options[#options + 1] = o end
+    local have, tentCraft = {}, nil
+    for _, o in ipairs(options) do have[o.id] = true end
+    for _, o in ipairs(ns.CraftOptions and ns.CraftOptions("tent", have) or {}) do
+        options[#options + 1] = o
+        if o.id == CAMP_TENT then tentCraft = o end
+    end
     -- a click puts down the fire first (unless there's one close by), the next click your camp feature
     local fire, feat = Pick("fire", fires), Pick("tent", feats)
     local near = ns.CampFireNear()
     use = (fire and not near) and fire or feat or fire
+    if not use and tents == 0 and tentCraft then use = tentCraft end   -- none: make one
     local picks = {}
     if fire then picks[fire.id] = true end
     if feat then picks[feat.id] = true end
@@ -1841,11 +2018,14 @@ ComputeLevelStatus = function()
     local how = ""
     if use and use.fire and feat then how = " Click: " .. use.name .. " first, then click again for " .. feat.name .. "."
     elseif use and use.fire then how = " Click: " .. use.name .. " (you have no tent)."
+    elseif use and use.craft then
+        how = " You can make one with " .. use.craft.prof .. (use.craft.can > 0 and (" (reagents for " .. use.craft.can .. ")")
+            or (use.craft.missing ~= "" and (" – missing " .. use.craft.missing) or "")) .. ". Click: open " .. use.craft.prof .. "."
     elseif use then how = " Click: " .. use.name .. (near and " (there's a campfire close by)." or ".") end
     if boost then
         add("wait", "Boosted Rest – you can use another tent when it's gone.", tentTip, boost.left)
     elseif pct < 5 then
-        add("todo", "Your rested is under 5%." .. (tents > 0 and how or " You have no Camp Tent."), tentTip, nil, tents)
+        add("todo", "Your rested is under 5%." .. ((tents > 0 or (use and use.craft)) and how or " You have no Camp Tent."), tentTip, nil, tents)
     else
         add("ok", ("Not needed – you have %d%% rested."):format(math.floor(pct + 0.5)) .. how, tentTip)
     end
@@ -1853,8 +2033,13 @@ ComputeLevelStatus = function()
 
     -- Well Fed, and XP food in your bags
     local food, foodName, foodID, foods = foodCache[1], foodCache[2], foodCache[3], foodCache[4]
-    slot, options = "food", foods or {}
+    slot, options = "food", {}
+    local haveFood = {}
+    for _, o in ipairs(foods or {}) do options[#options + 1] = o; haveFood[o.id] = true end
+    local cookable = ns.CraftOptions and ns.CraftOptions("food", haveFood) or {}
+    for _, o in ipairs(cookable) do options[#options + 1] = o end
     local fpick = Pick("food", options)
+    if fpick and fpick.craft and foods and foods[1] then fpick = foods[1] end   -- eat what you have before cooking
     use = fpick
     if fpick then foodName, foodID = fpick.name, fpick.id end
     seen.food, seen.foodName = food, foodName
@@ -1865,7 +2050,7 @@ ComputeLevelStatus = function()
     local none = food == 0   -- nil: can't tell
     local bagNote = none and "\n|cffff6060No XP food in your bags!|r Cook some, or buy it."
         or (food and food > 0 and ("\nXP food in your bags: " .. food
-            .. (#options > 1 and (" (" .. #options .. " kinds)") or "") .. ".")) or ""
+            .. (#(foods or {}) > 1 and (" (" .. #foods .. " kinds)") or "") .. ".")) or ""
     name = "Well Fed"
     if fed then
         icon = SpellIcon(WELL_FED) or ItemIcon(foodID) or "Interface\\Icons\\Spell_Misc_Food"
@@ -1873,9 +2058,13 @@ ComputeLevelStatus = function()
             fpick and fpick.count)
     else
         icon = ItemIcon(foodID) or SpellIcon(WELL_FED) or "Interface\\Icons\\Spell_Misc_Food"
-        add("todo", (none and "|cffff6060No XP food in your bags!|r Cook some, or buy it.")
+        local cook = none and fpick and fpick.craft
+        add("todo", (cook and ("|cffff6060No XP food in your bags|r – you can make " .. fpick.name .. " with " .. cook.prof
+                .. (cook.can > 0 and (" (reagents for " .. cook.can .. ")") or (cook.missing ~= "" and (" – missing " .. cook.missing) or ""))
+                .. ". Click: open " .. cook.prof .. "."))
+            or (none and "|cffff6060No XP food in your bags!|r Cook some, or buy it.")
             or ("Eat " .. (foodName or "XP food") .. (fpick and (" (you have " .. fpick.count .. ").") or ".")),
-            fedTip, nil, fpick and fpick.count)
+            fedTip, nil, fpick and not fpick.craft and fpick.count or nil)
     end
 
     -- Cozy Sleeping Bag

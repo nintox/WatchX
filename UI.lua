@@ -4156,6 +4156,7 @@ end
 -- What a click does: /use the item (by name for a toy, which isn't in your bags).
 local function UseMacro(o)
     if not o then return "" end
+    if o.craft then return "/cast " .. o.craft.prof end   -- one you can make: open the profession
     return o.toy and ("/use " .. o.name) or ("/use item:" .. o.id)
 end
 local function RememberPick(slot, id)
@@ -4214,6 +4215,12 @@ local function LevelIconTip(self)
         end
         if n > 1 then GameTooltip:AddLine("Or click another one in the column.", 0.7, 0.7, 0.7, true) end
     end
+    if (r.slot == "tent" or r.slot == "food") and ns.UnseenProfessions then
+        local unseen = ns.UnseenProfessions()
+        if #unseen > 0 then
+            GameTooltip:AddLine("Open " .. table.concat(unseen, ", ") .. " once – then WatchX shows what you can make.", 0.6, 0.8, 1, true)
+        end
+    end
     GameTooltip:Show()
 end
 
@@ -4236,6 +4243,11 @@ local function LevelFlyButton(m, i)
     b.badge:SetTexture(LV_BADGES.ok)
     b.count = b:CreateFontString(nil, "OVERLAY", "NumberFontNormalSmall")
     b.count:SetPoint("BOTTOMRIGHT", b, "BOTTOMRIGHT", 0, 1)
+    b.make = b:CreateTexture(nil, "OVERLAY", nil, 3)   -- a hammer: one you can make, not one you carry
+    b.make:SetSize(13, 13)
+    b.make:SetPoint("BOTTOMLEFT", b, "BOTTOMLEFT", -2, -2)
+    b.make:SetTexture("Interface\\Icons\\Trade_BlackSmithing")
+    b.make:Hide()
     local hl = b:CreateTexture(nil, "HIGHLIGHT")
     hl:SetAllPoints()
     hl:SetColorTexture(1, 1, 1, 0.15)
@@ -4245,13 +4257,21 @@ local function LevelFlyButton(m, i)
         local ok = GameTooltip.SetItemByID and pcall(GameTooltip.SetItemByID, GameTooltip, self.opt.id)
         if not ok then GameTooltip:SetText(self.opt.name or "") end
         GameTooltip:AddLine(" ")
-        GameTooltip:AddLine("|cffffd100Left-click:|r use it now", 1, 1, 1)
-        GameTooltip:AddLine("|cffffd100Right-click:|r use this one when you click the icon", 1, 1, 1)
+        local c = self.opt.craft
+        if c then
+            GameTooltip:AddLine("You don't have one – you can make it (" .. c.prof .. ")", 0.4, 1, 0.4, true)
+            if c.can > 0 then GameTooltip:AddLine("Reagents for " .. c.can .. " in your bags.", 1, 1, 1)
+            elseif c.missing ~= "" then GameTooltip:AddLine("Missing: " .. c.missing, 1, 0.4, 0.4, true) end
+            GameTooltip:AddLine("|cffffd100Click:|r open " .. c.prof, 1, 1, 1)
+        else
+            GameTooltip:AddLine("|cffffd100Left-click:|r use it now", 1, 1, 1)
+            GameTooltip:AddLine("|cffffd100Right-click:|r use this one when you click the icon", 1, 1, 1)
+        end
         GameTooltip:Show()
     end)
     b:SetScript("OnLeave", GameTooltip_Hide)
     b:SetScript("PostClick", function(self)
-        if not self.opt then return end
+        if not self.opt or self.opt.craft then return end
         RememberPick(self.opt.fire and "fire" or m.slot, self.opt.id)
         ns.RefreshLevel()
     end)
@@ -4299,8 +4319,15 @@ local function FillLevelMenu(m, r)
             b.icon:SetTexture(ns.ItemIcon(o.id) or "Interface\\Icons\\INV_Misc_QuestionMark")
             if r.use and r.use.id == o.id then b.border:SetColorTexture(1, 0.82, 0, 1)   -- what the icon click does
             else b.border:SetColorTexture(0.15, 0.15, 0.15, 1) end
-            b.badge:SetAlpha(mark[o.id] and 1 or 0)
-            b.count:SetText((not o.toy and o.count and o.count > 1) and o.count or "")
+            b.badge:SetAlpha((mark[o.id] and not o.craft) and 1 or 0)
+            b.icon:SetDesaturated(o.craft and true or false)
+            b.icon:SetAlpha(o.craft and 0.75 or 1)
+            b.make:SetShown(o.craft and true or false)
+            if o.craft then
+                b.count:SetText(o.craft.can > 0 and ("|cff40ff40" .. o.craft.can .. "|r") or "|cffff40400|r")
+            else
+                b.count:SetText((not o.toy and o.count and o.count > 1) and o.count or "")
+            end
             b:Show()
         elseif b then
             b.opt = nil
@@ -4543,7 +4570,324 @@ function ns.LevelMove(on)
         if lvLabel then lvLabel:Hide() end
     end
     ns.RefreshLevel()
+    if ns.XPBarMove then ns.XPBarMove(on) end
 end
+
+-- ---------------------------------------------------------------- XP bar (until max level)
+-- Under the XP boosts icons: your XP with rested, finished quests (orange) and unfinished ones (yellow) on the
+-- bar, time this level and this session, XP an hour and when you'll level. A plain frame: shows in combat too.
+-- Its own function (not a do-block): UI.lua's main chunk is close to Lua's 200-locals limit.
+(function()
+    local xb, xbLabel
+    local XB_W, XB_H, XB_BAR = 330, 52, 18
+    local session = { start = time(), xp = 0 }
+    local played = { level = nil, at = nil }
+    local quests = { done = 0, todo = 0, at = 0 }
+    local lastXP, lastMax
+
+    local function Num(n)
+        n = n or 0
+        if n >= 1e6 then return ("%.1fm"):format(n / 1e6) end
+        if n >= 1e3 then return ("%.1fk"):format(n / 1e3) end
+        return tostring(math.floor(n + 0.5))
+    end
+    local function Dur(s)
+        s = math.max(0, math.floor(s or 0))
+        local d, h, m = math.floor(s / 86400), math.floor(s / 3600) % 24, math.floor(s / 60) % 60
+        if d > 0 then return ("%dd %dh"):format(d, h) end
+        if h > 0 then return ("%dh %dm"):format(h, m) end
+        if m > 0 then return ("%dm %ds"):format(m, s % 60) end
+        return s .. "s"
+    end
+    local function N(v) v = v and (issecretvalue and issecretvalue(v) and nil or v); return tonumber(v) end
+
+    -- XP from the quests in your log: finished ones (hand them in) and the rest.
+    -- Two ways, by client: the modern quest log (C_QuestLog: the reward by quest ID) or the classic one (the reward
+    -- of the selected quest: each one is selected in turn and your selection put back, skipped while the quest log
+    -- is open so nothing jumps under your mouse).
+    local function ScanQuests()
+        quests.at = GetTime()
+        local done, todo = 0, 0
+        local Q = C_QuestLog
+        if Q and Q.GetInfo and Q.GetNumQuestLogEntries and GetQuestLogRewardXP then
+            local n = N(Q.GetNumQuestLogEntries()) or 0
+            for i = 1, n do
+                local ok, info = pcall(Q.GetInfo, i)
+                local id = ok and type(info) == "table" and not info.isHeader and not info.isHidden and N(info.questID)
+                if id then
+                    local okx, v = pcall(GetQuestLogRewardXP, id)
+                    local xp = okx and N(v) or 0
+                    local okc, c = pcall(Q.IsComplete or function() return info.isComplete end, id)
+                    if okc and (c == true or c == 1) then done = done + xp else todo = todo + xp end
+                end
+            end
+        elseif GetQuestLogTitle and GetQuestLogRewardXP and SelectQuestLogEntry and GetQuestLogSelection then
+            if QuestLogFrame and QuestLogFrame:IsShown() then return end
+            local n = N(GetNumQuestLogEntries and (GetNumQuestLogEntries())) or 0
+            local sel = N(GetQuestLogSelection()) or 0
+            for i = 1, n do
+                local ok, title, _, _, isHeader, _, isComplete = pcall(GetQuestLogTitle, i)
+                if ok and title and not isHeader then
+                    pcall(SelectQuestLogEntry, i)
+                    local okx, v = pcall(GetQuestLogRewardXP)
+                    local xp = okx and N(v) or 0
+                    if isComplete == 1 or isComplete == true then done = done + xp else todo = todo + xp end
+                end
+            end
+            pcall(SelectQuestLogEntry, sel)
+        else
+            return
+        end
+        quests.done, quests.todo = done, todo
+    end
+
+    local function Seg(parent, layer, r, g, b, a)
+        local t = parent:CreateTexture(nil, layer)
+        t:SetTexture("Interface\\TargetingFrame\\UI-StatusBar")
+        t:SetVertexColor(r, g, b, a or 1)
+        t:Hide()
+        return t
+    end
+    local function Place(t, x0, x1)
+        if x1 - x0 < 0.5 then t:Hide() return end
+        t:ClearAllPoints()
+        t:SetPoint("TOPLEFT", xb.bar, "TOPLEFT", x0, 0)
+        t:SetPoint("BOTTOMLEFT", xb.bar, "BOTTOMLEFT", x0, 0)
+        t:SetWidth(x1 - x0)
+        t:Show()
+    end
+
+    local function Build()
+        local f = CreateFrame("Frame", "WatchXXPBar", UIParent)
+        f:SetFrameStrata("MEDIUM")
+        f:SetClampedToScreen(true)
+        f:SetMovable(true)
+        f:SetSize(db().xpBarWidth or XB_W, XB_H)
+        f:SetScale(ClampScale(db().xpBarScale))
+        Flat(f)
+        f.top1 = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        f.top1:SetPoint("TOPLEFT", f, "TOPLEFT", 7, -5)
+        f.top2 = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        f.top2:SetPoint("TOPRIGHT", f, "TOPRIGHT", -7, -5)
+        f.bar = CreateFrame("Frame", nil, f)
+        f.bar:SetPoint("TOPLEFT", f, "TOPLEFT", 6, -18)
+        f.bar:SetPoint("TOPRIGHT", f, "TOPRIGHT", -6, -18)
+        f.bar:SetHeight(XB_BAR)
+        local back = f.bar:CreateTexture(nil, "BACKGROUND")
+        back:SetAllPoints()
+        back:SetColorTexture(0.08, 0.06, 0.04, 0.9)
+        f.rest = Seg(f.bar, "BORDER", 0.0, 0.39, 0.88, 0.55)     -- rested: Blizzard's blue
+        f.todo = Seg(f.bar, "ARTWORK", 1, 0.85, 0.35, 0.55)       -- unfinished quests
+        f.done = Seg(f.bar, "ARTWORK", 1, 0.55, 0.05, 0.9)        -- finished quests
+        f.cur = Seg(f.bar, "ARTWORK", 0.58, 0.0, 0.55, 1)         -- your XP: Blizzard's purple
+        f.cur:SetDrawLayer("ARTWORK", 2)
+        local edge = CreateFrame("Frame", nil, f.bar)
+        edge:SetAllPoints()
+        edge:SetFrameLevel(f.bar:GetFrameLevel() + 1)
+        if Backdrop(edge, { edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", edgeSize = 8 }) then
+            edge:SetBackdropBorderColor(EDGE[1], EDGE[2], EDGE[3], 0.9)
+        end
+        f.lvl = edge:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+        f.lvl:SetPoint("LEFT", f.bar, "LEFT", 6, 0)
+        f.mid = edge:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+        f.mid:SetPoint("CENTER", f.bar, "CENTER", 0, 0)
+        f.pct = edge:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+        f.pct:SetPoint("RIGHT", f.bar, "RIGHT", -6, 0)
+        f.bot1 = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        f.bot1:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 7, 5)
+        f.bot2 = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        f.bot2:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -7, 5)
+        f.bot2:SetPoint("LEFT", f.bot1, "RIGHT", 8, 0)
+        f.bot2:SetJustifyH("RIGHT")
+        f.bot2:SetWordWrap(false)
+        f:EnableMouse(true)
+        f:RegisterForDrag("LeftButton")
+        f:SetScript("OnDragStart", function(self) if moving and not self.compact then self:StartMoving() end end)
+        f:SetScript("OnDragStop", function(self)
+            if self.compact then return end
+            self:StopMovingOrSizing()
+            if ns.Snap then ns.Snap(self) end
+            SavePoint(self, "xpBarPoint")
+            ns.RefreshXPBar()
+        end)
+        f:SetScript("OnMouseUp", function(_, button)
+            if button ~= "RightButton" then return end
+            if moving then ns.ResetXPBar() elseif ns.OpenLevelSettings then ns.OpenLevelSettings() end
+        end)
+        f:SetScript("OnEnter", function(self)
+            if moving then return end
+            local d = self.data
+            if not d then return end
+            GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
+            GameTooltip:SetText("XP – level " .. d.level)
+            GameTooltip:AddDoubleLine("XP", Num(d.cur) .. " / " .. Num(d.max) .. "  (" .. Num(d.max - d.cur) .. " to go)", 1, 0.82, 0, 1, 1, 1)
+            GameTooltip:AddDoubleLine("Rested", Num(d.rested) .. ("  (%.1f%%)"):format(d.rested / d.max * 100), 0.3, 0.6, 1, 1, 1, 1)
+            GameTooltip:AddDoubleLine("Finished quests", Num(quests.done), 1, 0.55, 0.05, 1, 1, 1)
+            GameTooltip:AddDoubleLine("Unfinished quests", Num(quests.todo), 1, 0.85, 0.35, 1, 1, 1)
+            GameTooltip:AddDoubleLine("With finished quests", ("%.1f%%"):format(math.min(100, (d.cur + quests.done) / d.max * 100)), 1, 0.55, 0.05, 1, 1, 1)
+            GameTooltip:AddLine(" ")
+            GameTooltip:AddDoubleLine("Time this level", played.level and Dur(played.level + time() - played.at) or "–", 1, 0.82, 0, 1, 1, 1)
+            GameTooltip:AddDoubleLine("This session", Num(session.xp) .. " XP in " .. Dur(time() - session.start), 1, 0.82, 0, 1, 1, 1)
+            GameTooltip:AddDoubleLine("XP an hour", d.rate and Num(d.rate) or "–", 1, 0.82, 0, 1, 1, 1)
+            GameTooltip:AddDoubleLine("Level in", d.rate and Dur((d.max - d.cur) / d.rate * 3600) or "– (kill something first)", 1, 0.82, 0, 1, 1, 1)
+            GameTooltip:AddLine(" ")
+            GameTooltip:AddLine("|cffffd100Right-click:|r settings", 1, 1, 1)
+            GameTooltip:Show()
+        end)
+        f:SetScript("OnLeave", GameTooltip_Hide)
+        AddGrips(f, function(self, st, cx, cy)
+            SizeTo(self, st, cx, cy, XB_H, "xpBarScale", "xpBarWidth")
+            self:SetWidth(db().xpBarWidth or XB_W)
+            ns.RefreshXPBar()
+        end, function(self) SavePoint(self, "xpBarPoint") end)
+        local tick = 0
+        f:SetScript("OnUpdate", function(self, elapsed)
+            tick = tick + elapsed
+            if tick >= 1 then tick = 0; ns.Safe("xp bar", ns.RefreshXPBar) end
+        end)
+        f:Hide()
+        return f
+    end
+
+    -- Compact (under the Nearby list): just the bar; the rest is in the tooltip.
+    local function Layout(compact)
+        if xb.compact == compact then return end
+        xb.compact = compact
+        for _, fs in ipairs({ xb.top1, xb.top2, xb.bot1, xb.bot2 }) do fs:SetShown(not compact) end
+        xb.bar:ClearAllPoints()
+        local y = compact and -4 or -18
+        xb.bar:SetPoint("TOPLEFT", xb, "TOPLEFT", compact and 4 or 6, y)
+        xb.bar:SetPoint("TOPRIGHT", xb, "TOPRIGHT", compact and -4 or -6, y)
+        xb:SetHeight(compact and (XB_BAR + 8) or XB_H)
+    end
+    local function Position()
+        xb:ClearAllPoints()
+        xb.attachedTo = nil
+        if db().xpBarAttach then
+            local host = (nb and nb:IsShown()) and nb or mini
+            if host then
+                xb.attachedTo = host
+                xb:SetScale(host:GetScale() or 1)
+                xb:SetWidth(host:GetWidth() or XB_W)
+                xb:SetPoint("TOPLEFT", host, "BOTTOMLEFT", 0, -2)
+                return
+            end
+        end
+        xb:SetScale(ClampScale(db().xpBarScale))
+        xb:SetWidth(db().xpBarWidth or XB_W)
+        if db().xpBarPoint then
+            LoadPoint(xb, "xpBarPoint", { "TOP", "TOP", 0, -200 })
+        elseif lv then   -- under the XP boosts icons until you move it
+            xb:SetPoint("TOPLEFT", lv, "BOTTOMLEFT", 0, -4)
+        else
+            LoadPoint(xb, "xpBarPoint", { "TOPRIGHT", "TOPRIGHT", -240, -500 })
+        end
+    end
+
+    function ns.RefreshXPBar()
+        if not ns.db then return end
+        local d = db()
+        local level = N(UnitLevel("player")) or 0
+        local show = d.xpBar ~= false and level > 0 and level < (ns.MaxLevel and ns.MaxLevel() or 60)
+        if show and not moving and d.levelHideInstance and IsInInstance then
+            local inside, kind = IsInInstance()
+            if inside and (kind == "party" or kind == "raid") then show = false end
+        end
+        if not show then
+            if xb then xb:Hide() end
+            if xbLabel then xbLabel:Hide() end
+            return
+        end
+        if not xb then xb = Build() end
+        local compact = d.xpBarAttach and true or false
+        Layout(compact)
+        local host = compact and ((nb and nb:IsShown()) and nb or mini) or nil
+        if xb.attachedTo ~= host or (host and math.abs((xb:GetWidth() or 0) - (host:GetWidth() or 0)) > 0.5) or not xb.placed then
+            xb.placed = true
+            Position()
+        end
+        local cur, max = N(UnitXP("player")) or 0, N(UnitXPMax("player")) or 1
+        if max <= 0 then max = 1 end
+        local rested = N(GetXPExhaustion and GetXPExhaustion()) or 0
+        if GetTime() - quests.at > 30 then ScanQuests() end
+        local w = xb.bar:GetWidth() or 300
+        local function X(v) return math.min(w, math.max(0, v / max * w)) end
+        Place(xb.cur, 0, X(cur))
+        Place(xb.done, X(cur), X(cur + quests.done))
+        Place(xb.todo, X(cur + quests.done), X(cur + quests.done + quests.todo))
+        Place(xb.rest, X(cur), X(cur + rested))
+        local now = time()
+        local spent = now - session.start
+        local rate = (session.xp > 0 and spent > 60) and (session.xp / spent * 3600) or nil
+        xb.data = { level = level, cur = cur, max = max, rested = rested, rate = rate }
+        xb.lvl:SetText("Level " .. level)
+        xb.mid:SetText(Num(cur) .. " / " .. Num(max) .. "  |cffffd100(" .. Num(max - cur) .. ")|r")
+        xb.pct:SetText(("%.1f%%"):format(cur / max * 100)
+            .. (quests.done > 0 and ("  |cffffa020(%.1f%%)|r"):format(math.min(100, (cur + quests.done) / max * 100)) or ""))
+        xb.top1:SetText("This level: |cffffd100" .. (played.level and Dur(played.level + now - played.at) or "–") .. "|r")
+        xb.top2:SetText("Session: |cffffd100" .. Dur(spent) .. "|r  ·  +" .. Num(session.xp) .. " XP"
+            .. (rate and ("  ·  " .. Num(rate) .. "/h") or ""))
+        xb.bot1:SetText("Level in: |cffffd100" .. (rate and Dur((max - cur) / rate * 3600) or "–") .. "|r")
+        xb.bot2:SetText(("|cffff9020Done %s|r  ·  |cffffd860Quests %s|r  ·  |cff4d9fffRested %s (%.0f%%)|r"):format(
+            Num(quests.done), Num(quests.todo), Num(rested), rested / max * 100))
+        xb:EnableMouse(true)
+        xb:Show()
+        if moving and not compact then
+            xbLabel = xbLabel or MakeLabel("WatchXXPBarLabel")
+            xbLabel:Set(xb, "|cffffd100XP bar|r · drag to move · right edge: width · bottom edge: text size · right-click: back under the icons")
+        elseif xbLabel then
+            xbLabel:Hide()
+        end
+    end
+
+    function ns.XPBarMove(on)
+        if not xb then return end
+        ShowGrips(xb, on and not xb.compact)
+        if not on and not xb.compact then SavePoint(xb, "xpBarPoint") end
+        ns.RefreshXPBar()
+    end
+    function ns.ResetXPBar()
+        local d = db()
+        d.xpBarPoint, d.xpBarWidth, d.xpBarScale = nil, nil, nil
+        if xb then xb:SetScale(1); xb:SetWidth(XB_W); Position() end
+        ns.RefreshXPBar()
+    end
+
+    -- XP this session (level-ups included), time this level (/played, without the chat lines), quests.
+    local ev = CreateFrame("Frame")
+    for _, e in ipairs({ "PLAYER_ENTERING_WORLD", "PLAYER_XP_UPDATE", "PLAYER_LEVEL_UP", "UPDATE_EXHAUSTION",
+                         "QUEST_LOG_UPDATE", "TIME_PLAYED_MSG" }) do
+        pcall(ev.RegisterEvent, ev, e)
+    end
+    local asked
+    ev:SetScript("OnEvent", function(_, event, a1, a2) ns.Safe("xp bar", function()
+        if event == "PLAYER_XP_UPDATE" or event == "PLAYER_LEVEL_UP" or event == "PLAYER_ENTERING_WORLD" then
+            local cur, max = N(UnitXP("player")) or 0, N(UnitXPMax("player")) or 0
+            if lastXP then
+                local gain = (cur >= lastXP) and (cur - lastXP) or ((lastMax or 0) - lastXP + cur)
+                if gain > 0 and gain < max * 2 then session.xp = session.xp + gain end
+            end
+            lastXP, lastMax = cur, max
+            if event == "PLAYER_LEVEL_UP" then played.level, played.at = 0, time() end
+            if event == "PLAYER_ENTERING_WORLD" and not asked and RequestTimePlayed then
+                asked = true
+                C_Timer.After(4, function()
+                    -- ask quietly: the game prints /played to chat, so that one answer is kept out of it
+                    local orig = ChatFrame_DisplayTimePlayed
+                    if orig then ChatFrame_DisplayTimePlayed = function() end end
+                    pcall(RequestTimePlayed)
+                    C_Timer.After(3, function() if orig and ChatFrame_DisplayTimePlayed ~= orig then ChatFrame_DisplayTimePlayed = orig end end)
+                end)
+            end
+        elseif event == "TIME_PLAYED_MSG" then
+            local lvlTime = N(a2)
+            if lvlTime then played.level, played.at = lvlTime, time() end
+        elseif event == "QUEST_LOG_UPDATE" then
+            quests.at = 0
+        end
+        ns.RefreshXPBar()
+    end) end)
+end)()
 
 -- Settings > WatchX > XP boosts
 local levelPage, levelCategory
@@ -4594,7 +4938,11 @@ function ns.BuildLevelSettings()
         function() return db().levelFlash ~= false end, function(v) db().levelFlash = v end)
     check("Warn when a boost runs out", "mid-screen + sound: Well Fed, Well-Rested, tent and bag ready again",
         function() return db().levelWarn ~= false end, function(v) db().levelWarn = v end)
-    check("Hide in combat", nil,
+    check("XP bar", "under the icons: XP, rested, quests, time this level, when you'll level",
+        function() return db().xpBar ~= false end, function(v) db().xpBar = v; ns.RefreshXPBar() end)
+    check("XP bar under the Nearby list", "just the bar, same width – the rest is in its tooltip",
+        function() return db().xpBarAttach == true end, function(v) db().xpBarAttach = v; ns.RefreshXPBar() end)
+    check("Hide in combat", "the icons (the XP bar stays)",
         function() return db().levelHideCombat ~= false end, function(v) db().levelHideCombat = v end)
     check("Hide in dungeons and raids", nil,
         function() return db().levelHideInstance == true end, function(v) db().levelHideInstance = v end)
