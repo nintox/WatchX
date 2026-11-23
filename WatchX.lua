@@ -3599,6 +3599,19 @@ local function OnSlash(input)
             Print("|cffaaaaaaThe game's own measure: /console scriptProfile 1 and a /reload (it costs a little itself – "
                 .. "/console scriptProfile 0 afterwards).|r")
         end
+    elseif cmd == "auras" or cmd == "buffs!" then
+        -- every buff on you: name, spell ID, stacks and time left (to find what the sleeping bag, a fire or food give)
+        local n = 0
+        for i = 1, 40 do
+            local ok, a = pcall(C_UnitAuras.GetAuraDataByIndex, "player", i, "HELPFUL")
+            if not ok or type(a) ~= "table" then break end
+            local name, sid, st, ex = Plain(a.name), Plain(a.spellId), Plain(a.applications), Plain(a.expirationTime)
+            local left = (type(ex) == "number" and ex > 0) and math.floor(ex - GetTime()) or nil
+            Print(("%d. |cffffd100%s|r  id %s  ·  stacks %s  ·  %s"):format(i, tostring(name or "?"), tostring(sid or "?"),
+                tostring(st or 0), left and (left .. " s left") or "no end"))
+            n = n + 1
+        end
+        if n == 0 then Print("No buffs on you.") end
     elseif cmd == "rares" or cmd == "rare" or cmd == "catalogue" then
         if ns.ShowRares then ns.ShowRares() end
     elseif cmd == "wanted" or cmd == "bounty" then
@@ -3678,7 +3691,7 @@ local function OnSlash(input)
         for i = math.max(1, #lines - 24), #lines do DEFAULT_CHAT_FRAME:AddMessage("  " .. lines[i]) end
     else
         Print("Made by " .. ns.AUTHOR .. ". Commands: /wx (panel) | settings | guide | test | add <name> | "
-            .. "remove <name> | profile [name] | enemy | friend | nearby [on|off|test] | xp | buffs [name|test] | avoid [name: note] | wanted [name: reward note] | rares | mem | attack | afk [minutes] | instant | list | mini | quiet | alert | move | lock | unlock | minimap | sound | "
+            .. "remove <name> | profile [name] | enemy | friend | nearby [on|off|test] | xp | buffs [name|test] | avoid [name: note] | wanted [name: reward note] | rares | mem | auras | attack | afk [minutes] | instant | list | mini | quiet | alert | move | lock | unlock | minimap | sound | "
             .. "whisper | dead [name] | "
             .. "respawn <min> [name] | reset | log [previous]")
     end

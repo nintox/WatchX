@@ -5197,11 +5197,17 @@ end
             if event == "PLAYER_ENTERING_WORLD" and not asked and RequestTimePlayed then
                 asked = true
                 C_Timer.After(4, function()
-                    -- ask quietly: the game prints /played to chat, so that one answer is kept out of it
-                    local orig = ChatFrame_DisplayTimePlayed
-                    if orig then ChatFrame_DisplayTimePlayed = function() end end
+                    -- ask quietly: the chat windows print /played, so they don't hear this one answer
+                    local muted = {}
+                    for i = 1, (NUM_CHAT_WINDOWS or 10) do
+                        local cf = _G["ChatFrame" .. i]
+                        if cf and cf.IsEventRegistered and cf:IsEventRegistered("TIME_PLAYED_MSG") then
+                            cf:UnregisterEvent("TIME_PLAYED_MSG")
+                            muted[#muted + 1] = cf
+                        end
+                    end
                     pcall(RequestTimePlayed)
-                    C_Timer.After(3, function() if orig and ChatFrame_DisplayTimePlayed ~= orig then ChatFrame_DisplayTimePlayed = orig end end)
+                    C_Timer.After(3, function() for _, cf in ipairs(muted) do cf:RegisterEvent("TIME_PLAYED_MSG") end end)
                 end)
             end
         elseif event == "TIME_PLAYED_MSG" then
@@ -5251,14 +5257,9 @@ do (function()
     -- The sleeping bag: one Well-Rested stack a minute, up to 3. You lie down by clicking the bag on the ground (no
     -- cast to see), so the count starts at a "sleep" buff, a new stack, or using the bag item (ns.bagStart).
     local bag = {}
-    local function WRStacks()
-        if not (C_UnitAuras and C_UnitAuras.GetPlayerAuraBySpellID) then return 0 end
-        local ok, a = pcall(C_UnitAuras.GetPlayerAuraBySpellID, 429959)
-        return ok and type(a) == "table" and N(a.applications) or 0
-    end
-    local function BagState(lying)
+    local function BagState(lying, wr)
         local now = GetTime()
-        local stacks = WRStacks()
+        local stacks = wr or 0   -- Well-Rested's stacks, found by name in Find (its spell ID differs between clients)
         if bag.stacks == nil then bag.stacks = stacks end                       -- first look: just the baseline
         if lying and not ns.bagStart then ns.bagStart = now end
         if ns.bagStart and bag.start ~= ns.bagStart then bag.start, bag.at = ns.bagStart, ns.bagStart end
@@ -5286,12 +5287,15 @@ do (function()
             local lower = name and name:lower() or ""
             if not kind and lower:find("campfire", 1, true) then kind = "fire" end
             if not kind and lower:find("sleep", 1, true) and not lower:find("well", 1, true) then out.lying = true end
+            if lower == "well-rested" or lower == "well rested" or N(a.spellId) == 429959 then
+                out.wr = math.max(out.wr or 0, N(a.applications) or 1)
+            end
             if kind then
                 local left = N(a.expirationTime) and math.max(0, N(a.expirationTime) - GetTime()) or nil
                 out[#out + 1] = { kind = kind, index = i, icon = a.icon, left = left, dur = N(a.duration) }
             end
         end
-        local b = BagState(out.lying)
+        local b = BagState(out.lying, out.wr)
         if b then out[#out + 1] = b end
         -- a fire you lit here, when there's no Campfire buff to show
         local hasFire = false
