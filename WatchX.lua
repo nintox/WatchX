@@ -1284,6 +1284,21 @@ end
 -- Your auras are hidden in combat on Forever, so they're read out of combat and kept (counting down).
 local CAMP_TENT, SLEEPING_BAG = 279978, 211527
 local CAMPFIRES = { { 279981, "Basic Campfire" }, { 279961, "Journeyman Campfire" }, { 279974, "Expert Campfire" } }
+-- The other camp features (put by a campfire, they buff everyone sitting there; they share a 1-hour cooldown).
+-- From ForeverFishing's camp list (Nov 2026); anything else whose tooltip says "Requires a Campfire nearby"
+-- is found in your bags too.
+local CAMP_FEATURES = {
+    { 279979, "Camp Chair" }, { 279967, "Fish Bowl" }, { 279960, "Lodestone" }, { 279944, "Sharpening Wheel" },
+    { 279962, "Incense Candle" }, { 279956, "Mana Well" }, { 279976, "Enchanted Lute" }, { 279968, "First Aid Kit" },
+    { 279950, "Reagent Bot" }, { 279949, "Repair Bot" }, { 279957, "Cookie's Feast" }, { 279972, "Faction Banner" },
+    { 279973, "Faction Banner" }, { 279965, "Fishing Rack" }, { 279966, "Fishing Hut" }, { 279970, "Fermenter" },
+    { 279990, "Alchemy Laboratory" }, { 279988, "Anvil" }, { 279955, "Master Forge" }, { 279985, "Arcane Salvager" },
+    { 279987, "Arcane Forge" }, { 279989, "Anarchist's Workbench" }, { 279964, "Greenhouse" },
+    { 279947, "Seed Hybridizer" }, { 279941, "Tanning Rack" }, { 279945, "Sewing Machine" }, { 279948, "Rock Garden" },
+    { 279952, "Molten Foundry" }, { 279969, "Field Guide" }, { 279938, "Trapper's Workbench" },
+    { 279943, "Spinning Wheel" }, { 279959, "Loom" }, { 279982, "Iron Oven" }, { 279940, "Toxin Study" },
+    { 279951, "Plague Doctor's Laboratory" },
+}
 local WELL_FED, BOOSTED_REST, WELL_RESTED = 1243969, 1229451, 429959
 local AURA_NAMES = { [WELL_FED] = "Well Fed", [BOOSTED_REST] = "Boosted Rest", [WELL_RESTED] = "Well-Rested" }
 local auraCache = { at = 0 }
@@ -1354,6 +1369,9 @@ local function ReadAuras()
                 break
             end
             name, count, expires, sid = Plain(name), Plain(count), Plain(expires), Plain(sid)
+            if filter == "HELPFUL" and type(name) == "string" and name:lower():find("campfire", 1, true) then
+                found.campfire = true   -- e.g. Welcoming Campfire: there's a fire close by
+            end
             local id = (AURA_NAMES[sid] and sid) or (type(name) == "string" and byName[name])
             if filter == "HELPFUL" and AuraIsXP and id ~= WELL_RESTED and sid ~= WELL_FED then
                 local xp = AuraIsXP(i, sid, name)
@@ -1380,7 +1398,9 @@ end
 -- and names are secret on Forever (touching them is an error). Every line is checked before it's read.
 local xpFoodCache = {}   -- itemID -> true/false (false is asked again after a while)
 local NOT_FOOD = { [CAMP_TENT] = true, [SLEEPING_BAG] = true }
-for _, c in ipairs(CAMPFIRES) do NOT_FOOD[c[1]] = true end
+local CAMP_KNOWN = { [CAMP_TENT] = true }
+for _, c in ipairs(CAMPFIRES) do NOT_FOOD[c[1]] = true; CAMP_KNOWN[c[1]] = true end
+for _, c in ipairs(CAMP_FEATURES) do NOT_FOOD[c[1]] = true; CAMP_KNOWN[c[1]] = true end
 
 local function IsXPText(t)
     if type(t) ~= "string" then return false end
@@ -1529,17 +1549,40 @@ local function IsXPFood(itemID, bag, slot)
     return yes
 end
 
+-- A camp feature we don't know by ID: its tooltip says "Requires a Campfire nearby". Each item is read once.
+local campCache = {}   -- itemID -> true/false (false is asked again after a while)
+local function IsCampExtra(itemID, bag, slot)
+    if CAMP_KNOWN[itemID] or itemID == SLEEPING_BAG then return false end
+    local known = campCache[itemID]
+    if known == true then return true end
+    if type(known) == "number" and GetTime() < known then return false end
+    local text = ItemTooltipText(itemID, bag, slot)
+    if not text then bagState.pending = true return false end
+    local yes = text:lower():find("campfire nearby", 1, true) and true or false
+    campCache[itemID] = yes or (GetTime() + 3600)
+    return yes
+end
+
 -- How many XP food items you carry, and the name of the one you have most of.
 local function XPFoodInBags()
     local C = C_Container
     if not (C and C.GetContainerNumSlots and C.GetContainerItemInfo) then return nil end
     local total, best, bestN, bestID, byID, list = 0, nil, 0, nil, {}, {}
+    local camp, campByID = {}, {}
     for bag = 0, 4 do
         local okN, n = pcall(C.GetContainerNumSlots, bag)
         for slot = 1, (okN and tonumber(Plain(n)) or 0) do
             local ok, info = pcall(C.GetContainerItemInfo, bag, slot)
             local id = ok and type(info) == "table" and not Secret(info) and Plain(info.itemID)
-            if type(id) == "number" and IsXPFood(id, bag, slot) then
+            if type(id) == "number" and IsCampExtra(id, bag, slot) then
+                local count = tonumber(Plain(info.stackCount)) or 1
+                local e = campByID[id]
+                if not e then
+                    e = { id = id, name = Plain(info.itemName) or ItemName(id, "Camp item"), count = 0 }
+                    campByID[id], camp[#camp + 1] = e, e
+                end
+                e.count = e.count + count
+            elseif type(id) == "number" and IsXPFood(id, bag, slot) then
                 local count = tonumber(Plain(info.stackCount)) or 1
                 total = total + count
                 local e = byID[id]
@@ -1555,7 +1598,7 @@ local function XPFoodInBags()
         end
     end
     table.sort(list, function(a, b) return a.count > b.count end)
-    return total, best, bestID, list
+    return total, best, bestID, list, camp
 end
 
 -- Icons for the XP boosts strip: the item's or the buff's own icon, or a stock one if it isn't loaded yet.
@@ -1638,8 +1681,13 @@ if CreateFrame then
                          "PLAYER_LEVEL_UP", "PLAYER_XP_UPDATE", "UPDATE_EXHAUSTION" }) do
         pcall(bagEvents.RegisterEvent, bagEvents, e)
     end
-    bagEvents:SetScript("OnEvent", function(_, event, unit)
-        if event == "UNIT_AURA" then
+    if not pcall(bagEvents.RegisterUnitEvent, bagEvents, "UNIT_SPELLCAST_SUCCEEDED", "player") then
+        pcall(bagEvents.RegisterEvent, bagEvents, "UNIT_SPELLCAST_SUCCEEDED")
+    end
+    bagEvents:SetScript("OnEvent", function(_, event, unit, _, spellID)
+        if event == "UNIT_SPELLCAST_SUCCEEDED" then
+            if unit == "player" and ns.OnCampCast then pcall(ns.OnCampCast, spellID) end
+        elseif event == "UNIT_AURA" then
             if unit == "player" then statusCache.dirty = true end
         elseif event == "PLAYER_XP_UPDATE" or event == "UPDATE_EXHAUSTION" or event == "PLAYER_LEVEL_UP" then
             statusCache.dirty = true
@@ -1647,6 +1695,54 @@ if CreateFrame then
             bagState.dirty, statusCache.dirty = true, true
         end
     end)
+end
+
+-- A campfire close by: a "...Campfire" buff on you, or one you put down here less than 10 minutes ago.
+local campFire = {}
+local function PlayerPos()
+    if not (C_Map and C_Map.GetBestMapForUnit and C_Map.GetPlayerMapPosition) then return end
+    local ok, map = pcall(C_Map.GetBestMapForUnit, "player")
+    map = ok and Plain(map)
+    if type(map) ~= "number" then return end
+    local ok2, pos = pcall(C_Map.GetPlayerMapPosition, map, "player")
+    if not ok2 or type(pos) ~= "table" then return end
+    local x, y = Plain(pos.x), Plain(pos.y)
+    if type(x) ~= "number" or type(y) ~= "number" then return end
+    return map, x, y
+end
+
+function ns.CampFireNear()
+    if auraCache.found and auraCache.found.campfire then return true end
+    if not campFire.at or GetTime() - campFire.at > 600 then return false end
+    local map, x, y = PlayerPos()
+    if map and campFire.map and (map ~= campFire.map or math.abs(x - campFire.x) + math.abs(y - campFire.y) > 0.01) then
+        return false   -- walked away from it
+    end
+    return true
+end
+
+local fireSpells
+local function IsFireSpell(spellID)
+    if not fireSpells then
+        fireSpells = {}
+        local get = (C_Item and C_Item.GetItemSpell) or GetItemSpell
+        for _, c in ipairs(CAMPFIRES) do
+            local ok, name, sid = pcall(get or function() end, c[1])
+            name, sid = ok and Plain(name), ok and Plain(sid)
+            if type(sid) == "number" then fireSpells[sid] = true end
+            if type(name) == "string" then fireSpells[name] = true end
+            fireSpells[c[2]] = true
+        end
+    end
+    spellID = Plain(spellID)
+    return spellID and (fireSpells[spellID] or fireSpells[SpellName(spellID) or ""]) and true or false
+end
+
+function ns.OnCampCast(spellID)
+    if not IsFireSpell(spellID) then return end
+    campFire.at = GetTime()
+    campFire.map, campFire.x, campFire.y = PlayerPos()
+    statusCache.dirty = true
 end
 
 -- Worked out at most once a second (sooner after a change to your buffs, bags or XP, but never more than
@@ -1702,23 +1798,41 @@ ComputeLevelStatus = function()
     local tents = ItemCount(CAMP_TENT)
     seen.boost = boost and true or nil
     name, icon, slot = "Camp Tent", ItemIcon(CAMP_TENT) or SpellIcon(BOOSTED_REST) or "Interface\\Icons\\Spell_Fire_Fire", "tent"
-    options = {}   -- the tent first, then the campfires you carry
-    if tents > 0 then options[1] = { id = CAMP_TENT, name = ItemName(CAMP_TENT, "Camp Tent"), count = tents } end
+    -- what you carry: campfires, and the camp features (the tent first) – one feature per player per hour
+    local fires, feats = {}, {}
+    if tents > 0 then feats[1] = { id = CAMP_TENT, name = ItemName(CAMP_TENT, "Camp Tent"), count = tents } end
     for _, c in ipairs(CAMPFIRES) do
         local n = ItemCount(c[1])
-        if n > 0 then options[#options + 1] = { id = c[1], name = ItemName(c[1], c[2]), count = n } end
+        if n > 0 then fires[#fires + 1] = { id = c[1], name = ItemName(c[1], c[2]), count = n, fire = true } end
     end
-    local pick = Pick("tent", options)
-    use = pick
-    if pick and pick.id ~= CAMP_TENT and not boost and pct < 5 then icon = ItemIcon(pick.id) or icon end
+    for _, c in ipairs(CAMP_FEATURES) do
+        local n = ItemCount(c[1])
+        if n > 0 then feats[#feats + 1] = { id = c[1], name = ItemName(c[1], c[2]), count = n } end
+    end
+    for _, e in ipairs(foodCache[5] or {}) do feats[#feats + 1] = { id = e.id, name = e.name, count = e.count } end
+    options = {}
+    for _, o in ipairs(fires) do options[#options + 1] = o end
+    for _, o in ipairs(feats) do options[#options + 1] = o end
+    -- a click puts down the fire first (unless there's one close by), the next click your camp feature
+    local fire, feat = Pick("fire", fires), Pick("tent", feats)
+    local near = ns.CampFireNear()
+    use = (fire and not near) and fire or feat or fire
+    local picks = {}
+    if fire then picks[fire.id] = true end
+    if feat then picks[feat.id] = true end
+    if use and not boost and pct < 5 then icon = ItemIcon(use.id) or icon end
+    local how = ""
+    if use and use.fire and feat then how = " Click: " .. use.name .. " first, then click again for " .. feat.name .. "."
+    elseif use and use.fire then how = " Click: " .. use.name .. " (you have no tent)."
+    elseif use then how = " Click: " .. use.name .. (near and " (there's a campfire close by)." or ".") end
     if boost then
         add("wait", "Boosted Rest – you can use another tent when it's gone.", tentTip, boost.left)
     elseif pct < 5 then
-        add("todo", "Your rested is under 5% – use a Camp Tent"
-            .. (tents > 0 and (" (you have " .. tents .. ").") or " (you have none)."), tentTip, nil, tents)
+        add("todo", "Your rested is under 5%." .. (tents > 0 and how or " You have no Camp Tent."), tentTip, nil, tents)
     else
-        add("ok", ("Not needed – you have %d%% rested."):format(math.floor(pct + 0.5)), tentTip)
+        add("ok", ("Not needed – you have %d%% rested."):format(math.floor(pct + 0.5)) .. how, tentTip)
     end
+    rows[#rows].picks, rows[#rows].fireNear = picks, near
 
     -- Well Fed, and XP food in your bags
     local food, foodName, foodID, foods = foodCache[1], foodCache[2], foodCache[3], foodCache[4]
@@ -1858,9 +1972,20 @@ local function BuffMsg(t, left)
     return t.name .. " has run out!" .. (surface and " Get to the surface!" or "")
 end
 
+-- A buff that's gone at its time waits a few seconds before the warning: camp buffs (Welcoming Campfire and
+-- the camp features) end and come straight back while you sit by the fire. One that comes back like that renews
+-- by itself: no "runs out in" warnings for it this session.
+local BUFF_GRACE = 6
+local buffPendingGone, buffSelfRenew = {}, {}
+
+local function BuffGoneNow(k, t, now)
+    buffTracked[k] = nil
+    buffPendingGone[k] = { t = t, at = now }
+end
+
 function ns.CheckBuffs()
-    if db.buffWarn == false then wipe(buffTracked) return end
-    if Plain(UnitIsDeadOrGhost("player")) == true then wipe(buffTracked) return end   -- dying took them
+    if db.buffWarn == false then wipe(buffTracked); wipe(buffPendingGone) return end
+    if Plain(UnitIsDeadOrGhost("player")) == true then wipe(buffTracked); wipe(buffPendingGone) return end   -- dying took them
     local now, soon = GetTime(), tonumber(db.buffSoon) or 60
     local fight = InCombatLockdown()
     if not fight then
@@ -1872,6 +1997,10 @@ function ns.CheckBuffs()
                 if g then
                     local k = a.name:lower()
                     here[k] = true
+                    if buffPendingGone[k] then   -- back again within a few seconds: it renews by itself
+                        buffPendingGone[k] = nil
+                        buffSelfRenew[k] = true
+                    end
                     local t = buffTracked[k]
                     if not t or a.expires > t.expires + 1 then   -- new, or renewed
                         buffTracked[k] = { name = a.name, expires = a.expires, dur = a.dur, group = g }
@@ -1882,9 +2011,8 @@ function ns.CheckBuffs()
             end
             for k, t in pairs(buffTracked) do
                 if not here[k] then
-                    -- gone at its time: it ran out. Gone early: clicked off, dispelled or zoned – no warning.
-                    if now >= t.expires - 3 and db.buffGone ~= false then Warn(BuffMsg(t)) end
-                    buffTracked[k] = nil
+                    -- gone at its time: it ran out (maybe). Gone early: clicked off, dispelled or zoned – no warning.
+                    if now >= t.expires - 3 then BuffGoneNow(k, t, now) else buffTracked[k] = nil end
                 end
             end
         end
@@ -1892,13 +2020,16 @@ function ns.CheckBuffs()
     for k, t in pairs(buffTracked) do
         local left = t.expires - now
         if left <= 0 then
-            if fight then   -- can't see it in a fight: by the clock it's gone
-                if db.buffGone ~= false then Warn(BuffMsg(t)) end
-                buffTracked[k] = nil
-            end
-        elseif not t.soon and soon > 0 and left <= soon and t.dur > soon + 5 then
+            if fight then BuffGoneNow(k, t, now) end   -- can't see it in a fight: by the clock it's gone
+        elseif not t.soon and soon > 0 and left <= soon and t.dur > soon + 5 and not buffSelfRenew[k] then
             t.soon = true
             Warn(BuffMsg(t, left))
+        end
+    end
+    for k, p in pairs(buffPendingGone) do
+        if now - p.at >= BUFF_GRACE then
+            buffPendingGone[k] = nil
+            if db.buffGone ~= false then Warn(BuffMsg(p.t)) end
         end
     end
 end

@@ -97,6 +97,13 @@ local function FlatButton(parent, text, w, h, onClick)
     return b
 end
 
+-- Is the mouse over this frame? (Forever has no MouseIsOver(); the frame method is always there.)
+local function Hovered(f)
+    if not (f and f.IsMouseOver and f:IsShown()) then return false end
+    local ok, over = pcall(f.IsMouseOver, f)
+    return ok and over and true or false
+end
+
 local function Tip(owner, title, ...)
     GameTooltip:SetOwner(owner, "ANCHOR_RIGHT")
     GameTooltip:SetText(title)
@@ -3624,21 +3631,6 @@ local function LevelLabel()
     lvLabel:Set(lv, "|cffffd100XP boosts|r · drag to move")
 end
 
-local function LevelIconTip(self)
-    local r = self.row
-    if not r or moving then return end
-    local verb = r.slot == "food" and "eat " or "use "
-    local n = r.options and #r.options or 0
-    Tip(self, r.name or "XP boost",
-        LV_STATUS[r.state] .. "  ·  " .. (r.text or ""),
-        r.timer and ("|cffffd100Time left:|r " .. ns.Clock(r.timer)) or nil,
-        " ",
-        r.tip,
-        " ",
-        (r.use and ("|cffffd100Left-click:|r " .. verb .. r.use.name .. "\n") or "")
-            .. "|cffffd100Right-click:|r " .. (n > 1 and ("choose (" .. n .. " to pick from)") or "menu"))
-end
-
 -- What a click does: /use the item (by name for a toy, which isn't in your bags).
 local function UseMacro(o)
     if not o then return "" end
@@ -3651,11 +3643,11 @@ local function RememberPick(slot, id)
     if ns.LevelDirty then ns.LevelDirty() end
 end
 
--- Right-click an icon: what you can use for it (all your XP food; your tent and campfires). Left-click a line
--- uses it now and remembers it, right-click only remembers it. Secure buttons, so it only opens out of combat
--- and closes when a fight starts.
-local LVM_ROWS, LVM_ROW_H, LVM_W = 10, 22, 220
-local lvMenu
+-- Hover an icon: one small card with how it stands and everything you can use for it (all your XP food; your
+-- campfires, tent and other camp features) – click a line to use it now. The rows are secure buttons, so the
+-- card only opens out of combat and closes when a fight starts.
+local LVM_ROWS, LVM_ROW_H, LVM_W = 20, 22, 250
+local lvMenu, OpenLevelMenu
 local function BuildLevelMenu()
     local m = CreateFrame("Frame", "WatchXLevelMenu", UIParent)
     m:SetFrameStrata("DIALOG")
@@ -3663,16 +3655,25 @@ local function BuildLevelMenu()
     m:SetWidth(LVM_W)
     Flat(m)
     m:EnableMouse(true)
-    m.title = m:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    m.title:SetPoint("TOPLEFT", m, "TOPLEFT", 8, -6)
-    m.empty = m:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    m.empty:SetPoint("TOPLEFT", m, "TOPLEFT", 8, -24)
+    m.title = m:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    m.title:SetPoint("TOPLEFT", m, "TOPLEFT", 8, -7)
+    m.status = m:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    m.status:SetPoint("TOPLEFT", m, "TOPLEFT", 8, -24)
+    m.status:SetWidth(LVM_W - 16)
+    m.status:SetJustifyH("LEFT")
+    m.status:SetSpacing(2)
+    m.tip = m:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    m.tip:SetWidth(LVM_W - 16)
+    m.tip:SetJustifyH("LEFT")
+    m.tip:SetSpacing(2)
+    m.hint = m:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    m.hint:SetPoint("BOTTOMLEFT", m, "BOTTOMLEFT", 8, 9)
+    m.hint:SetPoint("RIGHT", m, "RIGHT", -84, 0)
+    m.hint:SetJustifyH("LEFT")
     m.rows = {}
     for i = 1, LVM_ROWS do
         local b = CreateFrame("Button", "WatchXLevelMenuRow" .. i, m, "SecureActionButtonTemplate")
         b:SetHeight(LVM_ROW_H)
-        b:SetPoint("TOPLEFT", m, "TOPLEFT", 4, -20 - (i - 1) * LVM_ROW_H)
-        b:SetPoint("TOPRIGHT", m, "TOPRIGHT", -4, -20 - (i - 1) * LVM_ROW_H)
         b:RegisterForClicks("AnyUp")
         b:SetAttribute("useOnKeyDown", false)
         b:SetAttribute("type1", "macro")
@@ -3693,14 +3694,22 @@ local function BuildLevelMenu()
         b.text:SetJustifyH("LEFT")
         b.text:SetWordWrap(false)
         b:SetScript("OnEnter", function(self)
-            Tip(self, self.opt and self.opt.name or "", "|cffffd100Left-click:|r use it now (and remember it)",
-                "|cffffd100Right-click:|r just remember it")
+            if not self.opt then return end
+            -- the item's own tooltip, beside the card (what a camp feature gives), and the clicks
+            GameTooltip:SetOwner(m, "ANCHOR_NONE")
+            GameTooltip:ClearAllPoints()
+            GameTooltip:SetPoint("BOTTOMRIGHT", m, "BOTTOMLEFT", -4, 0)
+            local ok = GameTooltip.SetItemByID and pcall(GameTooltip.SetItemByID, GameTooltip, self.opt.id)
+            if not ok then GameTooltip:SetText(self.opt.name or "") end
+            GameTooltip:AddLine(" ")
+            GameTooltip:AddLine("|cffffd100Left-click:|r use it now (and remember it)", 1, 1, 1)
+            GameTooltip:AddLine("|cffffd100Right-click:|r just remember it", 1, 1, 1)
+            GameTooltip:Show()
         end)
         b:SetScript("OnLeave", GameTooltip_Hide)
         b:SetScript("PostClick", function(self)
             if not self.opt then return end
-            RememberPick(m.slot, self.opt.id)
-            if not InCombatLockdown() then m:Hide() end
+            RememberPick(self.opt.fire and "fire" or m.slot, self.opt.id)
             ns.RefreshLevel()
         end)
         b:Hide()
@@ -3714,49 +3723,80 @@ local function BuildLevelMenu()
     -- closes by itself a moment after the mouse leaves it (and its icon)
     local away = 0
     m:SetScript("OnUpdate", function(self, elapsed)
-        if MouseIsOver(self) or (self.owner and MouseIsOver(self.owner)) then away = 0 return end
+        if Hovered(self) or Hovered(self.owner) then away = 0 return end
         away = away + elapsed
-        if away > 1.2 and not InCombatLockdown() then self:Hide() end
+        if away > 0.6 and not InCombatLockdown() then self:Hide() end
     end)
     m:SetScript("OnShow", function() away = 0 end)
+    m:SetScript("OnHide", function() GameTooltip_Hide() end)
     m:Hide()
     return m
 end
 
-local function OpenLevelMenu(owner)
-    if InCombatLockdown() or not owner.row then return end
-    lvMenu = lvMenu or BuildLevelMenu()
-    local m, r = lvMenu, owner.row
-    if m:IsShown() and m.owner == owner then m:Hide() return end   -- right-click again: close
-    GameTooltip_Hide()
-    m.owner, m.slot = owner, r.slot
+-- Fill the card for one icon (out of combat: the rows are secure).
+local function FillLevelMenu(m, r)
+    local verb = r.slot == "food" and "eat " or "use "
+    m.title:SetText(r.name or "XP boost")
+    m.status:SetText(LV_STATUS[r.state] .. "  ·  " .. (r.text or "")
+        .. (r.timer and ("\n|cffffd100Time left:|r " .. ns.Clock(r.timer)) or ""))
+    local y = -24 - math.ceil(m.status:GetStringHeight() or 12) - 8
     local opts = r.options or {}
-    m.title:SetText(r.slot == "food" and "Choose your XP food" or r.slot == "tent" and "Tent and campfires"
-        or (r.name or "XP boost"))
-    m.empty:SetText(r.slot == "food" and "No XP food in your bags." or r.slot == "tent"
-        and "No Camp Tent or campfire in your bags." or "You don't have one.")
-    m.empty:SetShown(#opts == 0)
-    local picked = r.use and r.use.id
+    local mark = r.picks or (r.use and { [r.use.id] = true }) or {}
     for i, b in ipairs(m.rows) do
         local o = opts[i]
         b.opt = o
         b:SetAttribute("macrotext1", UseMacro(o))
+        b:ClearAllPoints()
         if o then
+            b:SetPoint("TOPLEFT", m, "TOPLEFT", 4, y)
+            b:SetPoint("TOPRIGHT", m, "TOPRIGHT", -4, y)
+            y = y - LVM_ROW_H
             b.icon:SetTexture(ns.ItemIcon(o.id) or "Interface\\Icons\\INV_Misc_QuestionMark")
-            b.text:SetText((o.id == picked and "|TInterface\\RaidFrame\\ReadyCheck-Ready:12|t " or "") .. o.name)
+            b.text:SetText((mark[o.id] and "|TInterface\\RaidFrame\\ReadyCheck-Ready:12|t " or "") .. o.name
+                .. ((r.use and r.use.id == o.id and #opts > 1) and "  |cffffd100< click|r" or ""))
             b.count:SetText(o.toy and "" or ("x" .. o.count))
             b:Show()
         else
             b:Hide()
         end
     end
-    local n = math.max(1, math.min(#opts, LVM_ROWS))
-    m:SetHeight(20 + n * LVM_ROW_H + 28)
-    m:SetScale(lv:GetEffectiveScale() / UIParent:GetEffectiveScale())
-    m:ClearAllPoints()
-    m:SetPoint("TOPLEFT", owner, "BOTTOMLEFT", -LV_PAD, -LV_TIME - 6)
-    m:Show()
+    -- nothing to pick from: say how to get it instead
+    if #opts == 0 and r.tip then
+        m.tip:ClearAllPoints()
+        m.tip:SetPoint("TOPLEFT", m, "TOPLEFT", 8, y - 2)
+        m.tip:SetText(r.tip)
+        m.tip:Show()
+        y = y - math.ceil(m.tip:GetStringHeight() or 12) - 8
+    else
+        m.tip:Hide()
+    end
+    m.hint:SetText(r.use and ("Click the icon: " .. verb .. r.use.name) or "")
+    m:SetHeight(-y + 30)
 end
+
+OpenLevelMenu = function(owner, hover)
+    if InCombatLockdown() or moving or not (owner and owner.row) then return end
+    lvMenu = lvMenu or BuildLevelMenu()
+    local m, r = lvMenu, owner.row
+    if not hover and m:IsShown() and m.owner == owner then m:Hide() return end   -- right-click again: close
+    if m:IsShown() and m.owner == owner and m.row == r then return end            -- nothing new
+    local fresh = not (m:IsShown() and m.owner == owner)
+    m.owner, m.slot, m.row = owner, r.slot, r
+    FillLevelMenu(m, r)
+    if fresh then
+        m:SetScale(lv:GetEffectiveScale() / UIParent:GetEffectiveScale())
+        m:ClearAllPoints()
+        local _, oy = owner:GetCenter()
+        local low = oy and (oy * owner:GetEffectiveScale() < UIParent:GetHeight() * UIParent:GetEffectiveScale() / 2)
+        if low then   -- the icons sit low on the screen: open upwards
+            m:SetPoint("BOTTOMLEFT", owner, "TOPLEFT", -LV_PAD, LV_PAD + 4)
+        else
+            m:SetPoint("TOPLEFT", owner, "BOTTOMLEFT", -LV_PAD, -LV_TIME - 6)
+        end
+        m:Show()
+    end
+end
+local function LevelIconTip(self) OpenLevelMenu(self, true) end
 
 local function BuildLevel()
     local f = CreateFrame("Frame", "WatchXLeveling", UIParent)
@@ -3883,7 +3923,7 @@ local function PaintLevelIcon(b, r)
         b.timer:SetText("")
     end
     b.flashing = r.state == "todo"
-    if GameTooltip:IsShown() and GameTooltip:GetOwner() == b then LevelIconTip(b) end   -- keep its clock running
+    if lvMenu and lvMenu:IsShown() and lvMenu.owner == b then OpenLevelMenu(b, true) end   -- keep the card current
 end
 
 function ns.RefreshLevel()
@@ -4053,9 +4093,10 @@ function ns.BuildLevelSettings()
         "Forever guides and may change.",
         "",
         "|cff38ccadCLICKS|r",
-        "|cffaaaaaa•|r  |cffffd100Left-click|r an icon: eat the food, put up the tent or campfire, use the sleeping bag.",
-        "|cffaaaaaa•|r  |cffffd100Right-click|r an icon: pick which one – all the XP food you carry, your tent and campfires.",
-        "    In that list, left-click uses it now (and remembers it), right-click just remembers it.",
+        "|cffaaaaaa•|r  |cffffd100Hover|r an icon: how it stands, and everything you can use for it – all your XP food, your",
+        "    campfires, tent and other camp features. Click a line to use it now (right-click: just remember it).",
+        "|cffaaaaaa•|r  |cffffd100Click|r an icon: eat the food or use the sleeping bag. The camp icon puts the campfire down",
+        "    first (unless there's one close by) – click again for your tent or the camp feature you picked.",
         "Not in combat: the icons hide just before a fight and come back after it.",
         "",
         "|cff808080/wx xp – the icons on or off|r",
@@ -4211,7 +4252,7 @@ function ns.BuildBuffSettings()
             local away = 0
             pick:SetScript("OnShow", function() away = 0 end)
             pick:SetScript("OnUpdate", function(self, el)
-                if MouseIsOver(self) or MouseIsOver(owner) then away = 0 return end
+                if Hovered(self) or Hovered(owner) then away = 0 return end
                 away = away + el
                 if away > 1.5 then self:Hide() end
             end)
