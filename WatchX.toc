@@ -2,7 +2,7 @@
 ## Title: WatchX
 ## Notes: Passive spawn alerts for rare mobs (Prince Nazjak / Tidal Charm built in) with respawn timer, instant phone alerts via ntfy and Discord, an AFK logout warning, attack alerts, a Nearby enemies list with stealth warnings, and profiles. Made by Rikerud. /wx
 ## Author: Rikerud
-## Version: 2.14.0
+## Version: 2.14.1
 ## X-Website: https://github.com/nintox/WatchX
 ## X-Curse-Project-ID: 1825993
 ## SavedVariables: WatchXDB

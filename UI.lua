@@ -4827,13 +4827,25 @@ end
         ov:SetAllPoints(bar)
         ov.bar = bar
         ov:SetFrameStrata(bar:GetFrameStrata() or "MEDIUM")
-        ov:SetFrameLevel((bar:GetFrameLevel() or 1) + 5)
+        -- above the bar's own marks and frame (they sit on frames a few levels up)
+        local top = bar:GetFrameLevel() or 1
+        local parent = bar:GetParent()
+        for _, c in ipairs(parent and parent.GetChildren and { parent:GetChildren() } or {}) do
+            top = math.max(top, c.GetFrameLevel and c:GetFrameLevel() or 0)
+        end
+        ov:SetFrameLevel(math.min(9000, top + 20))
         ov.done = Seg(ov, "ARTWORK", 1, 0.82, 0, 0.45)
         ov.todo = Seg(ov, "ARTWORK", 1, 0.82, 0, 0.15)
+        -- the text on a soft dark band, outlined, so the marks under it don't cut through the letters
+        ov.band = ov:CreateTexture(nil, "BORDER")
+        ov.band:SetPoint("TOP", ov, "TOP", 0, 0)
+        ov.band:SetPoint("BOTTOM", ov, "BOTTOM", 0, 0)
+        ov.band:SetColorTexture(0, 0, 0, 0.55)
         ov.text = ov:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-        if TextStatusBarText then pcall(ov.text.SetFontObject, ov.text, "TextStatusBarText") end
-        ov.text:SetPoint("CENTER", ov, "CENTER", 0, 1)
-        ov.text:SetShadowOffset(1, -1)
+        local font, size = ov.text:GetFont()
+        if font then ov.text:SetFont(font, math.max(10, math.min(12, (ov:GetHeight() or 12) - 1)), "OUTLINE") end
+        ov.text:SetPoint("CENTER", ov, "CENTER", 0, 0)
+        ov.text:SetShadowOffset(0, 0)
         ov:EnableMouse(true)
         ov:SetScript("OnEnter", function(self) ShowXPTip(self, self.data, true) end)
         ov:SetScript("OnLeave", GameTooltip_Hide)
@@ -4926,10 +4938,11 @@ end
             Place(o.done, X(cur), X(cur + quests.done), o)
             Place(o.todo, X(cur + quests.done), X(cur + quests.done + quests.todo), o)
             o.data = data
-            o.text:SetText(("Level %d  ·  %s / %s  (%.1f%%)"):format(level, Num(cur), Num(max), cur / max * 100)
-                .. (rested > 0 and ("  ·  |cff80b8ffrested %s|r"):format(Num(rested)) or "")
-                .. (quests.done > 0 and ("  ·  |cffffd100quests to hand in +%s|r"):format(Num(quests.done)) or "")
-                .. (rate and ("  ·  level in " .. Dur((max - cur) / rate * 3600)) or ""))
+            o.text:SetText(("%.1f%%  |cffcccccc%s to go|r"):format(cur / max * 100, Num(max - cur))
+                .. (rested > 0 and ("   |cff80b8ffrested %s|r"):format(Num(rested)) or "")
+                .. (quests.done > 0 and ("   |cffffd100+%s quests|r"):format(Num(quests.done)) or "")
+                .. (rate and ("   |cffcccccc%s|r"):format(Dur((max - cur) / rate * 3600)) or ""))
+            o.band:SetWidth((o.text:GetStringWidth() or 100) + 24)
             o:Show()
             return
         end
