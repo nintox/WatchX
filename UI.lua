@@ -385,7 +385,14 @@ function ns.ShowMenu(anchor, title, items)
     for i = #items + 1, #menu.buttons do menu.buttons[i]:Hide() end
     menu:SetHeight(-y + 6)
     menu:ClearAllPoints()
-    menu:SetPoint("TOPLEFT", anchor, "TOPRIGHT", 4, 0)
+    local aw = (anchor.GetWidth and anchor:GetWidth() or 0) * (anchor.GetEffectiveScale and anchor:GetEffectiveScale() or 1)
+    if aw > 320 * (UIParent:GetEffectiveScale() or 1) and GetCursorPosition then   -- a wide row: right where you clicked
+        local cx, cy = GetCursorPosition()
+        local es = menu:GetEffectiveScale() or 1
+        menu:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", cx / es + 2, cy / es + 2)
+    else
+        menu:SetPoint("TOPLEFT", anchor, "TOPRIGHT", 4, 0)
+    end
     menu:Show()
 end
 
@@ -421,6 +428,20 @@ local function CloseX(parent, onClick)
     b:SetPushedTexture("Interface\\Buttons\\UI-Panel-MinimizeButton-Down")
     b:SetHighlightTexture("Interface\\Buttons\\UI-Panel-MinimizeButton-Highlight", "ADD")
     b:SetScript("OnClick", onClick or function() parent:Hide() end)
+    return b
+end
+
+-- A small x inside a search box that empties it (shown while there's text).
+local function ClearX(box)
+    local b = CreateFrame("Button", nil, box)
+    b:SetSize(14, 14)
+    b:SetPoint("RIGHT", box, "RIGHT", -3, 0)
+    b:SetNormalTexture("Interface\\Buttons\\UI-StopButton")
+    b:SetHighlightTexture("Interface\\Buttons\\UI-StopButton", "ADD")
+    local t = b:GetNormalTexture()
+    if t then t:SetVertexColor(0.75, 0.65, 0.45) end
+    b:SetScript("OnClick", function() box:SetText(""); box:ClearFocus() end)
+    b:Hide()
     return b
 end
 
@@ -847,7 +868,7 @@ local function BuildSettings()
         c:SetPoint("TOPLEFT", o, "TOPLEFT", L + 126 + col * (chipW + 6), y - row * CHIP_H)
         local bg = c:CreateTexture(nil, "BACKGROUND")
         bg:SetAllPoints()
-        bg:SetColorTexture(0.10, 0.12, 0.15, 0.95)
+        bg:SetColorTexture(0.13, 0.10, 0.06, 0.95)
         c.edge = c:CreateTexture(nil, "BORDER")
         c.edge:SetPoint("TOPLEFT"); c.edge:SetPoint("BOTTOMLEFT")
         c.edge:SetWidth(2)
@@ -1118,8 +1139,10 @@ do
         f.search.hint = f.search:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
         f.search.hint:SetPoint("LEFT", f.search, "LEFT", 2, 0)
         f.search.hint:SetText("Search a name or a zone...")
+        f.search.clear = ClearX(f.search)
         f.search:SetScript("OnTextChanged", function(self)
             self.hint:SetShown(self:GetText() == "" and not self:HasFocus())
+            self.clear:SetShown(self:GetText() ~= "")
             ns.RefreshRares()
         end)
         f.search:SetScript("OnEditFocusGained", function(self) self.hint:Hide() end)
@@ -1225,6 +1248,7 @@ local function BuildHistory()
     for _, t in ipairs({ { "all", "All players" }, { "kos", "KOS" }, { "avoid", "Avoid" }, { "wanted", "Wanted" }, { "notes", "Notes" }, { "guilds", "Guilds" } }) do
         local b = FlatButton(f, t[2], 84, 22, function()
             f.tab = t[1]
+            f.backTo = nil
             ns.RefreshHistory()
         end)
         if prev then b:SetPoint("LEFT", prev, "RIGHT", 4, 0) else b:SetPoint("TOPLEFT", f, "TOPLEFT", 14, -40) end
@@ -1244,6 +1268,17 @@ local function BuildHistory()
     f.search.hint:SetText("Search name, guild, zone, note...")
     f.search:SetScript("OnEditFocusGained", function(self) self.hint:Hide() end)
     f.search:SetScript("OnEditFocusLost", function(self) self.hint:SetShown(self:GetText() == "") end)
+    f.clear = ClearX(f.search)
+    -- "Show its players" (Guilds tab) remembers where you came from: Back goes there again
+    f.back = FlatButton(f, "< Back", 80, 22, function()
+        local b = f.backTo
+        f.backTo = nil
+        f.tab = b and b.tab or "guilds"
+        f.search:SetText(b and b.search or "")
+        ns.RefreshHistory()
+    end)
+    f.back:SetPoint("RIGHT", f.search, "LEFT", -12, 0)
+    f.back:Hide()
 
     -- column headers (click = sort; again = the other way)
     f.heads = {}
@@ -1252,7 +1287,7 @@ local function BuildHistory()
         h:SetHeight(20)
         local bg = h:CreateTexture(nil, "BACKGROUND")
         bg:SetAllPoints()
-        bg:SetColorTexture(0.12, 0.14, 0.18, 1)
+        bg:SetColorTexture(0.22, 0.17, 0.09, 1)
         local hl = h:CreateTexture(nil, "HIGHLIGHT")
         hl:SetAllPoints()
         hl:SetColorTexture(ACCENT[1], ACCENT[2], ACCENT[3], 0.18)
@@ -1318,7 +1353,7 @@ local function HistoryRow(i)
     r.edge:SetWidth(3)
     local hl = r:CreateTexture(nil, "HIGHLIGHT")
     hl:SetAllPoints()
-    hl:SetColorTexture(1, 1, 1, 0.1)
+    hl:SetColorTexture(1, 0.82, 0, 0.12)
     r.cells = {}
     for c = 1, #PCOLS do
         local fs = r:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
@@ -1331,6 +1366,7 @@ local function HistoryRow(i)
             ns.ShowMenu(self, "<" .. g .. ">", {
                 { on and "Take off the blacklist" or "|cffff4040Blacklist (KOS guild)|r", function() ns.SetGuildKOS(g, not on) end },
                 { "Show its players", function()
+                    f.backTo = { tab = "guilds", search = f.search:GetText() }
                     f.tab = "all"; f.search:SetText(g); f.search.hint:Hide(); ns.RefreshHistory()
                 end },
             })
@@ -1403,6 +1439,8 @@ function ns.RefreshHistory()
     end
     local q = ns.Trim(f.search:GetText() or ""):lower()
     f.search.hint:SetShown(q == "" and not f.search:HasFocus())
+    f.clear:SetShown(q ~= "")
+    f.back:SetShown(f.backTo ~= nil and f.tab ~= "guilds")
     local function match(...)
         if q == "" then return true end
         for i = 1, select("#", ...) do
@@ -1461,7 +1499,7 @@ function ns.RefreshHistory()
         local alt = (i % 2 == 0) and 0.05 or 0
         if guildsTab then
             row.key, row.guild = nil, it.name
-            row.bar:SetColorTexture(0.10 + alt, 0.11 + alt, 0.14 + alt, 0.9)
+            row.bar:SetColorTexture(0.11 + alt, 0.09 + alt, 0.06 + alt, 0.9)
             row.edge:SetColorTexture(it.kos == 1 and 1 or 0.3, it.kos == 1 and 0.2 or 0.3, it.kos == 1 and 0.2 or 0.3, 1)
             local v = { "<" .. it.name .. ">", it.players, it.kosPlayers > 0 and ("|cffff5050" .. it.kosPlayers .. "|r") or "0",
                 "|cffffd100" .. it.kills .. "|r", "|cffff6060" .. it.deaths .. "|r",
@@ -1472,7 +1510,7 @@ function ns.RefreshHistory()
             local r = it.r
             local cr, cg, cb = ClassColor(r.class)
             row.key, row.guild = it.key, nil
-            row.bar:SetColorTexture(0.10 + alt, 0.11 + alt, 0.14 + alt, 0.9)
+            row.bar:SetColorTexture(0.11 + alt, 0.09 + alt, 0.06 + alt, 0.9)
             row.edge:SetColorTexture(cr, cg, cb, 1)
             local v = { (it.kos and "|cffff3030KOS|r " or "") .. (r.wanted and (r.wanted.claimed and "|cff40ff40CLAIMED|r " or "|cffffa000WANTED|r ") or "")
                 .. (r.avoid and "|cffff8040AVOID|r " or "") .. (r.name or it.key),

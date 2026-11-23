@@ -3003,6 +3003,30 @@ local function OnSlash(input)
         Print("XP boosts list: " .. (db.levelHelper and "|cff40ff40on|r" or "off")
             .. ((db.levelHelper and not ns.LevelStatus()) and " (it only shows below level " .. ns.MaxLevel() .. ")" or ""))
         if ns.RefreshUI then ns.RefreshUI() end
+    elseif cmd == "mem" or cmd == "memory" or cmd == "cpu" then
+        -- how much memory WatchX uses right now, and what it keeps between sessions
+        local Upd = (C_AddOns and C_AddOns.UpdateAddOnMemoryUsage) or UpdateAddOnMemoryUsage
+        local Get = (C_AddOns and C_AddOns.GetAddOnMemoryUsage) or GetAddOnMemoryUsage
+        if Upd then pcall(Upd) end
+        local ok, kb = false, nil
+        if Get then ok, kb = pcall(Get, "WatchX") end
+        local players, notes, logLines = 0, 0, #(db.log or {})
+        for _, r in pairs(db.enemies) do
+            players = players + 1
+            if r.note or r.kos or r.avoid or r.wanted then notes = notes + 1 end
+        end
+        Print(("Memory: |cffffd100%s|r  ·  players remembered: %d (%d with KOS, avoid, WANTED or a note; the oldest "
+            .. "plain ones go after 2000)  ·  log: %d lines (max %d)  ·  rare catalogue: %d mobs"):format(
+            ok and kb and (kb >= 1024 and ("%.1f MB"):format(kb / 1024) or ("%d KB"):format(kb)) or "?",
+            players, notes, logLines, LOG_MAX, #(ns.RARES or {})))
+        local GetCPU = (C_AddOns and C_AddOns.GetAddOnCPUUsage) or GetAddOnCPUUsage
+        if GetCVar("scriptProfile") == "1" and GetCPU then
+            local okc, ms = pcall(GetCPU, "WatchX")
+            if okc and ms then Print(("CPU since login/reload: %.0f ms"):format(ms)) end
+        else
+            Print("|cffaaaaaaCPU: the game only measures it with /console scriptProfile 1 and a /reload (costs a little "
+                .. "itself – turn it off again with /console scriptProfile 0).|r")
+        end
     elseif cmd == "rares" or cmd == "rare" or cmd == "catalogue" then
         if ns.ShowRares then ns.ShowRares() end
     elseif cmd == "wanted" or cmd == "bounty" then
@@ -3082,7 +3106,7 @@ local function OnSlash(input)
         for i = math.max(1, #lines - 24), #lines do DEFAULT_CHAT_FRAME:AddMessage("  " .. lines[i]) end
     else
         Print("Made by " .. ns.AUTHOR .. ". Commands: /wx (panel) | settings | guide | test | add <name> | "
-            .. "remove <name> | profile [name] | enemy | friend | nearby [on|off|test] | xp | buffs [name|test] | avoid [name: note] | wanted [name: reward note] | rares | attack | afk [minutes] | instant | list | mini | quiet | alert | move | lock | unlock | minimap | sound | "
+            .. "remove <name> | profile [name] | enemy | friend | nearby [on|off|test] | xp | buffs [name|test] | avoid [name: note] | wanted [name: reward note] | rares | mem | attack | afk [minutes] | instant | list | mini | quiet | alert | move | lock | unlock | minimap | sound | "
             .. "whisper | dead [name] | "
             .. "respawn <min> [name] | reset | log [previous]")
     end
