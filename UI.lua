@@ -211,7 +211,7 @@ StaticPopupDialogs["WATCHX_RESPAWN"] = {
     OnShow = function(self, data)
         local eb = PopupEditBox(self)
         local m = ns.MobState(data)
-        if eb then eb:SetText(m.manualRespawn and tostring(math.floor(m.manualRespawn / 6 + 0.5) / 10) or "") end
+        if eb then eb:SetText(m.manualRespawn and tostring(math.floor(m.manualRespawn / 6 + 0.5) / 10) or ""); eb:SetFocus() end
     end,
     OnAccept = function(self, data)
         local eb = PopupEditBox(self)
@@ -224,6 +224,21 @@ StaticPopupDialogs["WATCHX_RESPAWN"] = {
         d.OnAccept(parent, parent.data)
         parent:Hide()
     end,
+    EditBoxOnEscapePressed = function(self) self:GetParent():Hide() end,
+    timeout = 0, whileDead = true, hideOnEscape = true,
+}
+
+-- Things that can't be undone (or go out to others) ask first.
+StaticPopupDialogs["WATCHX_FORGET"] = {
+    text = "Forget %s?\nKills, deaths, notes and marks for them are deleted.",
+    button1 = YES, button2 = NO,
+    OnAccept = function(_, data) ns.ForgetEnemy(data); if ns.RefreshHistory then ns.RefreshHistory() end end,
+    timeout = 0, whileDead = true, hideOnEscape = true,
+}
+StaticPopupDialogs["WATCHX_TAKEDOWN"] = {
+    text = "Take down the bounty on %s?\nIt goes away for your guild and friends too.",
+    button1 = YES, button2 = NO,
+    OnAccept = function(_, data) ns.RemoveWanted(data); if ns.RefreshHistory then ns.RefreshHistory() end end,
     timeout = 0, whileDead = true, hideOnEscape = true,
 }
 
@@ -237,7 +252,7 @@ StaticPopupDialogs["WATCHX_RESET"] = {
 local function NewProfileAccept(self)
     local eb = PopupEditBox(self)
     local ok, err = ns.NewProfile(eb and eb:GetText() or "")
-    if not ok then ns.Print(err) end
+    if not ok then ns.Print(err) return true end   -- (true: the box stays open with the name to fix)
 end
 StaticPopupDialogs["WATCHX_NEWPROFILE"] = {
     text = "Name of the new profile (e.g. Leveling, Camping, PvP).\nIt starts as a copy of your current settings:",
@@ -247,8 +262,7 @@ StaticPopupDialogs["WATCHX_NEWPROFILE"] = {
     OnAccept = NewProfileAccept,
     EditBoxOnEnterPressed = function(self)
         local parent = self:GetParent()
-        NewProfileAccept(parent)
-        parent:Hide()
+        if not NewProfileAccept(parent) then parent:Hide() end
     end,
     EditBoxOnEscapePressed = function(self) self:GetParent():Hide() end,
     timeout = 0, whileDead = true, hideOnEscape = true,
@@ -316,6 +330,7 @@ local function BuildProfileMenu()
         if cur then StaticPopup_Show("WATCHX_DELPROFILE", cur, nil, cur) end
     end)
     tinsert(UISpecialFrames, "WatchXProfileMenu")   -- Esc closes it
+    ns.MenuAutoClose(m)
     m:Hide()
     return m
 end
@@ -326,7 +341,7 @@ function ns.ToggleProfileMenu(anchor)
     if m:IsShown() and m.anchor == anchor then m:Hide() return end
     m.anchor = anchor
     local names, cur = ns.ProfileNames(), db().profile
-    local y = -36
+    local y = -(31 + math.ceil(m.hint:GetStringHeight() or 12))   -- under the hint (two lines at this width)
     for i, name in ipairs(names) do
         local r = m.rows[i]
         if not r then
@@ -354,6 +369,22 @@ function ns.ToggleProfileMenu(anchor)
     m:Show()
 end
 
+-- A menu goes away with a click anywhere else (not on it or its button), and when what opened it is hidden.
+function ns.MenuAutoClose(m)
+    m:HookScript("OnShow", function(self) pcall(self.RegisterEvent, self, "GLOBAL_MOUSE_DOWN") end)
+    m:HookScript("OnHide", function(self) pcall(self.UnregisterEvent, self, "GLOBAL_MOUSE_DOWN") end)
+    m:SetScript("OnEvent", function(self, event)
+        if event ~= "GLOBAL_MOUSE_DOWN" or not self:IsShown() or self:IsMouseOver() then return end
+        local a = self.anchor
+        if a and a.IsMouseOver and a:IsMouseOver() then return end   -- its own button toggles it
+        self:Hide()
+    end)
+    m:HookScript("OnUpdate", function(self)   -- (only while it's open)
+        local a = self.anchor
+        if a and a.IsVisible and not a:IsVisible() then self:Hide() end
+    end)
+end
+
 -- A small menu of flat buttons under (or next to) whatever opened it. items: { { text, fn }, ... }
 local menu
 function ns.ShowMenu(anchor, title, items)
@@ -371,7 +402,9 @@ function ns.ShowMenu(anchor, title, items)
         menu.title:SetWordWrap(false)
         menu.buttons = {}
         tinsert(UISpecialFrames, "WatchXMenu")   -- Esc closes it
+        ns.MenuAutoClose(menu)
     end
+    menu.anchor = anchor
     menu.title:SetText(title or "")
     local y = -26
     for i, it in ipairs(items) do
@@ -424,10 +457,10 @@ function ns.EnemyMenu(anchor, key)
         if not r.wanted.paid and not (ns.ClaimedByMe and ns.ClaimedByMe(r.wanted)) then
             items[#items + 1] = { "|cff40ff40Mark paid|r (paid by trade)", function() ns.MarkPaid(key) end }
         end
-        items[#items + 1] = { "Take the bounty down", function() ns.RemoveWanted(key) end }
+        items[#items + 1] = { "Take the bounty down...", function() StaticPopup_Show("WATCHX_TAKEDOWN", r.name, nil, key) end }
     elseif r.wanted then
         items[#items + 1] = { "|cffffa000Edit bounty|r", function() ns.ShowBounty(key) end }
-        items[#items + 1] = { "Take the bounty down", function() ns.RemoveWanted(key) end }
+        items[#items + 1] = { "Take the bounty down...", function() StaticPopup_Show("WATCHX_TAKEDOWN", r.name, nil, key) end }
     else
         items[#items + 1] = { "|cffffa000WANTED|r – put a bounty on them", function() ns.ShowBounty(key) end }
     end
@@ -435,7 +468,7 @@ function ns.EnemyMenu(anchor, key)
     if r.wanted and not r.wanted.paid and not ns.WantedMine(r.wanted) then   -- someone else's bounty keeps them here
         items[#items + 1] = { "|cff606060Can't forget – " .. (r.wanted.by or "someone") .. " has a bounty on them|r", nil }
     else
-        items[#items + 1] = { "|cff909090Forget this player|r", function() ns.ForgetEnemy(key) end }
+        items[#items + 1] = { "|cff909090Forget this player...|r", function() StaticPopup_Show("WATCHX_FORGET", r.name, nil, key) end }
     end
     ns.ShowMenu(anchor, r.name, items)
 end
@@ -776,14 +809,14 @@ local function BuildSettings()
     end
 
     -- A check box: label with a grey hint on the same line. col2 puts it in the second column.
-    local function check(label, hint, get, set, col2)
+    local function check(label, hint, get, set, col2, width)
         if col2 then y = y + 26 end
         local cb = CreateFrame("CheckButton", nil, o, "UICheckButtonTemplate")
         cb:SetSize(26, 26)
         cb:SetPoint("TOPLEFT", o, "TOPLEFT", col2 and COL2 or (L - 4), y + 2)
         local name = o:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
         name:SetPoint("LEFT", cb, "RIGHT", 2, 1)
-        name:SetWidth(COL2 - L - 40)
+        name:SetWidth(width or (COL2 - L - 40))
         name:SetJustifyH("LEFT")
         name:SetWordWrap(false)
         name:SetText(label .. (hint and ("  |cff808080" .. hint .. "|r") or ""))
@@ -801,7 +834,7 @@ local function BuildSettings()
 
     -- A module: on/off, what it is, and a button to its own page.
     local function module(label, hint, get, set, open)
-        check(label, hint, get, set)
+        check(label, hint, get, set, nil, W - (open and 114 or 30))   -- one column: the whole row, up to its button
         if open then
             local b = Button(o, "Settings", 80, 20, function() open() end)
             b:SetPoint("TOPLEFT", o, "TOPLEFT", L + W - 84, y + 26 + 1)
@@ -821,7 +854,7 @@ local function BuildSettings()
     module("Alert on any enemy player", "phone + the red bar, outside instances",
         function() return db().enemyPlayers end, function(v) ns.SetEnemyPlayers(v) end, openAlerts)
     module("Attacked while idle or AFK", "phone alert",
-        function() return db().attackAlert end, function(v) db().attackAlert = v end, openAlerts)
+        function() return db().attackAlert end, function(v) db().attackAlert = v end)
 
     section("MORE")
     module("Rare scan", "like unitscan: rare mobs and the names you add",
@@ -1146,10 +1179,15 @@ do
         local here = GetZoneText and GetZoneText() or ""
         if type(here) ~= "string" then here = "" end
         local list = {}
+        cat.lower = cat.lower or {}   -- each rare's "name zone" in lower case, made once (not per letter typed)
         for _, r in ipairs(ns.RARES or {}) do
             local zone = AreaName(r[5])
             local ok = true
-            if q ~= "" and not (r[2]:lower():find(q, 1, true) or zone:lower():find(q, 1, true)) then ok = false end
+            if q ~= "" then
+                local low = cat.lower[r]
+                if not low then low = r[2]:lower() .. "\1" .. zone:lower(); cat.lower[r] = low end
+                if not low:find(q, 1, true) then ok = false end
+            end
             if ok and cat.near and lvl > 0 and (r[4] < lvl - 5 or r[3] > lvl + 5) then ok = false end
             if ok and cat.zoneOnly and zone ~= here then ok = false end
             if ok and cat.watchedOnly and not IsWatched(r[2]) then ok = false end
@@ -1259,7 +1297,10 @@ do
         f.search:SetScript("OnTextChanged", function(self)
             self.hint:SetShown(self:GetText() == "" and not self:HasFocus())
             self.clear:SetShown(self:GetText() ~= "")
-            ns.RefreshRares()
+            -- one refresh a moment after the last letter, not one per letter
+            if not (C_Timer and C_Timer.NewTimer) then ns.RefreshRares() return end
+            if f.searchT then f.searchT:Cancel() end
+            f.searchT = C_Timer.NewTimer(0.15, function() f.searchT = nil; ns.RefreshRares() end)
         end)
         f.search:SetScript("OnEditFocusGained", function(self) self.hint:Hide() end)
         f.search:SetScript("OnEditFocusLost", function(self) self.hint:SetShown(self:GetText() == "") end)
@@ -1305,9 +1346,8 @@ do
         if not ns.RARES then ns.Print("The rare list didn't load (Data/Rares.lua).") return end
         cat = cat or Build()
         HideBlizzardMenus()
-        cat:Show()
+        if cat:IsShown() then ns.RefreshRares() else cat:Show() end   -- (showing it refreshes it)
         cat:Raise()
-        ns.RefreshRares()
     end
 end
 
@@ -1372,7 +1412,7 @@ local function BuildHistory()
     for _, t in ipairs({ { "all", "All players" }, { "kos", "KOS" }, { "avoid", "Avoid" }, { "wanted", "Wanted" }, { "notes", "Notes" }, { "guilds", "Guilds" } }) do
         local b = FlatButton(f, t[2], 84, 22, function()
             f.tab = t[1]
-            f.backTo = nil
+            f.backTo, f.guildFilter = nil, nil
             ns.RefreshHistory()
         end)
         if prev then b:SetPoint("LEFT", prev, "RIGHT", 4, 0) else b:SetPoint("TOPLEFT", f, "TOPLEFT", 14, -40) end
@@ -1384,7 +1424,13 @@ local function BuildHistory()
     f.search:SetSize(170, 20)
     f.search:SetPoint("TOPRIGHT", f, "TOPRIGHT", -18, -41)
     f.search:SetAutoFocus(false)
-    f.search:SetScript("OnTextChanged", function() ns.RefreshHistory() end)
+    f.search:SetScript("OnTextChanged", function(self)
+        -- typing: one refresh a moment after the last letter, not one per letter (it sorts up to 2000 players)
+        if ns.Trim(self:GetText() or ""):lower() == f.lastQ then return end
+        if not (C_Timer and C_Timer.NewTimer) then ns.RefreshHistory() return end
+        if f.searchT then f.searchT:Cancel() end
+        f.searchT = C_Timer.NewTimer(0.15, function() f.searchT = nil; ns.RefreshHistory() end)
+    end)
     f.search:SetScript("OnEscapePressed", function(self) self:SetText(""); self:ClearFocus() end)
     f.search:SetScript("OnEnterPressed", function(self) self:ClearFocus() end)
     f.search.hint = f.search:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
@@ -1396,7 +1442,7 @@ local function BuildHistory()
     -- "Show its players" (Guilds tab) remembers where you came from: Back goes there again
     f.back = FlatButton(f, "< Back", 80, 22, function()
         local b = f.backTo
-        f.backTo = nil
+        f.backTo, f.guildFilter = nil, nil
         f.tab = b and b.tab or "guilds"
         f.search:SetText(b and b.search or "")
         ns.RefreshHistory()
@@ -1448,7 +1494,7 @@ local function BuildHistory()
     f.addG.hint:SetText("Guild to blacklist...")
     local function addGuild()
         local t = ns.Trim(f.addG:GetText())
-        if t ~= "" then ns.SetGuildKOS(t, true); f.addG:SetText("") end
+        if t ~= "" then ns.SetGuildKOS(t, true); f.addG:SetText("") end   -- (History follows: SetGuildKOS marks it)
         f.addG:ClearFocus()
     end
     f.addG:SetScript("OnEnterPressed", addGuild)
@@ -1499,7 +1545,9 @@ local function HistoryRow(i)
                 { on and "Take off the blacklist" or "|cffff4040Blacklist (KOS guild)|r", function() ns.SetGuildKOS(g, not on) end },
                 { "Show its players", function()
                     f.backTo = { tab = "guilds", search = f.search:GetText() }
-                    f.tab = "all"; f.search:SetText(g); f.search.hint:Hide(); ns.RefreshHistory()
+                    f.tab, f.guildFilter, f.guildName = "all", g:lower(), g
+                    f.search:SetText("")
+                    ns.RefreshHistory()
                 end },
             })
         elseif self.key then
@@ -1576,6 +1624,8 @@ function ns.RefreshHistory()
         end
     end
     local q = ns.Trim(f.search:GetText() or ""):lower()
+    f.lastQ = q
+    if f.searchT then f.searchT:Cancel(); f.searchT = nil end
     f.search.hint:SetShown(q == "" and not f.search:HasFocus())
     f.clear:SetShown(q ~= "")
     f.back:SetShown(f.backTo ~= nil and f.tab ~= "guilds")
@@ -1615,10 +1665,12 @@ function ns.RefreshHistory()
             total = total + 1
             local kos = ns.IsKOS(key, nil, r.guild)
             local ok = f.tab == "all" or (f.tab == "kos" and kos) or (f.tab == "avoid" and r.avoid) or (f.tab == "wanted" and r.wanted) or (f.tab == "notes" and r.note)
+            if ok and f.guildFilter and (r.guild or ""):lower() ~= f.guildFilter then ok = false end   -- one guild's players
             if ok and match(r.name, key, r.guild, r.zone, r.note, r.class) then
+                -- the text columns in lower case once here, so the sort compares them as they are
                 items[#items + 1] = { key = key, r = r, kos = kos, name = (r.name or key):lower(), level = r.level or 0,
                     class = r.class or "", guild = (r.guild or "~"):lower(), kills = r.kills or 0, deaths = r.deaths or 0,
-                    seen = r.seen or 0, lastSeen = r.lastSeen or 0, zone = r.zone or "~", note = r.note or "~" }
+                    seen = r.seen or 0, lastSeen = r.lastSeen or 0, zone = (r.zone or "~"):lower(), note = (r.note or "~"):lower() }
                 local w = r.wanted
                 if wantedTab and w then
                     local it = items[#items]
@@ -1638,7 +1690,7 @@ function ns.RefreshHistory()
     table.sort(items, function(a, b)
         if wantedTab and a.group ~= b.group then return (a.group or 9) < (b.group or 9) end   -- what you owe first
         local va, vb = a[sk], b[sk]
-        if type(va) == "string" then va, vb = va:lower(), tostring(vb or ""):lower() end
+        if guildsTab and type(va) == "string" then va, vb = va:lower(), tostring(vb or ""):lower() end   -- (players: lower already)
         if va == vb then return (a.lastSeen or 0) > (b.lastSeen or 0) end
         if desc then return va > vb end
         return va < vb
@@ -1646,7 +1698,7 @@ function ns.RefreshHistory()
     local n = math.min(#items, HIST_MAX)
     for i = 1, n do
         local it, row = items[i], HistoryRow(i)
-        PlaceColumns(cols, row.cells, row, 0)
+        if row.cols ~= cols then PlaceColumns(cols, row.cells, row, 0); row.cols = cols end   -- (only when the tab's kind changed)
         local alt = (i % 2 == 0) and 0.05 or 0
         if guildsTab then
             row.key, row.guild = nil, it.name
@@ -1720,18 +1772,25 @@ function ns.RefreshHistory()
         end
     end
     local M = ns.Money or tostring
-    f.count:SetText((owe > 0 and ("|cffff9040You owe " .. owe .. ": " .. M(oweC) .. "|r   ") or "")
+    local money = (owe > 0 and ("|cffff9040You owe " .. owe .. ": " .. M(oweC) .. "|r   ") or "")
         .. (due > 0 and ("|cffffd100Owed to you " .. due .. ": " .. M(dueC) .. "|r   ") or "")
-        .. "Showing " .. #items .. " of " .. total .. (guildsTab and " guilds" or " players")
-        .. (#items > HIST_MAX and (" (first " .. HIST_MAX .. ")") or ""))
+    if wantedTab and money ~= "" then
+        f.count:SetText(money)   -- (the "+ Add bounty" button sits right of it: what you owe wins the room)
+    else
+        f.count:SetText(money .. "Showing " .. #items .. " of " .. total .. (guildsTab and " guilds" or " players")
+            .. (f.guildFilter and not guildsTab and ("  |cffffd100in <" .. (f.guildName or f.guildFilter) .. ">|r") or "")
+            .. (#items > HIST_MAX and (" (first " .. HIST_MAX .. ")") or ""))
+    end
 end
 
 function ns.ShowHistory(tab)
     history = history or BuildHistory()
-    if tab then history.tab = tab end
-    history:Show()
+    if tab then   -- opened for a tab: no old search, guild or Back from last time
+        history.tab, history.backTo, history.guildFilter = tab, nil, nil
+        if (history.search:GetText() or "") ~= "" then history.search:SetText("") end
+    end
+    if history:IsShown() then ns.RefreshHistory() else history:Show() end   -- (showing it refreshes it)
     history:Raise()
-    ns.RefreshHistory()
 end
 
 -- Hovering an enemy player in the world: WatchX adds KOS, kills, last seen and the note to the tooltip.
@@ -1747,11 +1806,12 @@ local function TooltipUnit(tip)
     if type(issecretvalue) == "function" and guild and issecretvalue(guild) then guild = nil end
     local kos, why = ns.IsKOS(key, first, guild)
     local role, how = ns.Role(key, unit)
-    local avoid = rec and rec.avoid
+    local avoidRec = rec and rec.avoid and rec or (ns.Avoided and ns.Avoided(key)) or nil   -- by full or first name
+    local avoid = avoidRec ~= nil
     local ww = ns.Wanted and ns.Wanted(key) or (rec and rec.wanted and ns.db.wantedOn ~= false and rec.wanted)
-    if not rec and not kos and not role and not ww then return end
+    if not rec and not kos and not role and not ww and not avoid then return end
     if ww then tip:AddLine("WatchX: " .. ns.WantedLine(ww), 1, 1, 1, true) end
-    if avoid then tip:AddLine(ns.AvoidLine(rec), 1, 0.5, 0.25, true) end
+    if avoid then tip:AddLine(ns.AvoidLine(avoidRec), 1, 0.5, 0.25, true) end
     if role == "healer" then tip:AddLine("WatchX: healer (" .. tostring(how) .. ")", 0.3, 1, 0.4)
     elseif role == "dps" then tip:AddLine("WatchX: not a healer (" .. tostring(how) .. ")", 0.7, 0.7, 0.7) end
     if kos then tip:AddLine(why == "guild" and "WatchX: KOS guild" or "WatchX: KOS – kill on sight", 1, 0.2, 0.2) end
@@ -1934,7 +1994,7 @@ function ns.BuildNearbySettings()
         eb.hint:SetText(hint)
         local function go()
             local t = ns.Trim(eb:GetText())
-            if t ~= "" then onAdd(t); eb:SetText("") end
+            if t ~= "" and onAdd(t) ~= false then eb:SetText("") end   -- refused (it says why): the text stays to fix
             eb:ClearFocus()
             eb.hint:SetShown(eb:GetText() == "")
         end
@@ -1981,7 +2041,8 @@ function ns.BuildNearbySettings()
     heading("KILL ON SIGHT")
     addRow("KOS player", "Name (e.g. Shixa Nightblade)", function(t)
         local key = ns.KeyFromName(t)
-        if key then ns.SetKOS(key, true) end
+        if not key then ns.Print("That isn't a player name: " .. t) return false end
+        ns.SetKOS(key, true)
     end, "Add target", function()
         local key, full
         if UnitExists("target") then key, full = ns.PlayerKey("target") end
@@ -2078,7 +2139,9 @@ function ns.BuildNearbySettings()
         local name, rest = t:match("^([^:]+):%s*(.*)$")
         name = ns.Trim(name or t)
         local copper, note = ns.ParseMoney(rest or "")
-        ns.SetWanted(ns.KeyFromName(name), name, copper, note)
+        local key = ns.KeyFromName(name)
+        if not key then ns.Print("That isn't a player name: " .. name) return false end
+        return ns.SetWanted(key, name, copper, note) ~= false
     end, "Bounty on target", function()
         local key, full
         if UnitExists("target") and UnitIsPlayer("target") then key, full = ns.PlayerKey("target") end
@@ -2104,7 +2167,7 @@ function ns.BuildNearbySettings()
         function() return db().avoidChat ~= false end, function(v) db().avoidChat = v end)
     addRow("Avoid player", "Name: note (Bob Smith: ninja looter)", function(t)
         local name, note = t:match("^([^:]+):%s*(.*)$")
-        ns.SetAvoid(name or t, true, note)
+        if not ns.SetAvoid(name or t, true, note) then ns.Print("That isn't a player name: " .. (name or t)) return false end
         if ns.RefreshAvoidCount then ns.RefreshAvoidCount() end
     end, "Add target", function()
         local key, full
@@ -2137,7 +2200,7 @@ function ns.BuildNearbySettings()
         "|cffaaaaaa•|r  Every enemy player your nameplates, target or mouseover show is listed, newest first.",
         "|cffaaaaaa•|r  Bright row = near now (last 30 seconds). Dim row = seen in the last few minutes.",
         "|cffaaaaaa•|r  |cffffd100Click a row|r to target that player.  |cffff5050> you|r = has you targeted.",
-        "|cffaaaaaa•|r  |cff40ff60+|r before a name = proven healer (see Nameplate icons below).",
+        "|cffaaaaaa•|r  |cff40ff60+|r before a name = proven healer (see Nameplate icons above).",
         "|cffaaaaaa•|r  |cffd8a0ffSTEALTH|r = went into Stealth, Vanish, Prowl or Shadowmeld – and the warning pops up.",
         "|cffaaaaaa•|r  The warnings sit on top of the list: |cffd8a0ffStealthed player|r and |cffff5959Enemy player detected|r.",
         "|cffaaaaaa•|r  Needs |cffffd100enemy nameplates|r (key V). In dungeons and raids it's faded (or hidden, if ticked).",
@@ -2159,7 +2222,7 @@ function ns.BuildNearbySettings()
         RefreshKOS()
         ns.RefreshAvoidCount()
     end)
-    o:SetHeight(-y + 200)
+    o:SetHeight(-y + (help:GetStringHeight() or 300) + 30)   -- the help text in full, for the scroll bar
     nearbyPage = page
     if settingsCategory and Settings and Settings.RegisterCanvasLayoutSubcategory then
         local ok, cat = pcall(Settings.RegisterCanvasLayoutSubcategory, settingsCategory, page, "PvP")
@@ -2380,7 +2443,7 @@ local function BuildPanel()
         b.key = item[1]
         b:SetScript("OnEnter", function(self) if self.tip then Tip(self, item[2], self.tip) end end)
         b:SetScript("OnLeave", GameTooltip_Hide)
-        b:SetScript("OnClick", function(self) if self.key ~= "plates" then ns.OpenAlertSettings() end end)
+        b:SetScript("OnClick", function(self) if self.key ~= "plates" then ns.OpenSettings() end end)   -- links + AFK: main page
         p.ready[item[1]] = b
     end
     ly = ly - 22
@@ -2400,7 +2463,7 @@ local function BuildPanel()
     local bw = (PANEL_W - PAD * 2 - 12) / 3
     local test = FlatButton(p.buttons, "Send test", bw, 22, function() ns.SendTest() end)
     test:SetPoint("TOPLEFT", p.buttons, "TOPLEFT", PAD, 0)
-    local set = FlatButton(p.buttons, "Settings", bw, 22, function() ns.OpenAlertSettings() end)
+    local set = FlatButton(p.buttons, "Settings", bw, 22, function() ns.OpenSettings() end)
     set:SetPoint("LEFT", test, "RIGHT", 6, 0)
     p.lock = FlatButton(p.buttons, "Unlock", bw, 22, function() ns.ToggleUnlock() end)
     p.lock:SetPoint("LEFT", set, "RIGHT", 6, 0)
@@ -4440,8 +4503,12 @@ local function RefreshUIInner()
     if ns.RefreshLevel then ns.RefreshLevel() end
     ns.UpdateProfileLabels()
     if ns.RefreshWatchChips then ns.RefreshWatchChips() end
-    if ns.RefreshKOSChips then ns.RefreshKOSChips() end
-    if ns.RefreshAvoidCount and nearbyPage and nearbyPage:IsShown() then ns.RefreshAvoidCount() end
+    if ns.kosDirty then   -- the PvP page's KOS and avoid lists: only when they changed (they scan every player)
+        ns.kosDirty = nil
+        if ns.RefreshKOSChips then ns.RefreshKOSChips() end
+        if ns.RefreshAvoidCount and nearbyPage and nearbyPage:IsShown() then ns.RefreshAvoidCount() end
+    end
+    if ns.historyDirty then ns.historyDirty = nil; ns.RefreshHistory() end   -- KOS / avoid / forget changed
     local wasShown = TargetShown()
     ns.UpdateTargetButton()
     -- the red bar came or went: the stack under it moves now (it was placed before the bar changed)

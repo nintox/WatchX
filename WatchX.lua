@@ -729,6 +729,13 @@ ns.Alert = Alert
 
 -- Delayed so the test travels exactly like a real spawn alert (not straight from a click).
 function ns.SendTest()
+    -- links typed since the reload aren't in the saved settings yet, and the bridge only reads those
+    local links = (db.ntfyUrl or "") .. "\1" .. (db.discordWebhook or "") .. "\1" .. (db.ntfyToken or "")
+    if ns.linksAtLogin and links ~= ns.linksAtLogin then
+        Print("|cffffd100Your phone links changed – press \"Save & reload\" first (the bridge reads them from the saved "
+            .. "settings), then Send test.|r")
+        return
+    end
     if db.instantOK == false then db.instantOK, ns.shotFails = nil, 0 end   -- a test tries the instant way again
     Print("Sending a test alert in 3 seconds (the same way a real spawn alert is sent)...")
     C_Timer.After(3, function()
@@ -1018,6 +1025,7 @@ function ns.SetKOS(key, on)
     if e then e.kos = ns.IsKOS(key, e.first, e.guild) end
     Print((on and "|cffff3030KOS|r: " or "No longer KOS: ") .. r.name)
     if ns.UpdatePlates then ns.UpdatePlates() end
+    ns.historyDirty, ns.kosDirty = true, true   -- an open History / PvP page follows with the next refresh
     Refresh()
 end
 
@@ -1028,6 +1036,7 @@ function ns.SetGuildKOS(guild, on)
     for key, e in pairs(ns.nearby) do e.kos = ns.IsKOS(key, e.first, e.guild) end
     Print((on and "|cffff3030KOS guild|r: " or "No longer a KOS guild: ") .. "<" .. guild .. ">")
     if ns.UpdatePlates then ns.UpdatePlates() end
+    ns.historyDirty, ns.kosDirty = true, true   -- an open History / PvP page follows
     Refresh()
 end
 
@@ -1049,6 +1058,7 @@ function ns.ForgetEnemy(key)
     db.enemies[key] = nil
     if ns.AvoidChanged then ns.AvoidChanged() end
     ns.enemyCount = nil
+    ns.historyDirty, ns.kosDirty = true, true   -- an open History / PvP page follows
     Refresh()
 end
 
@@ -2531,6 +2541,7 @@ function ns.SetAvoid(name, on, note)
     ns.AvoidChanged()
     Print(on and ("|cffff8040Avoid|r: " .. r.name .. (r.note and (" – " .. r.note) or ""))
         or ("No longer on your avoid list: " .. r.name))
+    ns.historyDirty, ns.kosDirty = true, true   -- an open History / PvP page follows
     Refresh()
     return key
 end
@@ -3313,7 +3324,8 @@ end
 
 local function CheckUnit(unit, source)
     if not UnitExists(unit) then return end
-    local raw = Plain(UnitName(unit))
+    local raw, last = UnitName(unit)
+    raw, last = Plain(raw), Plain(last)
     if type(raw) ~= "string" then return end
     if db.nearby and Plain(UnitIsPlayer(unit)) == true and ns.NearbyHere()
         and ns.IsHostilePlayer(unit)
@@ -3322,6 +3334,9 @@ local function CheckUnit(unit, source)
         if key and unit:find("^nameplate") then plateKeys[unit] = key end
     end
     local name = Resolve(raw)
+    if not name and type(last) == "string" and last ~= "" then   -- a player on the list by full name (Forever has surnames)
+        name = Resolve(raw .. " " .. last) or Resolve(raw .. "-" .. last)
+    end
     if name then
         local guid = Plain(UnitGUID(unit))
         if type(guid) == "string" then guidToName[guid] = name end
@@ -3717,6 +3732,7 @@ local function OnEvent(_, event, arg1, arg2, ...)
         ns.db = db
         db.exitAt, db.exitWhy = nil, nil
         if db.instantOK == false then db.instantOK = nil end   -- each session tries the instant way again
+        ns.linksAtLogin = (db.ntfyUrl or "") .. "\1" .. (db.discordWebhook or "") .. "\1" .. (db.ntfyToken or "")
         if type(db.bridgeKey) ~= "string" or not db.bridgeKey:find("^%w+$") then   -- once per install
             local chars, k = "abcdefghijkmnpqrstuvwxyz23456789", {}
             for i = 1, 12 do local n = math.random(1, #chars); k[i] = chars:sub(n, n) end
