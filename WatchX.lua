@@ -2504,11 +2504,15 @@ end
         return w.reward
     end
 
-    -- The bounty on this player (still open), or nil.
+    -- The bounty on this player (still open), or nil. A bounty on just a first name ("Bob") counts for any Bob.
     function ns.Wanted(key)
-        local r = key and db and db.enemies[key]
+        if not (key and db and On()) then return end
+        local r = db.enemies[key]
         local w = r and r.wanted
-        if w and not w.claimed and On() then return w, r end
+        if w and not w.claimed then return w, r end
+        local first = key:match("^([^%-]+)%-")
+        local fr = first and db.enemies[first]
+        if fr and fr.wanted and not fr.wanted.claimed then return fr.wanted, fr, first end
     end
     -- A line for tooltips and lists.
     function ns.WantedLine(w)
@@ -2525,6 +2529,12 @@ end
             else s = s .. "  |cffaaaaaa· not paid yet|r" end
         end
         return s
+    end
+
+    -- Bounty news: a card like the stealth one (and a chat line); the plain mid-screen warning if there's no card.
+    local function Card(kind, who, reward, from, msg, class)
+        if ns.BountyCard and ns.BountyCard(kind, who, reward, from, class) then Print("|cffffa000" .. msg .. "|r")
+        else Warn(msg) end
     end
 
     -- The whole story, for tooltips: posted (by, when, reward, note), claimed (who, when, where), paid.
@@ -2651,16 +2661,18 @@ end
 
     -- A kill by you or your group (ns.OnPlayerKill): the bounty is yours.
     function ns.OnWantedKill(key)
-        local w, r = ns.Wanted(key)
+        local w, r, held = ns.Wanted(key)
         if not w then return end
+        key = held or key
         local zone = Plain(GetZoneText and GetZoneText())
         local sub = Plain(GetSubZoneText and GetSubZoneText())
         zone = type(zone) == "string" and zone ~= "" and zone or nil
         if zone and type(sub) == "string" and sub ~= "" and sub ~= zone then zone = sub .. ", " .. zone end
         w.claimed = { by = Me(), full = MyFull(), t = time(), zone = zone }
         Send("C", key, w.claimed.by, w.claimed.t, w.t or 0, w.claimed.full, zone or "")
-        Warn("Bounty claimed: " .. (r.name or key) .. (zone and (" in " .. zone) or "") .. (ns.WantedReward(w) and (" – " .. ns.WantedReward(w)) or "")
-            .. ((w.by and w.by ~= Me()) and (" from " .. w.by .. " (they pay by mail)") or ""))
+        Card("bountyKill", r.name or key, ns.WantedReward(w), (w.by and w.by ~= Me()) and ("from " .. w.by) or "yours",
+            "Bounty claimed: " .. (r.name or key) .. (zone and (" in " .. zone) or "") .. (ns.WantedReward(w) and (" – " .. ns.WantedReward(w)) or "")
+            .. ((w.by and w.by ~= Me()) and (" from " .. w.by .. " (they pay by mail)") or ""), r.class)
         if ns.RefreshHistory then ns.RefreshHistory() end
     end
 
@@ -2715,8 +2727,9 @@ end
             if r.wanted.claimed and f[11] == "1" then r.wanted.paid = time() end
             recent[key .. t] = time()
             if time() - t < 600 and not r.wanted.claimed then
-                Warn("WANTED from " .. (r.wanted.by or "?") .. ": " .. (r.name or key)
-                    .. (ns.WantedReward(r.wanted) and (" – " .. ns.WantedReward(r.wanted)) or "") .. (r.wanted.note and (" (" .. r.wanted.note .. ")") or ""))
+                Card("bountyNew", r.name or key, ns.WantedReward(r.wanted), "from " .. (r.wanted.by or "?"),
+                    "WANTED from " .. (r.wanted.by or "?") .. ": " .. (r.name or key)
+                    .. (ns.WantedReward(r.wanted) and (" – " .. ns.WantedReward(r.wanted)) or "") .. (r.wanted.note and (" (" .. r.wanted.note .. ")") or ""), r.class)
             end
         elseif op == "D" then
             local r = db.enemies[key]
@@ -2730,11 +2743,13 @@ end
                 w.claimed = { by = Clean(f[2], 40) or from, t = tt(f[3]) or time(), full = Clean(f[5], 60), zone = Clean(f[6], 60) }
                 local where = w.claimed.zone and (" in " .. w.claimed.zone) or ""
                 if ns.WantedMine(w) then
-                    Warn(w.claimed.by .. " killed " .. (r.name or key) .. where .. " and claimed your bounty – you owe "
-                        .. (ns.WantedReward(w) or "the reward") .. ". Pay it at a mailbox.")
+                    Card("bountyOwe", r.name or key, ns.WantedReward(w), "to " .. w.claimed.by,
+                        w.claimed.by .. " killed " .. (r.name or key) .. where .. " and claimed your bounty – you owe "
+                        .. (ns.WantedReward(w) or "the reward") .. ". Pay it at a mailbox.", r.class)
                 else
-                    Warn("Bounty claimed: " .. (r.name or key) .. " by " .. w.claimed.by .. where
-                        .. (ns.WantedReward(w) and (" – " .. ns.WantedReward(w)) or "") .. (w.by and (", from " .. w.by) or ""))
+                    Card("bountyKill", r.name or key, ns.WantedReward(w), "by " .. w.claimed.by,
+                        "Bounty claimed: " .. (r.name or key) .. " by " .. w.claimed.by .. where
+                        .. (ns.WantedReward(w) and (" – " .. ns.WantedReward(w)) or "") .. (w.by and (", from " .. w.by) or ""), r.class)
                 end
             end
         elseif op == "P" then
@@ -2743,7 +2758,8 @@ end
             if w and w.claimed and not w.paid and w.by == Clean(f[2], 40) and (tt(f[3]) or 0) == (w.t or 0) then
                 w.paid = time()
                 if w.claimed.by == Me() then
-                    Warn((w.by or "?") .. " paid you " .. (ns.WantedReward(w) or "the bounty") .. " for " .. (r.name or key) .. " – check your mail.")
+                    Card("bountyPaid", r.name or key, ns.WantedReward(w), "from " .. (w.by or "?"),
+                        (w.by or "?") .. " paid you " .. (ns.WantedReward(w) or "the bounty") .. " for " .. (r.name or key) .. " – check your mail.", r.class)
                 end
             end
         end

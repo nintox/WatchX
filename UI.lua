@@ -503,9 +503,13 @@ do
         Label("Player", -40)
         f.who = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightLarge")
         f.who:SetPoint("TOPLEFT", f, "TOPLEFT", BX, -42)
-        f.whoBox = Box(f, 222, 48, "Name Surname")
+        -- first name and surname in their own boxes (the surname may be left out: then any player by that first name)
+        f.whoBox = Box(f, 106, 24, "First")
         f.whoBox:SetPoint("TOPLEFT", f, "TOPLEFT", BX + 4, -40)
         f.whoBox:Hide()
+        f.lastBox = Box(f, 106, 24, "Last (optional)")
+        f.lastBox:SetPoint("LEFT", f.whoBox, "RIGHT", 10, 0)
+        f.lastBox:Hide()
         Label("Reward", -72)
         -- gold, silver, copper: numbers only, a coin after each (like Blizzard's money boxes)
         f.coins = {}
@@ -525,8 +529,10 @@ do
             x = x + c[1] + 30
         end
         f.reward = f.coins[1]
-        f.whoBox:SetScript("OnEnterPressed", function() f.coins[1]:SetFocus() end)
-        f.whoBox:SetScript("OnTabPressed", function() f.coins[1]:SetFocus() end)
+        f.whoBox:SetScript("OnEnterPressed", function() f.lastBox:SetFocus() end)
+        f.whoBox:SetScript("OnTabPressed", function() f.lastBox:SetFocus() end)
+        f.lastBox:SetScript("OnEnterPressed", function() f.coins[1]:SetFocus() end)
+        f.lastBox:SetScript("OnTabPressed", function() f.coins[1]:SetFocus() end)
         f.forever = CreateFrame("CheckButton", nil, f, "UICheckButtonTemplate")
         f.forever:SetSize(22, 22)
         f.forever:SetPoint("TOPLEFT", f, "TOPLEFT", BX, -128)
@@ -551,8 +557,10 @@ do
             end
             local key, name = f.key, f.name
             if f.whoBox:IsShown() then
-                name = ns.Trim(f.whoBox:GetText() or "")
-                if name == "" then f.err:SetText("Who?"); f.whoBox:SetFocus() return end
+                local first, last = ns.Trim(f.whoBox:GetText() or ""), ns.Trim(f.lastBox:GetText() or "")
+                if first == "" then f.err:SetText("Who? Put in the first name"); f.whoBox:SetFocus() return end
+                first, last = first:gsub("%s+", ""), last:gsub("%s+", "")
+                name = last ~= "" and (first .. " " .. last) or first
                 key = ns.KeyFromName(name)
             end
             if ns.SetWanted(key, name, c, f.note:GetText(), f.forever:GetChecked() and true or false) then f:Hide() end
@@ -590,8 +598,11 @@ do
         bw.key, bw.name = key, name or (r and r.name) or key
         bw.who:SetShown(not typed)
         bw.whoBox:SetShown(typed)
+        bw.lastBox:SetShown(typed)
         bw.who:SetText(bw.name or "")
-        bw.whoBox:SetText(typed and (bw.name or "") or "")
+        local first, last = (typed and bw.name or ""):match("^(%S+)%s*(.-)$")
+        bw.whoBox:SetText(first or "")
+        bw.lastBox:SetText(last or "")
         local c = w and w.copper or 0
         bw.coins[1]:SetText(c >= 10000 and tostring(math.floor(c / 10000)) or "")
         bw.coins[2]:SetText((c % 10000) >= 100 and tostring(math.floor(c / 100) % 100) or "")
@@ -1699,8 +1710,9 @@ local function TooltipUnit(tip)
     local kos, why = ns.IsKOS(key, first, guild)
     local role, how = ns.Role(key, unit)
     local avoid = rec and rec.avoid
-    if not rec and not kos and not role then return end
-    if rec and rec.wanted and ns.db.wantedOn ~= false then tip:AddLine("WatchX: " .. ns.WantedLine(rec.wanted), 1, 1, 1, true) end
+    local ww = ns.Wanted and ns.Wanted(key) or (rec and rec.wanted and ns.db.wantedOn ~= false and rec.wanted)
+    if not rec and not kos and not role and not ww then return end
+    if ww then tip:AddLine("WatchX: " .. ns.WantedLine(ww), 1, 1, 1, true) end
     if avoid then tip:AddLine(ns.AvoidLine(rec), 1, 0.5, 0.25, true) end
     if role == "healer" then tip:AddLine("WatchX: healer (" .. tostring(how) .. ")", 0.3, 1, 0.4)
     elseif role == "dps" then tip:AddLine("WatchX: not a healer (" .. tostring(how) .. ")", 0.7, 0.7, 0.7) end
@@ -3272,7 +3284,7 @@ local function PaintNearbyRow(r, e, now)
     r.bar:SetColorTexture(cr * 0.6, cg * 0.6, cb * 0.6, near and 0.9 or 0.35)
     local rec = ns.db.enemies[e.key]
     local healer = ns.db.plateHealer ~= false and ns.IsHealer(e.key)
-    local wanted = rec and rec.wanted and not rec.wanted.claimed and ns.db.wantedOn ~= false
+    local wanted = ns.Wanted and ns.Wanted(e.key)   -- also a bounty on just the first name
     r.name:SetText((e.kos and "|cffff3030KOS|r " or "") .. (wanted and "|cffffa000WANTED|r " or "")
         .. ((rec and rec.avoid) and "|cffff8040AVOID|r " or "")
         .. (healer and "|cff40ff60+|r " or "") .. e.name
@@ -3347,6 +3359,10 @@ local TOAST_KINDS = {
     enemy = { head = "Enemy player detected!", r = 1, g = 0.35, b = 0.35, icon = "Interface\\Icons\\Ability_DualWield" },
     kos = { head = "Kill on sight!", r = 1, g = 0.15, b = 0.15, icon = "Interface\\TargetingFrame\\UI-RaidTargetingIcon_8" },
     wanted = { head = "WANTED!", r = 1, g = 0.63, b = 0, icon = "Interface\\Icons\\INV_Misc_Coin_02" },
+    bountyNew = { head = "NEW BOUNTY", r = 1, g = 0.63, b = 0, icon = "Interface\\Icons\\INV_Misc_Coin_02" },
+    bountyKill = { head = "BOUNTY CLAIMED", r = 0.35, g = 1, b = 0.35, icon = "Interface\\Icons\\Ability_Rogue_Eviscerate" },
+    bountyOwe = { head = "YOU OWE A BOUNTY", r = 1, g = 0.45, b = 0.15, icon = "Interface\\Icons\\INV_Misc_Coin_02" },
+    bountyPaid = { head = "BOUNTY PAID", r = 0.35, g = 1, b = 0.35, icon = "Interface\\Icons\\INV_Misc_Coin_01" },
 }
 
 local function ToastDocked()
@@ -3506,10 +3522,27 @@ function ns.OnWantedSeen(e, w)
     if toast and rw then toast.head:SetText("WANTED!  " .. rw) end
 end
 
+-- Bounty news as a card, like the stealth one: kind = bountyNew / bountyKill / bountyOwe / bountyPaid.
+-- who: the wanted player; reward: shown in the head; from: small, top right (who posted it / who killed).
+function ns.BountyCard(kind, who, reward, from, class)
+    local k = TOAST_KINDS[kind]
+    if not k then return false end
+    ns.ShowStealthToast({ name = who or "?", class = class }, kind)
+    if not toast then return false end
+    toast.head:SetText(k.head .. (reward and ("   " .. reward) or ""))
+    toast.hint:SetText(from and ("|cffcccccc" .. from .. "|r") or "")
+    toast.untilT = GetTime() + 9
+    toast.bountyUntil = toast.untilT   -- a new-enemy card doesn't push it away
+    local snd = SOUNDKIT and (SOUNDKIT.LOOT_WINDOW_COIN_SOUND or SOUNDKIT.RAID_WARNING)
+    if snd and db().stealthSound ~= false then pcall(PlaySound, snd, "Master") end
+    return true
+end
+
 -- A new enemy in the list: the red card (not more often than every few seconds).
 local lastEnemyToast = 0
 function ns.OnNewEnemy(e)
     if db().newEnemyCard ~= true or not db().nearby then return end
+    if toast and toast:IsShown() and GetTime() < (toast.bountyUntil or 0) then return end
     local shownHead = toast and toast:IsShown() and toast.head:GetText()
     if GetTime() - lastEnemyToast < 3 or shownHead == TOAST_KINDS.stealth.head or shownHead == TOAST_KINDS.kos.head
             or (shownHead and shownHead:find("WANTED", 1, true)) then
