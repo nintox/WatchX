@@ -5283,11 +5283,12 @@ do (function()
             bag.at = now
         end
         bag.stacks = stacks
-        -- full: the tile blinks "get up!" until you do (the Resting buff goes), for at most 30 seconds
-        if stacks >= 3 and (ns.bagStart or bag.doneAt) then
+        -- full: the tile blinks "get up!" while you still lie on the bag (Resting, bag put down lately)
+        if stacks >= 3 and (ns.bagStart or bag.doneAt or lying) then
             ns.bagStart = nil
             bag.doneAt = bag.doneAt or now
-            if now - bag.doneAt < 30 and (lying or now - bag.doneAt < 3) then
+            -- still lying on the bag (however long ago the 3rd came): keep blinking; else a moment, then gone
+            if lying or now - bag.doneAt < 3 then
                 return { kind = "bag", stacks = 3, done = true }
             end
             return nil
