@@ -2343,11 +2343,23 @@ end
 
 -- ---------------------------------------------------------------- attacked
 -- Combat starts while you haven't done anything for a while (or are AFK) = something attacked you.
+-- Doing something = moving, casting, changing target or moving the mouse (checked every second). Tabbed out,
+-- the game sees no mouse, so that still counts as away.
 -- (Without the combat log the attacker is found through nameplates: whoever has you targeted.)
-local IDLE_FOR = 20          -- seconds without moving, casting or targeting
+local IDLE_FOR = 20          -- seconds without moving, casting, targeting or moving the mouse
 local lastActive, lastAttack, afkEndedAt = time(), 0, 0   -- a fresh login counts as active
 
 function ns.MarkActive() lastActive = time() end
+
+local cursorX, cursorY
+local function CheckCursor()
+    if not GetCursorPosition then return end
+    local x, y = GetCursorPosition()
+    x, y = Plain(x), Plain(y)
+    if type(x) ~= "number" or type(y) ~= "number" then return end
+    if cursorX and (math.abs(x - cursorX) > 2 or math.abs(y - cursorY) > 2) then lastActive = time() end
+    cursorX, cursorY = x, y
+end
 
 local function Attacker()
     if not (C_NamePlate and C_NamePlate.GetNamePlates) then return end
@@ -2404,7 +2416,7 @@ ticker:SetScript("OnUpdate", function(_, dt)
     if elapsed < 1 then return end
     elapsed = 0
     ns.Safe("scan", ScanNameplates)
-    ns.Safe("afk", function() CheckAfk(); AfkTick() end)
+    ns.Safe("afk", function() CheckCursor(); CheckAfk(); AfkTick() end)
     -- the XP boost warnings also work with the list switched off (the list reads it every second itself)
     if db.levelHelper == false and db.levelWarn ~= false then ns.Safe("xp boosts", ns.LevelStatus) end
     ns.Safe("buffs", ns.CheckBuffs)
