@@ -6,7 +6,7 @@
 
 Rare mob spawn alerts (Prince Nazjak / Tidal Charm built in) with respawn timers, instant phone alerts via
 [ntfy](https://ntfy.sh) and Discord, an AFK logout warning, attack alerts, a Nearby enemies list with stealth
-warnings, class/healer/KOS nameplate icons, XP boosts until level 60, buff warnings, and profiles. `/wx`
+warnings, class/healer/KOS nameplate icons, XP boosts until level 60, buff warnings, an avoid list (people you don't want to play with, with your own notes), and profiles. `/wx`
 
 ## Install
 

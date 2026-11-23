@@ -67,6 +67,9 @@ local defaults = {
     kosAlert = true,      -- Nearby: a "Kill on sight!" card + sound when a KOS player shows up
     enemies = {},         -- Nearby history: key -> { name, class, level, guild, firstSeen, lastSeen, zone, seen, kills, deaths, kos, note }
     kosGuilds = {},       -- lower-case guild name -> guild name, KOS
+    avoid = {},           -- Avoid list: lower-case key -> { name, note, at } (people you don't want to play with)
+    avoidGroup = true,    -- ... a warning when one of them invites you or is in your group
+    avoidChat = true,     -- ... a red [Avoid] before their chat lines
     nearbyShowEmpty = false, -- Nearby: show the list even when no enemy is around
     nearbyKeep = 5,       -- Nearby: minutes a player stays in the list after he was last seen
     plateIcons = false,   -- a class icon over enemy players' nameplates
@@ -1914,6 +1917,121 @@ function ns.RemoveBuffWatch(i)
     if db.buffCustom and db.buffCustom[i] then table.remove(db.buffCustom, i) end
 end
 
+-- ---------------------------------------------------------------- avoid list
+-- People you don't want to play with (ninja looters, and worse), with your own note. Shared by all your
+-- characters. Shown in their tooltip, a warning when one of them invites you or is in your group, and a red
+-- [Avoid] before their chat lines. Names are "First Last" on Forever; just "First" matches anyone called that.
+local function AvoidKey(name)
+    if type(name) ~= "string" then return end
+    name = Trim(name):gsub("%s+", "-"):lower()
+    return name ~= "" and name or nil
+end
+
+-- The entry for a key/name ("Shixa-Nightblade", "Shixa Nightblade" or "Shixa"), or nil.
+function ns.Avoided(name)
+    local list = db and db.avoid
+    if not list or not next(list) then return nil end
+    local k = AvoidKey(name)
+    if not k then return nil end
+    return list[k] or list[(k:match("^([^%-]+)"))]
+end
+
+function ns.SetAvoid(name, note)
+    local k = AvoidKey(name)
+    if not k then return end
+    db.avoid = db.avoid or {}
+    local shown = Trim(name):gsub("%-", " ")
+    note = Trim(note or "")
+    local e = db.avoid[k]
+    if e then
+        e.note = note ~= "" and note or e.note
+        Print("Avoid list: note for " .. e.name .. " updated.")
+    else
+        db.avoid[k] = { name = shown, note = note ~= "" and note or nil, at = time() }
+        Print("Avoid list: |cffff6060" .. shown .. "|r added" .. (note ~= "" and (" – " .. note) or "") .. ".")
+    end
+    Refresh()
+end
+
+function ns.RemoveAvoid(k)
+    if db.avoid and db.avoid[k] then
+        Print("Avoid list: " .. db.avoid[k].name .. " removed.")
+        db.avoid[k] = nil
+    end
+    Refresh()
+end
+
+function ns.AvoidLine(e)
+    return "|cffff4040WatchX: Avoid|r" .. (e.note and ("|cffff9090 – " .. e.note .. "|r") or "")
+end
+
+-- In your group, or an invite: one warning per player while you're in the group.
+local avoidWarned = {}
+local function AvoidWarn(e, what)
+    Warn("Avoid list: " .. e.name .. " " .. what .. (e.note and (" – " .. e.note) or ""))
+end
+
+local function CheckGroup()
+    if db.avoidGroup == false or not (db.avoid and next(db.avoid)) then return end
+    local raid = Plain(IsInRaid and IsInRaid()) == true
+    local n = raid and (tonumber(Plain(GetNumGroupMembers())) or 0) or 4
+    if not raid and Plain(IsInGroup and IsInGroup()) ~= true then wipe(avoidWarned) return end
+    local here = {}
+    for i = 1, n do
+        local unit = raid and ("raid" .. i) or ("party" .. i)
+        if Plain(UnitExists(unit)) == true then
+            local key = PlayerKey(unit)
+            local e = key and ns.Avoided(key)
+            if e then
+                here[key] = true
+                if not avoidWarned[key] then
+                    avoidWarned[key] = true
+                    AvoidWarn(e, "is in your group")
+                end
+            end
+        end
+    end
+    for k in pairs(avoidWarned) do if not here[k] then avoidWarned[k] = nil end end
+end
+
+-- Their chat lines get a red [Avoid] in front (say, yell, whispers, channels, group, guild).
+local function AvoidChatFilter(_, _, msg, author, ...)
+    if db and db.avoidChat ~= false and db.avoid and next(db.avoid) then
+        local ok, e = pcall(function()
+            local a, m = Plain(author), Plain(msg)
+            if type(a) ~= "string" or type(m) ~= "string" then return nil end
+            return ns.Avoided(a)
+        end)
+        if ok and e then return false, "|cffff4040[Avoid]|r " .. msg, author, ... end
+    end
+    return false, msg, author, ...
+end
+
+if CreateFrame then
+    local avoidEvents = CreateFrame("Frame")
+    for _, e in ipairs({ "GROUP_ROSTER_UPDATE", "PARTY_INVITE_REQUEST", "PLAYER_ENTERING_WORLD" }) do
+        pcall(avoidEvents.RegisterEvent, avoidEvents, e)
+    end
+    avoidEvents:SetScript("OnEvent", function(_, event, who)
+        if not db then return end
+        if event == "PARTY_INVITE_REQUEST" then
+            ns.Safe("avoid list", function()
+                local e = db.avoidGroup ~= false and ns.Avoided(Plain(who))
+                if e then AvoidWarn(e, "invited you to a group") end
+            end)
+        else
+            ns.Safe("avoid list", CheckGroup)
+        end
+    end)
+    if ChatFrame_AddMessageEventFilter then
+        for _, e in ipairs({ "CHAT_MSG_SAY", "CHAT_MSG_YELL", "CHAT_MSG_WHISPER", "CHAT_MSG_CHANNEL", "CHAT_MSG_PARTY",
+                             "CHAT_MSG_PARTY_LEADER", "CHAT_MSG_RAID", "CHAT_MSG_RAID_LEADER", "CHAT_MSG_GUILD",
+                             "CHAT_MSG_EMOTE", "CHAT_MSG_INSTANCE_CHAT", "CHAT_MSG_INSTANCE_CHAT_LEADER" }) do
+            pcall(ChatFrame_AddMessageEventFilter, e, AvoidChatFilter)
+        end
+    end
+end
+
 function ns.BuffTest()
     Warn("Water Breathing runs out in 0:30 – head for air!  |cff808080(a test)|r")
 end
@@ -2112,7 +2230,7 @@ local PROFILE_KEYS = { "enemyPlayers", "friendlyPlayers", "attackAlert", "whispe
     "stealthWarn", "stealthSound", "nearbyShowEmpty", "nearbyKeep", "newEnemyCard", "warnDock", "nearbyAttach", "nearbyMax", "nearbyNoBG", "nearbyHideDungeon", "nearbyHideRaid",
     "plateIcons", "plateFriendly", "plateHealer", "plateSize", "plateKOS",
     "levelHelper", "levelMissing", "levelFlash", "levelWarn", "levelHideCombat", "levelHideInstance", "levelPoint", "levelScale", "levelWidth",
-    "buffWarn", "buffSoon", "buffGone", "buffGroups" }
+    "buffWarn", "buffSoon", "buffGone", "buffGroups", "avoidGroup", "avoidChat" }
 local PROFILE_MAX_NAME = 16
 
 local function Copy(v)
@@ -2485,6 +2603,12 @@ local function OnSlash(input)
         Print("XP boosts list: " .. (db.levelHelper and "|cff40ff40on|r" or "off")
             .. ((db.levelHelper and not ns.LevelStatus()) and " (it only shows below level " .. ns.MaxLevel() .. ")" or ""))
         if ns.RefreshUI then ns.RefreshUI() end
+    elseif cmd == "avoid" or cmd == "blacklist" then
+        -- /wx avoid Name Surname: note   (or just /wx avoid to open the list)
+        local name, note = rest:match("^([^:]+):%s*(.*)$")
+        name = name or rest
+        if Trim(name) ~= "" then ns.SetAvoid(name, note)
+        elseif ns.OpenAvoidSettings then ns.OpenAvoidSettings() end
     elseif cmd == "buffs" or cmd == "buff" then
         if rest == "test" then ns.BuffTest()
         elseif rest ~= "" then ns.AddBuffWatch(rest)
@@ -2548,7 +2672,7 @@ local function OnSlash(input)
         for i = math.max(1, #lines - 24), #lines do DEFAULT_CHAT_FRAME:AddMessage("  " .. lines[i]) end
     else
         Print("Made by " .. ns.AUTHOR .. ". Commands: /wx (panel) | settings | guide | test | add <name> | "
-            .. "remove <name> | profile [name] | enemy | friend | nearby [on|off|test] | xp | buffs [name|test] | attack | afk [minutes] | instant | list | mini | quiet | alert | move | lock | unlock | minimap | sound | "
+            .. "remove <name> | profile [name] | enemy | friend | nearby [on|off|test] | xp | buffs [name|test] | avoid [name: note] | attack | afk [minutes] | instant | list | mini | quiet | alert | move | lock | unlock | minimap | sound | "
             .. "whisper | dead [name] | "
             .. "respawn <min> [name] | reset | log [previous]")
     end

@@ -720,6 +720,7 @@ local function BuildSettings()
     ns.BuildNearbySettings()
     ns.BuildLevelSettings()
     ns.BuildBuffSettings()
+    ns.BuildAvoidSettings()
 end
 
 -- ---------------------------------------------------------------- enemy history window
@@ -1071,7 +1072,9 @@ local function TooltipUnit(tip)
     if type(issecretvalue) == "function" and guild and issecretvalue(guild) then guild = nil end
     local kos, why = ns.IsKOS(key, first, guild)
     local role, how = ns.Role(key, unit)
-    if not rec and not kos and not role then return end
+    local avoid = ns.Avoided(key)
+    if not rec and not kos and not role and not avoid then return end
+    if avoid then tip:AddLine(ns.AvoidLine(avoid), 1, 0.25, 0.25, true) end
     if role == "healer" then tip:AddLine("WatchX: healer (" .. tostring(how) .. ")", 0.3, 1, 0.4)
     elseif role == "dps" then tip:AddLine("WatchX: not a healer (" .. tostring(how) .. ")", 0.7, 0.7, 0.7) end
     if kos then tip:AddLine(why == "guild" and "WatchX: KOS guild" or "WatchX: KOS – kill on sight", 1, 0.2, 0.2) end
@@ -3322,6 +3325,7 @@ local function InitMinimap()
     LDBIcon:Register("WatchX", obj, db().minimap)
 end
 
+do   -- (its own block: UI.lua is near Lua's 200-locals limit)
 -- ---------------------------------------------------------------- where to stand: pins on the map
 -- The best spots to stand for a built-in rare (e.g. Prince Nazjak), shown on the world map and the
 -- minimap with HereBeDragons. Shown while that rare is watched and "Spots on the map" is ticked.
@@ -3494,6 +3498,7 @@ function ns.UpdateMapPins()
             end
         end
     end
+end
 end
 
 -- ---------------------------------------------------------------- init / refresh
@@ -4026,6 +4031,7 @@ function ns.BuildLevelSettings()
     end
 end
 
+do   -- (its own block: UI.lua is near Lua's 200-locals limit)
 -- Settings > WatchX > Buff warnings
 local buffPage, buffCategory
 function ns.OpenBuffSettings()
@@ -4298,7 +4304,192 @@ function ns.BuildBuffSettings()
         InterfaceOptions_AddCategory(page)
     end
 end
+end
 
+do   -- (its own block: UI.lua is near Lua's 200-locals limit)
+-- Settings > WatchX > Avoid list
+local avoidPage, avoidCategory
+function ns.OpenAvoidSettings()
+    if avoidCategory and Settings and Settings.OpenToCategory then
+        pcall(Settings.OpenToCategory, avoidCategory:GetID())
+    elseif avoidPage and InterfaceOptionsFrame_OpenToCategory then
+        pcall(InterfaceOptionsFrame_OpenToCategory, avoidPage)
+        pcall(InterfaceOptionsFrame_OpenToCategory, avoidPage)
+    else
+        ns.OpenSettings()
+    end
+end
+
+local AVOID_ROWS = 12
+function ns.BuildAvoidSettings()
+    local page = CreateFrame("Frame", "WatchXAvoidOptions", UIParent)
+    page.name, page.parent = "Avoid list", "WatchX"
+    page:Hide()
+    local L, W = 20, 560
+    local title = page:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    title:SetPoint("TOPLEFT", page, "TOPLEFT", 16, -16)
+    title:SetText("Avoid list")
+    local sub = page:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    sub:SetPoint("LEFT", title, "RIGHT", 10, -1)
+    sub:SetText("people you don't want to play with · shared by all your characters")
+    local y, checks = -46, {}
+    local Refresh, offset = nil, 0
+    local function check(label, hint, get, set)
+        local cb = CreateFrame("CheckButton", nil, page, "UICheckButtonTemplate")
+        cb:SetSize(26, 26)
+        cb:SetPoint("TOPLEFT", page, "TOPLEFT", L - 4, y + 2)
+        local name = page:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+        name:SetPoint("LEFT", cb, "RIGHT", 2, 1)
+        name:SetText(label .. (hint and ("  |cff808080" .. hint .. "|r") or ""))
+        cb.get = get
+        cb:SetScript("OnClick", function(self) set(self:GetChecked() and true or false); self:SetChecked(get()) end)
+        checks[#checks + 1] = cb
+        y = y - 26
+    end
+    check("Warn when they invite you or are in your group", "mid-screen + sound",
+        function() return db().avoidGroup ~= false end, function(v) db().avoidGroup = v end)
+    check("Mark their chat lines", "a red [Avoid] in front: say, yell, whispers, channels, group, guild",
+        function() return db().avoidChat ~= false end, function(v) db().avoidChat = v end)
+    local tipNote = page:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    tipNote:SetPoint("TOPLEFT", page, "TOPLEFT", L + 2, y - 2)
+    tipNote:SetText("Their tooltip always shows it (with your note) when you hover them.")
+    y = y - 26
+
+    -- name + note + Add / Add target
+    local function box(w, hint, x)
+        local eb = CreateFrame("EditBox", nil, page, "InputBoxTemplate")
+        eb:SetSize(w, 20)
+        eb:SetPoint("TOPLEFT", page, "TOPLEFT", x, y)
+        eb:SetAutoFocus(false)
+        eb:SetMaxLetters(80)
+        eb.hint = eb:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+        eb.hint:SetPoint("LEFT", eb, "LEFT", 2, 0)
+        eb.hint:SetText(hint)
+        eb:SetScript("OnEditFocusGained", function(self) self.hint:Hide() end)
+        eb:SetScript("OnEditFocusLost", function(self) self.hint:SetShown(self:GetText() == "") end)
+        eb:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+        return eb
+    end
+    local nameBox = box(170, "Name (e.g. Shixa Nightblade)", L + 6)
+    local noteBox = box(230, "Note (e.g. ninja looter)", L + 186)
+    local function setFields(name, note)
+        nameBox:SetText(name or ""); noteBox:SetText(note or "")
+        nameBox.hint:SetShown(nameBox:GetText() == ""); noteBox.hint:SetShown(noteBox:GetText() == "")
+    end
+    local function go()
+        local name = ns.Trim(nameBox:GetText())
+        if name ~= "" then ns.SetAvoid(name, noteBox:GetText()); setFields("", "") end
+        nameBox:ClearFocus(); noteBox:ClearFocus()
+        Refresh()
+    end
+    nameBox:SetScript("OnEnterPressed", function() noteBox:SetFocus() end)
+    nameBox:SetScript("OnTabPressed", function() noteBox:SetFocus() end)
+    noteBox:SetScript("OnEnterPressed", go)
+    local add = Button(page, "Add", 54, 22, go)
+    add:SetPoint("LEFT", noteBox, "RIGHT", 6, 0)
+    local tgt = Button(page, "Add target", 92, 22, function()
+        local key, full
+        if UnitExists("target") and UnitIsPlayer("target") then key, full = ns.PlayerKey("target") end
+        if not key then ns.Print("Target a player first.") return end
+        setFields(full, noteBox:GetText())
+        noteBox:SetFocus()
+    end)
+    tgt:SetPoint("LEFT", add, "RIGHT", 4, 0)
+    y = y - 32
+
+    -- the list (click a row to edit its note)
+    local rows = {}
+    for i = 1, AVOID_ROWS do
+        local r = CreateFrame("Button", nil, page)
+        r:SetSize(W, 20)
+        r:SetPoint("TOPLEFT", page, "TOPLEFT", L, y - (i - 1) * 22)
+        local bg = r:CreateTexture(nil, "BACKGROUND")
+        bg:SetAllPoints()
+        bg:SetColorTexture(1, 1, 1, i % 2 == 0 and 0.03 or 0.06)
+        local hl = r:CreateTexture(nil, "HIGHLIGHT")
+        hl:SetAllPoints()
+        hl:SetColorTexture(1, 1, 1, 0.08)
+        r.del = FlatButton(r, "|cffff6060x|r", 18, 18, function(self) ns.RemoveAvoid(self:GetParent().key); Refresh() end)
+        r.del:SetPoint("RIGHT", r, "RIGHT", -1, 0)
+        r.name = r:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        r.name:SetPoint("LEFT", r, "LEFT", 6, 0)
+        r.name:SetWidth(170)
+        r.name:SetJustifyH("LEFT")
+        r.name:SetTextColor(1, 0.45, 0.45)
+        r.note = r:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        r.note:SetPoint("LEFT", r.name, "RIGHT", 10, 0)
+        r.note:SetPoint("RIGHT", r.del, "LEFT", -8, 0)
+        r.note:SetJustifyH("LEFT")
+        r.note:SetWordWrap(false)
+        r:SetScript("OnClick", function(self)
+            local e = self.key and db().avoid[self.key]
+            if e then setFields(e.name, e.note); noteBox:SetFocus() end
+        end)
+        r:SetScript("OnEnter", function(self)
+            local e = self.key and db().avoid[self.key]
+            if e then Tip(self, e.name, e.note or "(no note)", "|cff808080Added " .. date("%d.%m.%Y", e.at or time())
+                .. " · click to edit the note · x to remove|r") end
+        end)
+        r:SetScript("OnLeave", GameTooltip_Hide)
+        r:Hide()
+        rows[i] = r
+    end
+    local empty = page:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    empty:SetPoint("TOPLEFT", page, "TOPLEFT", L + 2, y - 3)
+    empty:SetText("Nobody yet – type a name and a note above, or target them and press Add target.")
+    local nav = page:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    nav:SetPoint("TOPLEFT", page, "TOPLEFT", L + 2, y - AVOID_ROWS * 22 - 4)
+    local prev = FlatButton(page, "<", 22, 18, function() offset = math.max(0, offset - AVOID_ROWS); Refresh() end)
+    prev:SetPoint("TOPLEFT", page, "TOPLEFT", L + W - 50, y - AVOID_ROWS * 22 - 2)
+    local nextB = FlatButton(page, ">", 22, 18, function() offset = offset + AVOID_ROWS; Refresh() end)
+    nextB:SetPoint("LEFT", prev, "RIGHT", 4, 0)
+    y = y - AVOID_ROWS * 22 - 30
+
+    local help = page:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    help:SetPoint("TOPLEFT", page, "TOPLEFT", L, y)
+    help:SetWidth(W)
+    help:SetJustifyH("LEFT")
+    help:SetSpacing(3)
+    help:SetText("|cffaaaaaaThe full name (First Last) is safest. Just a first name marks everyone called that.|r\n"
+        .. "|cff808080/wx avoid – this page   ·   /wx avoid Shixa Nightblade: ninja looter – add one|r")
+
+    Refresh = function()
+        for _, cb in ipairs(checks) do cb:SetChecked(cb.get()) end
+        local list = {}
+        for k, e in pairs(db().avoid or {}) do list[#list + 1] = { k = k, e = e } end
+        table.sort(list, function(a, b) return (a.e.name or a.k):lower() < (b.e.name or b.k):lower() end)
+        if offset >= #list then offset = math.max(0, math.floor((#list - 1) / AVOID_ROWS) * AVOID_ROWS) end
+        for i, r in ipairs(rows) do
+            local it = list[offset + i]
+            if it then
+                r.key = it.k
+                r.name:SetText(it.e.name or it.k)
+                r.note:SetText(it.e.note or "|cff606060(no note)|r")
+                r:Show()
+            else
+                r.key = nil
+                r:Hide()
+            end
+        end
+        empty:SetShown(#list == 0)
+        local pages = #list > AVOID_ROWS
+        prev:SetShown(pages); nextB:SetShown(pages)
+        nav:SetText(pages and ((offset + 1) .. "–" .. math.min(#list, offset + AVOID_ROWS) .. " of " .. #list) or
+            (#list > 0 and (#list .. (#list == 1 and " player" or " players")) or ""))
+    end
+    page:SetScript("OnShow", function() Refresh() end)
+    avoidPage = page
+    ns.RefreshAvoidPage = function() if page:IsShown() then Refresh() end end
+    if settingsCategory and Settings and Settings.RegisterCanvasLayoutSubcategory then
+        local ok, cat = pcall(Settings.RegisterCanvasLayoutSubcategory, settingsCategory, page, "Avoid list")
+        if ok and cat then avoidCategory = cat end
+    elseif InterfaceOptions_AddCategory then
+        InterfaceOptions_AddCategory(page)
+    end
+end
+end
+
+do   -- (its own block: UI.lua is near Lua's 200-locals limit)
 -- ---------------------------------------------------------------- nameplate icons (WatchX > Nearby)
 -- A class icon over enemy (and, if ticked, friendly) players' nameplates, with a green + on proven healers
 -- (ns.Role in WatchX.lua: talents, group role, or a spell only a healing talent gives).
@@ -4480,4 +4671,5 @@ function ns.InitUI()
         db().helpSeen = true
         C_Timer.After(4, ns.ShowHelp)
     end
+end
 end
