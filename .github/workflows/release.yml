@@ -1,6 +1,6 @@
 # A new version: bump "## Version" in WatchX.toc, commit, then
 #   git tag v1.2.3 && git push origin main --tags
-# This builds the addon zip, uploads it to CurseForge (needs the CF_API_KEY secret and
+# This builds the addon zip, uploads it to CurseForge (needs the CF_API_TOKEN secret and
 # X-Curse-Project-ID in WatchX.toc) and makes a GitHub release with the addon and WatchX-Bridge.zip.
 name: Release
 
@@ -15,8 +15,8 @@ jobs:
   release:
     runs-on: ubuntu-latest
     env:
-      CF_API_KEY: ${{ secrets.CF_API_KEY }}
-      GITHUB_OAUTH: ${{ secrets.GITHUB_TOKEN }}
+      CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+      GH_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v4
         with:
