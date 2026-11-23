@@ -2019,6 +2019,14 @@ local function IsFireSpell(spellID)
 end
 
 function ns.OnCampCast(spellID)
+    -- the sleeping bag: the stacks come one a minute from now (the meal & camp timer counts them down)
+    local get = (C_Item and C_Item.GetItemSpell) or GetItemSpell
+    local ok, bname, bsid = pcall(get or function() end, SLEEPING_BAG)
+    local sid = Plain(spellID)
+    if ok and sid and (Plain(bsid) == sid or (type(bname) == "string" and SpellName and SpellName(sid) == Plain(bname))) then
+        ns.bagStart = GetTime()
+        if ns.RefreshEating then ns.Safe("eating timer", ns.RefreshEating) end
+    end
     if not IsFireSpell(spellID) then return end
     campFire.at = GetTime()
     campFire.map, campFire.x, campFire.y = PlayerPos()

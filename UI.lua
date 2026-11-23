@@ -5248,6 +5248,24 @@ do (function()
         end
     end
 
+    -- The sleeping bag: one Well-Rested stack a minute, up to 3, from when you lay down (ns.bagStart).
+    local bag = { stacks = 0 }
+    local function BagState()
+        if not ns.bagStart then return nil end
+        local now = GetTime()
+        local stacks = 0
+        if C_UnitAuras and C_UnitAuras.GetPlayerAuraBySpellID then
+            local ok, a = pcall(C_UnitAuras.GetPlayerAuraBySpellID, 429959)
+            stacks = ok and type(a) == "table" and N(a.applications) or 0
+        end
+        if bag.start ~= ns.bagStart then bag.start, bag.stacks, bag.at = ns.bagStart, stacks, ns.bagStart end
+        if stacks > bag.stacks then bag.stacks, bag.at = stacks, now end
+        if stacks >= 3 then ns.bagStart = nil return nil end                  -- full: done
+        local nextAt = bag.at + 60
+        if now > nextAt + 15 then ns.bagStart = nil return nil end           -- no new stack: you got up
+        return { kind = "bag", stacks = stacks, left = math.max(0, nextAt - now), full = math.max(0, nextAt - now) + (2 - stacks) * 60 }
+    end
+
     local function Find()
         local out = {}
         if not (C_UnitAuras and C_UnitAuras.GetAuraDataByIndex) then return out end
@@ -5257,11 +5275,14 @@ do (function()
             local name = a.name
             if issecretvalue and issecretvalue(name) then name = nil end
             local kind = name and KINDS[name]
+            if not kind and name and name:lower():find("campfire", 1, true) then kind = "fire" end
             if kind then
                 local left = N(a.expirationTime) and math.max(0, N(a.expirationTime) - GetTime()) or nil
                 out[#out + 1] = { kind = kind, index = i, icon = a.icon, left = left, dur = N(a.duration) }
             end
         end
+        local b = BagState()
+        if b then out[#out + 1] = b end
         return out
     end
 
@@ -5314,13 +5335,13 @@ do (function()
     local function Build()
         f = CreateFrame("Frame", "WatchXEating", UIParent)
         f:SetFrameStrata("MEDIUM")
-        f:SetSize(ICON * 2 + 24, ICON + 40)
+        f:SetSize(ICON * 4 + 60, ICON + 40)
         f:SetClampedToScreen(true)
         f:SetMovable(true)
         f:EnableMouse(false)
         f:RegisterForDrag("LeftButton")
         LoadPoint(f, "eatPoint", { "CENTER", "CENTER", 0, -170 })
-        f.rows = { Tile(f), Tile(f) }
+        f.rows = { Tile(f), Tile(f), Tile(f), Tile(f) }
         f:SetScript("OnDragStart", function(self) if moving then self:StartMoving() end end)
         f:SetScript("OnDragStop", function(self)
             self:StopMovingOrSizing()
@@ -5368,6 +5389,23 @@ do (function()
         end
     end
 
+    local BAGICON, FIREICON = "Interface\\Icons\\INV_Misc_Bag_08", "Interface\\Icons\\Spell_Fire_Fire"
+    local function PaintCamp(r, a)
+        r.fill:Hide(); r.fillTop:Hide()
+        if a.kind == "bag" then
+            r.icon:SetTexture((ns.ItemIcon and ns.ItemIcon(211527)) or BAGICON)
+            r.pct:SetText("|cffffd100" .. a.stacks .. "/3|r")
+            r.time:SetText(tostring(math.ceil(a.left)))
+            r.info:SetText(("|cffccccccfull in %d:%02d|r"):format(math.floor(a.full / 60), math.floor(a.full % 60)))
+        else
+            r.icon:SetTexture(a.icon or FIREICON)
+            r.pct:SetText("|cffff9030Campfire|r")
+            local l = a.left or 0
+            r.time:SetText(l >= 60 and (math.floor(l / 60) .. "m") or tostring(math.ceil(l)))
+            r.info:SetText("")
+        end
+    end
+
     function ns.RefreshEating()
         if not ns.db then return end
         if db().eatTimer == false and not moving then
@@ -5388,14 +5426,17 @@ do (function()
         for _, a in ipairs(list) do
             if a.kind == "hp" or a.kind == "both" then lines[#lines + 1] = { a, "hp", "health", "|cff40ff40" } end
         end
+        for _, a in ipairs(list) do   -- the camp: the sleeping bag's next stack, the fire's time
+            if a.kind == "bag" or a.kind == "fire" then lines[#lines + 1] = { a, "camp" } end
+        end
         if #lines == 0 and moving then   -- unlocked: an example to place it by
             lines[1] = { { left = 20.2 }, "mp", "mana", "|cff4da6ff" }
         end
-        local n = math.min(2, #lines)
+        local n = math.min(#f.rows, #lines)
         for i, r in ipairs(f.rows) do
             local l = lines[i]
             if l then
-                Paint(r, l[1], l[2], l[3], l[4])
+                if l[2] == "camp" then PaintCamp(r, l[1]) else Paint(r, l[1], l[2], l[3], l[4]) end
                 r:ClearAllPoints()
                 r:SetPoint("CENTER", f, "CENTER", (i - (n + 1) / 2) * (ICON + 18), 0)
                 r:Show()
@@ -5407,7 +5448,7 @@ do (function()
         f:Show()
         if moving then
             ft = ft or MakeLabel("WatchXEatingLabel")
-            ft:Set(f, "|cffffd100Eating & drinking|r · drag to move")
+            ft:Set(f, "|cffffd100Eating, drinking & camp|r · drag to move")
         elseif ft then
             ft:Hide()
         end
