@@ -2125,7 +2125,7 @@ ComputeLevelStatus = function()
             .. (#(foods or {}) > 1 and (" (" .. #foods .. " kinds)") or "") .. ".")) or ""
     name = "Well Fed"
     if fed then
-        icon = SpellIcon(WELL_FED) or ItemIcon(foodID) or "Interface\\Icons\\Spell_Misc_Food"
+        icon = ItemIcon(foodID) or SpellIcon(WELL_FED) or "Interface\\Icons\\Spell_Misc_Food"   -- your food, not the buff
         add((fed.left and fed.left < 120) and "wait" or "ok", "+5% XP from kills." .. bagNote, fedTip, fed.left,
             fpick and fpick.count)
     else
@@ -2151,7 +2151,7 @@ ComputeLevelStatus = function()
     use = options[1]
     if wr then
         local st = math.max(1, math.min(3, wr.stacks))
-        icon = SpellIcon(WELL_RESTED) or icon
+        icon = ItemIcon(SLEEPING_BAG) or SpellIcon(WELL_RESTED) or icon   -- the bag, not the buff
         add(st >= 3 and "ok" or "wait", ("Well-Rested %d/3: +%d%% XP."):format(st, st)
             .. (st < 3 and " Keep lying on the bag for the full +3%." or ""), bagTip, wr.left, st)
     elseif bags > 0 then

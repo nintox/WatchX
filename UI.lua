@@ -4638,6 +4638,11 @@ local function BuildLevel()
         b.badge:SetPoint("TOPRIGHT", b, "TOPRIGHT", 4, 4)
         b.count = b:CreateFontString(nil, "OVERLAY", "NumberFontNormalSmall")
         b.count:SetPoint("BOTTOMRIGHT", b, "BOTTOMRIGHT", 0, 1)
+        b.dim = b:CreateTexture(nil, "ARTWORK", nil, 1)   -- a soft shade under the time, so it reads on any icon
+        b.dim:SetPoint("LEFT", b, "LEFT", 0, 0); b.dim:SetPoint("RIGHT", b, "RIGHT", 0, 0)
+        b.dim:SetHeight(14)
+        b.dim:SetColorTexture(0, 0, 0, 0.55)
+        b.dim:Hide()
         b.timer = b:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
         b.timer:SetPoint("CENTER", b, "CENTER", 0, 1)   -- on the icon, outlined like a cooldown
         local tf = b.timer:GetFont()
@@ -4723,6 +4728,7 @@ local function PaintLevelIcon(b, r)
     b.badge:SetAlpha(LV_BADGES[r.state] and 1 or 0)
     b.count:SetText(r.count or "")
     if r.timer then
+        b.dim:Show()
         local sec = math.max(0, math.floor(r.timer))   -- short, to fit on the icon: 1h / 13m / 45
         b.timer:SetText(sec >= 3600 and (math.floor(sec / 3600) .. "h") or sec >= 60 and (math.floor(sec / 60) .. "m") or tostring(sec))
         if r.timer < 120 then b.timer:SetTextColor(1, 0.35, 0.35)
@@ -4730,6 +4736,7 @@ local function PaintLevelIcon(b, r)
         else b.timer:SetTextColor(0.25, 1, 0.25) end
     else
         b.timer:SetText("")
+        b.dim:Hide()
     end
     b.flashing = r.state == "todo"
     local pulse = b.flashing and db().levelFlash ~= false and not moving
