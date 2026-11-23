@@ -1623,6 +1623,13 @@ local function IsCampExtra(itemID, bag, slot)
     local known = campCache[itemID]
     if known == true then return true end
     if type(known) == "number" and GetTime() < known then return false end
+    -- only consumables and miscellaneous items can be camp features: no tooltip read for armour, weapons, trade goods
+    local f = (C_Item and C_Item.GetItemInfoInstant) or GetItemInfoInstant
+    if f then
+        local ok, _, _, _, _, _, classID = pcall(f, itemID)
+        classID = ok and tonumber(Plain(classID))
+        if classID and classID ~= 0 and classID ~= 15 then campCache[itemID] = GetTime() + 86400 return false end
+    end
     local text = ItemTooltipText(itemID, bag, slot)
     if not text then bagState.pending = true return false end
     local yes = text:lower():find("campfire nearby", 1, true) and true or false

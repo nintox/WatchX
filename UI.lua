@@ -4364,7 +4364,21 @@ local function RefreshUIInner()
     if panel and panel:IsShown() then RefreshPanel() end
 end
 -- Guarded: an error is shown once in chat (and in /wx log) instead of stopping the bars and the panel.
-function ns.RefreshUI() ns.Safe("refresh", RefreshUIInner) end
+-- Lots of events want a refresh (a burst of nameplates at login can be dozens a second): they're gathered into at
+-- most one refresh every 0.15 s – the first right away, the rest a moment later.
+local refreshAt, refreshQueued = 0, false
+local function RunRefresh()
+    refreshQueued = false
+    refreshAt = GetTime()
+    ns.Safe("refresh", RefreshUIInner)
+end
+function ns.RefreshUI()
+    local wait = 0.15 - (GetTime() - refreshAt)
+    if wait <= 0 then RunRefresh() return end
+    if refreshQueued or not C_Timer then return end
+    refreshQueued = true
+    C_Timer.After(wait, RunRefresh)
+end
 
 -- a chat log bar that couldn't be made or moved in combat is done once combat ends
 local uiEvents = CreateFrame("Frame")
