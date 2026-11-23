@@ -5571,10 +5571,15 @@ do (function()
         -- longer while WatchX can tell you still lie there
         if stacks >= 3 then
             ns.bagStart = nil
+            -- you moved: you're up (nobody walks lying on a bag) – the tile goes for this round, even in town, where
+            -- Forever's "Resting" looks just like the bag's, and even if Well-Rested's clock still renews
+            if not bag.up and GetUnitSpeed and (N(GetUnitSpeed("player")) or 0) > 0 then bag.up = true end
+            if bag.up then return nil end
             local fresh = wrAge and wrAge < 120
             if fresh or lying then return { kind = "bag", stacks = 3, done = true } end
             return nil
         end
+        bag.up = nil   -- under 3/3 again: a new round
         bag.doneAt = nil
         if not ns.bagStart then return nil end
         local nextAt = (bag.at or now) + 60
