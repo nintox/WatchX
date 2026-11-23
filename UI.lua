@@ -1316,6 +1316,14 @@ local GCOLS = {   -- guilds
     { key = "lastSeen", label = "Last seen", w = 80, j = "RIGHT", num = true },
     { key = "kos", label = "Blacklist", w = 100, j = "CENTER", num = true },
 }
+local WCOLS = {   -- the Wanted tab: one bounty a row
+    { key = "name", label = "Name", w = 150, j = "LEFT" },
+    { key = "reward", label = "Reward", w = 96, j = "RIGHT", num = true },
+    { key = "by", label = "Posted by", w = 100, j = "LEFT" },
+    { key = "posted", label = "Posted", w = 66, j = "RIGHT", num = true },
+    { key = "status", label = "Status", w = 250, j = "LEFT" },
+    { key = "note", label = "Note", w = 141, j = "LEFT" },
+}
 local HIST_W = 12 + 803 + 40
 
 local function BuildHistory()
@@ -1334,7 +1342,7 @@ local function BuildHistory()
     tinsert(UISpecialFrames, "WatchXHistory")
     CloseX(f)
 
-    f.tab, f.sort = "all", { all = { "lastSeen", true }, guilds = { "lastSeen", true } }
+    f.tab, f.sort = "all", { all = { "lastSeen", true }, guilds = { "lastSeen", true }, wanted = { "posted", true } }
     f.tabs = {}
     local prev
     for _, t in ipairs({ { "all", "All players" }, { "kos", "KOS" }, { "avoid", "Avoid" }, { "wanted", "Wanted" }, { "notes", "Notes" }, { "guilds", "Guilds" } }) do
@@ -1387,7 +1395,7 @@ local function BuildHistory()
         h.text:SetPoint("LEFT", h, "LEFT", 4, 0)
         h.text:SetPoint("RIGHT", h, "RIGHT", -4, 0)
         h:SetScript("OnClick", function(self)
-            local srt = f.sort[f.tab == "guilds" and "guilds" or "all"]
+            local srt = f.sort[f.tab == "guilds" and "guilds" or f.tab == "wanted" and "wanted" or "all"]
             if srt[1] == self.key then srt[2] = not srt[2] else srt[1], srt[2] = self.key, self.num and true or false end
             ns.RefreshHistory()
         end)
@@ -1517,13 +1525,16 @@ function ns.RefreshHistory()
     if not (history and history:IsShown()) then return end
     local f, d, now = history, db(), time()
     local guildsTab = f.tab == "guilds"
-    local cols = guildsTab and GCOLS or PCOLS
+    local wantedTab = f.tab == "wanted"
+    local cols = guildsTab and GCOLS or wantedTab and WCOLS or PCOLS
     for _, b in ipairs(f.tabs) do b:SetAlpha(b.key == f.tab and 1 or 0.5) end
     f.addG:SetShown(guildsTab); f.addGB:SetShown(guildsTab)
     f.addW:SetShown(f.tab == "wanted")
-    f.hint:SetText(guildsTab and "Click a guild: blacklist, show its players" or "Click a player: KOS, note, forget")
+    f.hint:SetText(guildsTab and "Click a guild: blacklist, show its players"
+        or wantedTab and "Click a bounty: edit, take down, mark paid  ·  hover: the whole story"
+        or "Click a player: KOS, note, forget")
     -- headers
-    local srt = f.sort[guildsTab and "guilds" or "all"]
+    local srt = f.sort[guildsTab and "guilds" or wantedTab and "wanted" or "all"]
     local x = 12
     for i, h in ipairs(f.heads) do
         local col = cols[i]
@@ -1584,6 +1595,13 @@ function ns.RefreshHistory()
                 items[#items + 1] = { key = key, r = r, kos = kos, name = (r.name or key):lower(), level = r.level or 0,
                     class = r.class or "", guild = (r.guild or "~"):lower(), kills = r.kills or 0, deaths = r.deaths or 0,
                     seen = r.seen or 0, lastSeen = r.lastSeen or 0, zone = r.zone or "~", note = r.note or "~" }
+                local w = r.wanted
+                if wantedTab and w then
+                    local it = items[#items]
+                    it.reward, it.by, it.posted = w.copper or 0, (w.by or "~"):lower(), w.t or 0
+                    it.status = w.paid and "4" or w.claimed and "3" or "1"
+                    it.note = (w.note or "~"):lower()
+                end
             end
         end
     end
@@ -1623,10 +1641,33 @@ function ns.RefreshHistory()
                 (r.deaths or 0) > 0 and ("|cffff6060" .. r.deaths .. "|r") or "0",
                 r.seen or 1, r.lastSeen and ns.AgoLong(now - r.lastSeen) or "-",
                 r.zone or "|cff606060-|r", r.note or "" }
-            for c = 1, #PCOLS do row.cells[c]:SetText(v[c]); row.cells[c]:SetTextColor(1, 1, 1) end
-            row.cells[1]:SetTextColor(cr, cg, cb)
-            row.cells[3]:SetTextColor(cr, cg, cb)
-            row.cells[10]:SetTextColor(1, 1, 0.6)
+            if wantedTab and r.wanted then
+                -- one bounty: name (class colour), reward, who put it up and when, where it stands, the note
+                local w = r.wanted
+                local mine = ns.WantedMine(w)
+                local status
+                if w.paid then
+                    status = "|cff40ff40PAID|r  |cffaaaaaa" .. (w.claimed and ("to " .. (w.claimed.by or "?")) or "") .. "|r"
+                elseif w.claimed then
+                    local c = w.claimed
+                    status = (mine and "|cffff8040OWED|r  " or "|cffffd100KILLED|r  ") .. "by " .. (c.by or "?")
+                        .. (c.zone and ("  |cffaaaaaa" .. c.zone .. "|r") or "") .. (c.t and ("  |cff808080" .. ns.AgoLong(now - c.t) .. " ago|r") or "")
+                else
+                    status = "|cffffa000OPEN|r  |cffaaaaaa" .. (w.forever and "no end date"
+                        or ("ends in " .. math.max(0, math.ceil(((w.t or now) + 14 * 86400 - now) / 86400)) .. " d")) .. "|r"
+                end
+                local v = { r.name or it.key, ns.WantedReward(w) or "?",
+                    mine and "|cffffd100you|r" or (w.by or "?"), w.t and ns.AgoLong(now - w.t) or "-", status, w.note or "" }
+                for c = 1, #WCOLS do row.cells[c]:SetText(v[c]); row.cells[c]:SetTextColor(1, 1, 1) end
+                for c = #WCOLS + 1, #row.cells do row.cells[c]:SetText("") end
+                row.cells[1]:SetTextColor(cr, cg, cb)
+                row.cells[6]:SetTextColor(1, 0.85, 0.5)
+            else
+                for c = 1, #PCOLS do row.cells[c]:SetText(v[c]); row.cells[c]:SetTextColor(1, 1, 1) end
+                row.cells[1]:SetTextColor(cr, cg, cb)
+                row.cells[3]:SetTextColor(cr, cg, cb)
+                row.cells[10]:SetTextColor(1, 1, 0.6)
+            end
         end
         row:Show()
     end
