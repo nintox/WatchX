@@ -3003,6 +3003,8 @@ local function OnSlash(input)
         Print("XP boosts list: " .. (db.levelHelper and "|cff40ff40on|r" or "off")
             .. ((db.levelHelper and not ns.LevelStatus()) and " (it only shows below level " .. ns.MaxLevel() .. ")" or ""))
         if ns.RefreshUI then ns.RefreshUI() end
+    elseif cmd == "rares" or cmd == "rare" or cmd == "catalogue" then
+        if ns.ShowRares then ns.ShowRares() end
     elseif cmd == "wanted" or cmd == "bounty" then
         -- /wx wanted Name Surname: 50g ninja looter   (or just /wx wanted for the list)
         local name, after = rest:match("^([^:]+):%s*(.*)$")
@@ -3080,7 +3082,7 @@ local function OnSlash(input)
         for i = math.max(1, #lines - 24), #lines do DEFAULT_CHAT_FRAME:AddMessage("  " .. lines[i]) end
     else
         Print("Made by " .. ns.AUTHOR .. ". Commands: /wx (panel) | settings | guide | test | add <name> | "
-            .. "remove <name> | profile [name] | enemy | friend | nearby [on|off|test] | xp | buffs [name|test] | avoid [name: note] | wanted [name: reward note] | attack | afk [minutes] | instant | list | mini | quiet | alert | move | lock | unlock | minimap | sound | "
+            .. "remove <name> | profile [name] | enemy | friend | nearby [on|off|test] | xp | buffs [name|test] | avoid [name: note] | wanted [name: reward note] | rares | attack | afk [minutes] | instant | list | mini | quiet | alert | move | lock | unlock | minimap | sound | "
             .. "whisper | dead [name] | "
             .. "respawn <min> [name] | reset | log [previous]")
     end

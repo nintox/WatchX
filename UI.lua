@@ -779,13 +779,10 @@ local function BuildSettings()
     -- the second page: the rare scan and how alerts look
     local alertsPage = NewPage(nil, "Alerts & scan", "Alerts & scan", "the rare scan, the mini bar and the red alert")
     section("RARE SCAN")
-    local preset = ns.PRESETS[1]
-    check(preset.name, preset.note,
-        function() return db().watch[preset.name] and true or false end, function(v) ns.SetWatched(preset.name, v) end)
     check("Any enemy player", "PvP",
-        function() return db().enemyPlayers end, function(v) ns.SetEnemyPlayers(v) end, true)
+        function() return db().enemyPlayers end, function(v) ns.SetEnemyPlayers(v) end)
     check("Any friendly player", "not in cities",
-        function() return db().friendlyPlayers end, function(v) ns.SetFriendlyPlayers(v) end)
+        function() return db().friendlyPlayers end, function(v) ns.SetFriendlyPlayers(v) end, true)
     y = y - 4
     -- The watch list: type a name and press Add (or target something and press Add target). Every name
     -- shows below with an × to remove it; click a name to switch it off/on.
@@ -795,7 +792,7 @@ local function BuildSettings()
     lab:SetJustifyH("LEFT")
     lab:SetText("Watch list")
     local entry = CreateFrame("EditBox", nil, o, "InputBoxTemplate")
-    local boxW = W - 120 - 6 - 70 - 6 - 96
+    local boxW = W - 120 - 6 - 60 - 6 - 90 - 6 - 104
     entry:SetSize(boxW, 20)
     entry:SetPoint("TOPLEFT", o, "TOPLEFT", L + 126, y)
     entry:SetAutoFocus(false)
@@ -821,12 +818,19 @@ local function BuildSettings()
         Tip(self, "Watch list", "Exact name of a rare mob or a player (friendly or enemy), then press Enter or Add.")
     end)
     entry:SetScript("OnLeave", GameTooltip_Hide)
-    local addB = Button(o, "Add", 70, 22, AddTyped)
+    local addB = Button(o, "Add", 60, 22, AddTyped)
     addB:SetPoint("LEFT", entry, "RIGHT", 6, 0)
-    local addT = Button(o, "Add target", 96, 22, function()
+    local addT = Button(o, "Add target", 90, 22, function()
         if ns.AddTarget() then chips:Refresh() end
     end)
     addT:SetPoint("LEFT", addB, "RIGHT", 6, 0)
+    local browse = Button(o, "Browse rares", 104, 22, function() ns.ShowRares() end)
+    browse:SetPoint("LEFT", addT, "RIGHT", 6, 0)
+    browse:SetScript("OnEnter", function(self)
+        Tip(self, "Rare catalogue", "Every rare mob in the game – search by name or zone, near your level or in "
+            .. "this zone, and click one to watch it.")
+    end)
+    browse:SetScript("OnLeave", GameTooltip_Hide)
     y = y - 26
 
     -- the names, three per row
@@ -835,8 +839,8 @@ local function BuildSettings()
     chips = { list = {} }
     chips.empty = o:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
     chips.empty:SetPoint("TOPLEFT", o, "TOPLEFT", L + 128, y - 4)
-    chips.empty:SetText("Nothing added yet – Prince Nazjak is built in (above).")
-    for i = 1, ns.MAX_CUSTOM do
+    chips.empty:SetText("Nothing watched yet – type a name, or press Browse rares.")
+    for i = 1, ns.MAX_CUSTOM + #ns.PRESETS do
         local c = CreateFrame("Button", nil, o)
         c:SetSize(chipW, CHIP_H - 2)
         local col, row = (i - 1) % COLS, math.floor((i - 1) / COLS)
@@ -862,7 +866,11 @@ local function BuildSettings()
         c.del:SetHighlightTexture("Interface\\Buttons\\UI-StopButton", "ADD")
         local dt = c.del:GetNormalTexture()
         if dt then dt:SetVertexColor(0.6, 0.6, 0.6) end
-        c.del:SetScript("OnClick", function() if c.name then ns.RemoveCustom(c.name); chips:Refresh() end end)
+        c.del:SetScript("OnClick", function()
+            if not c.name then return end
+            if c.preset then ns.SetWatched(c.name, false) else ns.RemoveCustom(c.name) end
+            chips:Refresh()
+        end)
         c.del:SetScript("OnEnter", function(self) Tip(self, "Remove", "Take " .. (c.name or "?") .. " off the list.") end)
         c.del:SetScript("OnLeave", GameTooltip_Hide)
         c:SetScript("OnClick", function()
@@ -877,10 +885,15 @@ local function BuildSettings()
         chips.list[i] = c
     end
     function chips:Refresh()
-        local names = db().custom
+        -- the built-in rares you watch (Prince Nazjak – he has map spots), then your own names
+        local names, preset = {}, {}
+        for _, p in ipairs(ns.PRESETS) do
+            if db().watch[p.name] then names[#names + 1] = p.name; preset[p.name] = true end
+        end
+        for _, n in ipairs(db().custom) do names[#names + 1] = n end
         for i, c in ipairs(self.list) do
             local name = names[i]
-            c.name = name
+            c.name, c.preset = name, name and preset[name] or nil
             if name then
                 local on = db().watch[name] and true or false
                 c.text:SetText(on and name or ("|cff808080" .. name .. "|r"))
@@ -894,7 +907,7 @@ local function BuildSettings()
     end
     ns.RefreshWatchChips = function() if alertsPage:IsShown() then chips:Refresh() end end
     page.watchEntry, page.watchChips = entry, chips
-    y = y - math.ceil(ns.MAX_CUSTOM / COLS) * CHIP_H - 4
+    y = y - math.ceil((ns.MAX_CUSTOM + #ns.PRESETS) / COLS) * CHIP_H - 4
 
     section("ALERTS")
     check("Phone alerts", "ntfy / Discord",
@@ -954,6 +967,209 @@ local function BuildSettings()
     end
     ns.BuildLevelSettings()
     ns.BuildBuffSettings()
+end
+
+-- ---------------------------------------------------------------- rare catalogue
+-- Every rare mob in the game (Data/Rares.lua, from the Questie database): search by name or zone, near your
+-- level or in this zone, and click one to put it on the watch list (or take it off).
+do
+    local cat
+    local CAT_ROW_H = 18
+    local areaNames = {}
+    local function AreaName(id)
+        if areaNames[id] == nil then
+            local ok, n = false, nil
+            if C_Map and C_Map.GetAreaInfo then ok, n = pcall(C_Map.GetAreaInfo, id) end
+            areaNames[id] = (ok and type(n) == "string" and n) or false
+        end
+        return areaNames[id] or ("zone " .. id)
+    end
+    local function IsWatched(name) return db().watch[name] and true or false end
+    local function Toggle(name)
+        local known = ns.FindAny(name)
+        if known then
+            local custom = false
+            for _, n in ipairs(db().custom) do if n == known then custom = true end end
+            if IsWatched(known) then
+                if custom then ns.RemoveCustom(known) else ns.SetWatched(known, false) end
+            else
+                ns.SetWatched(known, true)
+            end
+        else
+            local ok, err = ns.AddCustom(name)
+            if not ok then ns.Print(err) end
+        end
+        if db().scanOn == false then ns.Print("|cffffd100The rare scan is off|r – switch it on under Settings > WatchX.") end
+        if ns.RefreshWatchChips then ns.RefreshWatchChips() end
+    end
+
+    local function Filtered()
+        local q = ns.Trim(cat.search:GetText() or ""):lower()
+        local lvl = tonumber(ns.Plain and ns.Plain(UnitLevel("player")) or UnitLevel("player")) or 0
+        local here = GetZoneText and GetZoneText() or ""
+        if type(here) ~= "string" then here = "" end
+        local list = {}
+        for _, r in ipairs(ns.RARES or {}) do
+            local zone = AreaName(r[5])
+            local ok = true
+            if q ~= "" and not (r[2]:lower():find(q, 1, true) or zone:lower():find(q, 1, true)) then ok = false end
+            if ok and cat.near and lvl > 0 and (r[4] < lvl - 5 or r[3] > lvl + 5) then ok = false end
+            if ok and cat.zoneOnly and zone ~= here then ok = false end
+            if ok and cat.watchedOnly and not IsWatched(r[2]) then ok = false end
+            if ok then list[#list + 1] = r end
+        end
+        return list
+    end
+
+    local function Row(i)
+        local b = cat.rows[i]
+        if b then return b end
+        b = CreateFrame("Button", nil, cat.child)
+        b:SetHeight(CAT_ROW_H)
+        b:SetPoint("TOPLEFT", cat.child, "TOPLEFT", 0, -(i - 1) * CAT_ROW_H)
+        b:SetPoint("RIGHT", cat.child, "RIGHT", 0, 0)
+        b:RegisterForClicks("LeftButtonUp")
+        local hl = b:CreateTexture(nil, "HIGHLIGHT")
+        hl:SetAllPoints()
+        hl:SetColorTexture(1, 0.82, 0, 0.12)
+        b.check = b:CreateTexture(nil, "ARTWORK")
+        b.check:SetSize(14, 14)
+        b.check:SetPoint("LEFT", b, "LEFT", 4, 0)
+        b.check:SetTexture("Interface\\Buttons\\UI-CheckBox-Check")
+        b.name = b:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+        b.name:SetPoint("LEFT", b, "LEFT", 22, 0)
+        b.name:SetWidth(190)
+        b.name:SetJustifyH("LEFT")
+        b.name:SetWordWrap(false)
+        b.lvl = b:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        b.lvl:SetPoint("LEFT", b, "LEFT", 216, 0)
+        b.lvl:SetWidth(50)
+        b.lvl:SetJustifyH("LEFT")
+        b.zone = b:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        b.zone:SetPoint("LEFT", b, "LEFT", 270, 0)
+        b.zone:SetPoint("RIGHT", b, "RIGHT", -70, 0)
+        b.zone:SetJustifyH("LEFT")
+        b.zone:SetWordWrap(false)
+        b.where = b:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+        b.where:SetPoint("RIGHT", b, "RIGHT", -4, 0)
+        b:SetScript("OnClick", function(self)
+            if self.r then Toggle(self.r[2]); ns.RefreshRares() end
+        end)
+        b:SetScript("OnEnter", function(self)
+            local r = self.r
+            if not r then return end
+            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+            GameTooltip:SetText(r[2])
+            GameTooltip:AddLine((r[6] and "Rare Elite" or "Rare") .. " · level " .. (r[3] == r[4] and r[3] or (r[3] .. "-" .. r[4])), 1, 0.82, 0)
+            GameTooltip:AddLine(AreaName(r[5]) .. ((r[7] or 0) > 0 and ("  " .. r[7] .. ", " .. r[8]) or ""), 1, 1, 1)
+            if (r[9] or 0) > 1 then GameTooltip:AddLine(r[9] .. " spawn points – the place is the middle of them", 0.7, 0.7, 0.7, true) end
+            GameTooltip:AddLine(" ")
+            GameTooltip:AddLine(IsWatched(r[2]) and "|cffffd100Click:|r stop watching" or "|cffffd100Click:|r watch it (phone alert when it's up)", 1, 1, 1)
+            GameTooltip:Show()
+        end)
+        b:SetScript("OnLeave", GameTooltip_Hide)
+        cat.rows[i] = b
+        return b
+    end
+
+    function ns.RefreshRares()
+        if not (cat and cat:IsShown()) then return end
+        local list = Filtered()
+        for i, r in ipairs(list) do
+            local b = Row(i)
+            b.r = r
+            local on = IsWatched(r[2])
+            b.check:SetShown(on)
+            b.name:SetText((r[6] and "|cffffd100" or "") .. r[2] .. (r[6] and "|r" or ""))
+            b.lvl:SetText(r[3] == r[4] and tostring(r[3]) or (r[3] .. "-" .. r[4]))
+            b.zone:SetText(AreaName(r[5]))
+            b.where:SetText((r[7] or 0) > 0 and (r[7] .. ", " .. r[8]) or "")
+            b:Show()
+        end
+        for i = #list + 1, #cat.rows do cat.rows[i]:Hide(); cat.rows[i].r = nil end
+        cat.child:SetHeight(math.max(1, #list * CAT_ROW_H))
+        local n = 0
+        for _, nm in ipairs(db().custom) do n = n + 1 end
+        cat.count:SetText(#list .. " rares  ·  your list: " .. n .. "/" .. ns.MAX_CUSTOM
+            .. (db().scanOn == false and "  ·  |cffff6060the rare scan is off|r" or ""))
+    end
+
+    local function Build()
+        local f = CreateFrame("Frame", "WatchXRares", UIParent)
+        f:SetSize(560, 470)
+        f:SetPoint("CENTER", 0, 20)
+        f:SetFrameStrata("DIALOG")
+        f:SetToplevel(true)
+        f:EnableMouse(true)
+        f:SetMovable(true)
+        f:RegisterForDrag("LeftButton")
+        f:SetScript("OnDragStart", f.StartMoving)
+        f:SetScript("OnDragStop", f.StopMovingOrSizing)
+        f:SetClampedToScreen(true)
+        Window(f, "Rare catalogue", 200)
+        tinsert(UISpecialFrames, "WatchXRares")
+        CloseX(f)
+        cat = f
+        f.rows = {}
+        f.search = CreateFrame("EditBox", nil, f, "InputBoxTemplate")
+        f.search:SetSize(200, 20)
+        f.search:SetPoint("TOPLEFT", f, "TOPLEFT", 22, -36)
+        f.search:SetAutoFocus(false)
+        f.search.hint = f.search:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+        f.search.hint:SetPoint("LEFT", f.search, "LEFT", 2, 0)
+        f.search.hint:SetText("Search a name or a zone...")
+        f.search:SetScript("OnTextChanged", function(self)
+            self.hint:SetShown(self:GetText() == "" and not self:HasFocus())
+            ns.RefreshRares()
+        end)
+        f.search:SetScript("OnEditFocusGained", function(self) self.hint:Hide() end)
+        f.search:SetScript("OnEditFocusLost", function(self) self.hint:SetShown(self:GetText() == "") end)
+        f.search:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+        local x = 236
+        for _, opt in ipairs({ { "near", "Near my level" }, { "zoneOnly", "This zone" }, { "watchedOnly", "Watched" } }) do
+            local cb = CreateFrame("CheckButton", nil, f, "UICheckButtonTemplate")
+            cb:SetSize(24, 24)
+            cb:SetPoint("TOPLEFT", f, "TOPLEFT", x, -34)
+            local t = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+            t:SetPoint("LEFT", cb, "RIGHT", 0, 1)
+            t:SetText(opt[2])
+            cb:SetScript("OnClick", function(self) f[opt[1]] = self:GetChecked() and true or false; ns.RefreshRares() end)
+            if opt[1] == "near" then cb:SetChecked(true); f.near = true end
+            x = x + 30 + (t:GetStringWidth() or 60) + 8
+        end
+        local head = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        head:SetPoint("TOPLEFT", f, "TOPLEFT", 22 + 22, -66)
+        head:SetText("Name")
+        local hl = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        hl:SetPoint("TOPLEFT", f, "TOPLEFT", 22 + 216, -66)
+        hl:SetText("Level")
+        local hz = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        hz:SetPoint("TOPLEFT", f, "TOPLEFT", 22 + 270, -66)
+        hz:SetText("Zone")
+        local scroll = CreateFrame("ScrollFrame", nil, f, "UIPanelScrollFrameTemplate")
+        scroll:SetPoint("TOPLEFT", f, "TOPLEFT", 22, -82)
+        scroll:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -36, 40)
+        f.child = CreateFrame("Frame", nil, scroll)
+        f.child:SetSize(500, 1)
+        scroll:SetScrollChild(f.child)
+        scroll:SetScript("OnSizeChanged", function(self, w) f.child:SetWidth(w) end)
+        f.count = f:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+        f.count:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 22, 16)
+        local done = Button(f, "Done", 80, 22, function() f:Hide() end)
+        done:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -18, 12)
+        f:SetScript("OnShow", function() ns.RefreshRares() end)
+        f:Hide()
+        return f
+    end
+
+    function ns.ShowRares()
+        if not ns.RARES then ns.Print("The rare list didn't load (Data/Rares.lua).") return end
+        cat = cat or Build()
+        HideBlizzardMenus()
+        cat:Show()
+        cat:Raise()
+        ns.RefreshRares()
+    end
 end
 
 -- ---------------------------------------------------------------- enemy history window

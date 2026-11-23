@@ -22,3 +22,7 @@ double-click `Install (Mac).command` or `Install (Windows).bat`. It finds the ga
 of the game folder (so addon updates don't touch it) and starts with your computer. Nothing else to install.
 
 Then in game: `/wx` → Settings → paste your ntfy link and/or Discord webhook → *Save & reload* → *Send test*.
+
+## Credits
+
+The rare catalogue (`Data/Rares.lua`) is generated from the [Questie](https://github.com/Questie/Questie) database for WoW Forever – thanks to everyone who builds it.
