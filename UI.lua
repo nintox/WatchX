@@ -503,11 +503,11 @@ do
         Label("Player", -40)
         f.who = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightLarge")
         f.who:SetPoint("TOPLEFT", f, "TOPLEFT", BX, -42)
-        -- first name and surname in their own boxes (the surname may be left out: then any player by that first name)
+        -- first name and surname in their own boxes (every name on WoW Forever has both)
         f.whoBox = Box(f, 106, 24, "First")
         f.whoBox:SetPoint("TOPLEFT", f, "TOPLEFT", BX + 4, -40)
         f.whoBox:Hide()
-        f.lastBox = Box(f, 106, 24, "Last (optional)")
+        f.lastBox = Box(f, 106, 24, "Last")
         f.lastBox:SetPoint("LEFT", f.whoBox, "RIGHT", 10, 0)
         f.lastBox:Hide()
         Label("Reward", -72)
@@ -558,9 +558,10 @@ do
             local key, name = f.key, f.name
             if f.whoBox:IsShown() then
                 local first, last = ns.Trim(f.whoBox:GetText() or ""), ns.Trim(f.lastBox:GetText() or "")
-                if first == "" then f.err:SetText("Who? Put in the first name"); f.whoBox:SetFocus() return end
                 first, last = first:gsub("%s+", ""), last:gsub("%s+", "")
-                name = last ~= "" and (first .. " " .. last) or first
+                if first == "" then f.err:SetText("Who? Put in the first name"); f.whoBox:SetFocus() return end
+                if last == "" then f.err:SetText("And the last name – every name has one"); f.lastBox:SetFocus() return end
+                name = first .. " " .. last
                 key = ns.KeyFromName(name)
             end
             if ns.SetWanted(key, name, c, f.note:GetText(), f.forever:GetChecked() and true or false) then f:Hide() end
