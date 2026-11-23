@@ -1,17 +1,18 @@
 -- WatchX – Made by Rikerud
 -- UI: panel (/wx), mini bar, settings page (Esc > Options > AddOns > WatchX), guide, minimap button,
 -- the secure chat log bar and the "held back" send bar.
--- Look: a flat dark panel with thin blue edges, small grey section headings and rows with the
--- status at the right – in the style of LayerSwap.
+-- Look: Blizzard's own. Windows (panel, History, guide) get the dark stone frame with a gold trim and a
+-- header plate; the small bars (mini bar, Nearby, XP, alerts, menus) the tooltip edge. Red Blizzard buttons,
+-- gold headings.
 
 local _, ns = ...
 
 local PAD = 12
 local PANEL_W = 250
 local MINI_H, TARGET_H = 26, 42   -- the mini bar, and the bar it grows into when something is up
-local BG = { 0.06, 0.07, 0.09, 0.95 }
-local EDGE = { 0.22, 0.25, 0.30, 1 }
-local ACCENT = { 0.22, 0.80, 0.68 }   -- WatchX teal
+local BG = { 0.06, 0.06, 0.10, 0.92 }      -- tooltip blue-black
+local EDGE = { 0.62, 0.62, 0.66, 1 }       -- tooltip silver
+local ACCENT = { 1, 0.82, 0 }              -- Blizzard gold
 local LOGO = "Interface\\AddOns\\WatchX\\Media\\logo"   -- Media/logo.tga (made by Media/make_logo.py)
 
 local panel, mini, settingsPage, settingsCategory, helpFrame, prompt, sendBar
@@ -20,7 +21,27 @@ local db = function() return ns.db end
 
 -- ---------------------------------------------------------------- style helpers
 
+-- The tooltip look for the small bars and menus: blue-black, a rounded silver edge. (Plain textures if the
+-- client has no backdrops.) Built once, out of combat; the backdrop only redraws textures, so it's fine on frames
+-- that turn protected later.
+local function Backdrop(f, info)
+    if not BackdropTemplateMixin then return false end
+    if not f.SetBackdrop then
+        Mixin(f, BackdropTemplateMixin)
+        f:HookScript("OnSizeChanged", f.OnBackdropSizeChanged)
+    end
+    f:SetBackdrop(info)
+    return true
+end
+local TOOLTIP_LOOK = { bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+    edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", tile = true, tileSize = 16, edgeSize = 12,
+    insets = { left = 3, right = 3, top = 3, bottom = 3 } }
 local function Flat(f, alpha)
+    if Backdrop(f, TOOLTIP_LOOK) then
+        f:SetBackdropColor(BG[1], BG[2], BG[3], alpha or BG[4])
+        f:SetBackdropBorderColor(EDGE[1], EDGE[2], EDGE[3], EDGE[4])
+        return
+    end
     local bg = f:CreateTexture(nil, "BACKGROUND")
     bg:SetAllPoints(f)
     bg:SetColorTexture(BG[1], BG[2], BG[3], alpha or BG[4])
@@ -33,6 +54,39 @@ local function Flat(f, alpha)
         line:SetPoint(side[2], f, side[2], 0, 0)
         if side[3] then line:SetHeight(1) else line:SetWidth(1) end
     end
+end
+
+-- The window look: dark stone with Blizzard's gold trim, and the title on a header plate over the top edge.
+local WINDOW_LOOK = { bgFile = "Interface\\FrameGeneral\\UI-Background-Rock",
+    edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Gold-Border", tile = true, tileSize = 256, edgeSize = 24,
+    insets = { left = 6, right = 6, top = 6, bottom = 6 } }
+local function Window(f, title, plateW)
+    if Backdrop(f, WINDOW_LOOK) then
+        f:SetBackdropColor(0.16, 0.15, 0.14, 0.98)
+    else
+        Flat(f, 0.97)
+    end
+    if f.SetClampRectInsets then f:SetClampRectInsets(0, 0, 12, 0) end   -- the plate may stick out at the top
+    local plate = f:CreateTexture(nil, "ARTWORK")
+    plate:SetTexture("Interface\\DialogFrame\\UI-DialogBox-Header")
+    plate:SetSize(plateW or 220, 64)
+    plate:SetPoint("TOP", f, "TOP", 0, 12)
+    local text = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    text:SetPoint("TOP", plate, "TOP", 0, -14)
+    text:SetText(title or "")
+    f.plate, f.plateText = plate, text
+    return text
+end
+
+-- A red tooltip edge on a child frame (the alert bar is a secure button: nothing is added to the button itself).
+local function RedEdge(f)
+    local e = CreateFrame("Frame", nil, f)
+    e:SetAllPoints()
+    e:EnableMouse(false)
+    if Backdrop(e, { edgeFile = TOOLTIP_LOOK.edgeFile, edgeSize = 12 }) then
+        e:SetBackdropBorderColor(1, 0.35, 0.35, 1)
+    end
+    return e
 end
 
 -- A line of text bound on both sides, so nothing runs out of its field.
@@ -72,27 +126,34 @@ local function Button(parent, text, w, h, onClick)
     return b
 end
 
--- WatchX's own flat button: dark, with a thin accent edge that lights up under the mouse.
+-- The small buttons: Blizzard's red ones (the name stays for the old call sites).
 local function FlatButton(parent, text, w, h, onClick)
-    local b = CreateFrame("Button", nil, parent)
+    local b = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
     b:SetSize(w, h or 22)
-    local bg = b:CreateTexture(nil, "BACKGROUND")
-    bg:SetAllPoints()
-    bg:SetColorTexture(0.10, 0.12, 0.15, 1)
-    for _, side in ipairs({ { "TOPLEFT", "TOPRIGHT", true }, { "BOTTOMLEFT", "BOTTOMRIGHT", true },
-                            { "TOPLEFT", "BOTTOMLEFT", false }, { "TOPRIGHT", "BOTTOMRIGHT", false } }) do
-        local line = b:CreateTexture(nil, "BORDER")
-        line:SetColorTexture(ACCENT[1], ACCENT[2], ACCENT[3], 0.45)
-        line:SetPoint(side[1], b, side[1], 0, 0)
-        line:SetPoint(side[2], b, side[2], 0, 0)
-        if side[3] then line:SetHeight(1) else line:SetWidth(1) end
-    end
+    SetButtonText(b, text)
+    b:SetScript("OnClick", onClick)
+    return b
+end
+
+-- A line in a drop-down menu: plain text that lights up under the mouse, like Blizzard's menus.
+local function MenuRow(parent, w, onClick)
+    local b = CreateFrame("Button", nil, parent)
+    b:SetSize(w, 18)
     local hl = b:CreateTexture(nil, "HIGHLIGHT")
     hl:SetAllPoints()
-    hl:SetColorTexture(ACCENT[1], ACCENT[2], ACCENT[3], 0.18)
+    hl:SetTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight")
+    hl:SetBlendMode("ADD")
     b:SetNormalFontObject("GameFontHighlightSmall")
     b:SetHighlightFontObject("GameFontHighlightSmall")
-    b:SetText(text)
+    b:SetText(" ")
+    local fs = b:GetFontString()
+    if fs then
+        fs:ClearAllPoints()
+        fs:SetPoint("LEFT", b, "LEFT", 6, 0)
+        fs:SetPoint("RIGHT", b, "RIGHT", -4, 0)
+        fs:SetJustifyH("LEFT")
+        fs:SetWordWrap(false)
+    end
     b:SetScript("OnClick", onClick)
     return b
 end
@@ -264,11 +325,11 @@ function ns.ToggleProfileMenu(anchor)
     for i, name in ipairs(names) do
         local r = m.rows[i]
         if not r then
-            r = FlatButton(m, "", 170, 20, function(self) m:Hide(); ns.SwitchProfile(self.profile) end)
+            r = MenuRow(m, 170, function(self) m:Hide(); ns.SwitchProfile(self.profile) end)
             m.rows[i] = r
         end
         r.profile = name
-        r:SetText(name == cur and ("|cff38ccad> " .. name .. "|r") or name)
+        r:SetText(name == cur and ("|cffffd100> " .. name .. "|r") or name)
         r:ClearAllPoints()
         r:SetPoint("TOPLEFT", m, "TOPLEFT", 10, y)
         r:Show()
@@ -311,7 +372,7 @@ function ns.ShowMenu(anchor, title, items)
     for i, it in ipairs(items) do
         local b = menu.buttons[i]
         if not b then
-            b = FlatButton(menu, "", 180, 20, function(self) menu:Hide(); if self.fn then self.fn() end end)
+            b = MenuRow(menu, 180, function(self) menu:Hide(); if self.fn then self.fn() end end)
             menu.buttons[i] = b
         end
         b:SetText(it[1])
@@ -366,6 +427,18 @@ function ns.AddTarget()
     return ok
 end
 
+function ns.OpenAlertSettings()
+    local cat = settingsPage and settingsPage.alertsCat
+    if cat and Settings and Settings.OpenToCategory then
+        pcall(Settings.OpenToCategory, cat:GetID())
+    elseif settingsPage and settingsPage.alerts and InterfaceOptionsFrame_OpenToCategory then
+        pcall(InterfaceOptionsFrame_OpenToCategory, settingsPage.alerts)
+        pcall(InterfaceOptionsFrame_OpenToCategory, settingsPage.alerts)
+    else
+        ns.OpenSettings()
+    end
+end
+
 function ns.OpenSettings()
     if settingsCategory and Settings and Settings.OpenToCategory then
         pcall(Settings.OpenToCategory, settingsCategory:GetID())
@@ -400,25 +473,33 @@ local function CloseX(parent, onClick)
 end
 
 local function BuildSettings()
-    -- The page scrolls when the window is too small for it: everything sits on "o", inside a scroll frame.
-    local page = CreateFrame("Frame", "WatchXOptions", UIParent)
-    page.name = "WatchX"
-    page:Hide()
-    local scroll = CreateFrame("ScrollFrame", nil, page, "UIPanelScrollFrameTemplate")
-    scroll:SetPoint("TOPLEFT", page, "TOPLEFT", 0, -4)
-    scroll:SetPoint("BOTTOMRIGHT", page, "BOTTOMRIGHT", -28, 4)
-    local o = CreateFrame("Frame", nil, scroll)
-    o:SetSize(620, 900)
-    scroll:SetScrollChild(o)
+    -- Two pages here: the main one (the modules – PvP first – phone links, general things) and "Alerts & scan"
+    -- (the rare scan and how alerts look). Each scrolls when the window is too small: everything sits on "o",
+    -- inside a scroll frame. The helpers below always add to the current "o" and "y".
     local W = 580            -- content width: everything stays inside it
     local L, COL2 = 20, 310  -- left edge, second column
-
-    local title = o:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-    title:SetPoint("TOPLEFT", o, "TOPLEFT", 16, -16)
-    title:SetText("WatchX")
-    local sub = o:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    sub:SetPoint("LEFT", title, "RIGHT", 10, -1)
-    sub:SetText("rare mob alerts on your phone  ·  by " .. ns.AUTHOR)
+    local o, y
+    local function NewPage(globalName, name, titleText, subText)
+        local pg = CreateFrame("Frame", globalName, UIParent)
+        pg.name = name
+        pg:Hide()
+        local scroll = CreateFrame("ScrollFrame", nil, pg, "UIPanelScrollFrameTemplate")
+        scroll:SetPoint("TOPLEFT", pg, "TOPLEFT", 0, -4)
+        scroll:SetPoint("BOTTOMRIGHT", pg, "BOTTOMRIGHT", -28, 4)
+        local c = CreateFrame("Frame", nil, scroll)
+        c:SetSize(620, 900)
+        scroll:SetScrollChild(c)
+        local title = c:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+        title:SetPoint("TOPLEFT", c, "TOPLEFT", 16, -16)
+        title:SetText(titleText)
+        local sub = c:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+        sub:SetPoint("LEFT", title, "RIGHT", 10, -1)
+        sub:SetText(subText)
+        o, y = c, -46
+        return pg, c
+    end
+    local page = NewPage("WatchXOptions", "WatchX", "WatchX", "PvP: the enemies around you, KOS, alerts on your phone  ·  by " .. ns.AUTHOR)
+    local mainO = o
     local prof = Button(o, "Profile", 180, 22, function(self) ns.ToggleProfileMenu(self) end)
     prof:SetPoint("TOPLEFT", o, "TOPLEFT", 16 + W - 180, -12)
     prof:SetScript("OnEnter", function(self)
@@ -429,8 +510,7 @@ local function BuildSettings()
     profileLabels[#profileLabels + 1] = function(name) SetButtonText(prof, "Profile: " .. name) end
 
     local fields, checks = {}, {}
-    local y = -46
-
+    local chips   -- the watch list's names (Alerts & scan page)
     -- A section: a small accent-colored heading with a thin line after it.
     local function section(label)
         y = y - 10
@@ -503,6 +583,46 @@ local function BuildSettings()
         y = y - 26
     end
 
+
+    -- A module: on/off, what it is, and a button to its own page.
+    local function module(label, hint, get, set, open)
+        check(label, hint, get, set)
+        if open then
+            local b = Button(o, "Settings", 80, 20, function() open() end)
+            b:SetPoint("TOPLEFT", o, "TOPLEFT", L + W - 84, y + 26 + 1)
+        end
+    end
+    local function openAlerts() ns.OpenAlertSettings() end
+
+    section("PVP")
+    module("Nearby enemies", "the players around you, KOS, avoid list, stealth warnings",
+        function() return db().nearby end, function(v) ns.SetNearby(v) end, function() ns.OpenNearbySettings() end)
+    module("Class icons on nameplates", "class, healers and KOS over enemy players",
+        function() return db().plateIcons == true end, function(v) db().plateIcons = v; ns.UpdatePlates() end,
+        function() ns.OpenNearbySettings() end)
+    module("Alert on any enemy player", "phone + the red bar, outside instances",
+        function() return db().enemyPlayers end, function(v) ns.SetEnemyPlayers(v) end, openAlerts)
+    module("Attacked while idle or AFK", "phone alert",
+        function() return db().attackAlert end, function(v) db().attackAlert = v end, openAlerts)
+
+    section("MORE")
+    module("Rare scan", "like unitscan: rare mobs and the names you add",
+        function() return db().scanOn ~= false end, function(v) ns.SetScan(v) end, openAlerts)
+    module("XP boosts", "rested, XP food, sleeping bag – below max level",
+        function() return db().levelHelper ~= false end,
+        function(v) db().levelHelper = v; if ns.RefreshLevel then ns.RefreshLevel() end end,
+        function() ns.OpenLevelSettings() end)
+    module("Buff warnings", "before and when a buff runs out",
+        function() return db().buffWarn ~= false end, function(v) db().buffWarn = v end,
+        function() ns.OpenBuffSettings() end)
+    module("Spots on the map", "where to stand for the rares you watch",
+        function() return db().mapSpots ~= false end,
+        function(v) db().mapSpots = v; ns.Safe("map pins", ns.UpdateMapPins) end)
+    module("AFK logout warning", "a phone alert 5 min before",
+        function() return db().afkWarn end, function(v) db().afkWarn = v end)
+    module("Minimap button", nil,
+        function() return not db().minimap.hide end, function(v) ns.SetMinimapShown(v) end)
+
     section("PHONE")
     field("ntfyUrl", "ntfy link", "From the ntfy app, e.g. ntfy.sh/your-secret-topic")
     y = y - 28
@@ -512,7 +632,60 @@ local function BuildSettings()
     field("discordMention", "Mention", "Discord: @here, <@userID> or empty", COL2, 70, W - (COL2 - L) - 80)
     y = y - 28
 
-    section("WATCH")
+    local save = Button(o, "Save & reload", 130, 24, function()
+        for _, e in ipairs(fields) do e:Store() end
+        -- "ntfy.sh/topic" is fine too: https:// is added when it's missing
+        for _, key in ipairs({ "ntfyUrl", "discordWebhook" }) do
+            local v = db()[key]
+            if v ~= "" and not v:match("^%a+://") then db()[key] = "https://" .. v end
+        end
+        for _, e in ipairs(fields) do e:Load() end
+        ns.Print("Saved – reloading so the bridge can read it.")
+        ReloadUI()
+    end)
+    save:SetPoint("TOPLEFT", o, "TOPLEFT", L, y)
+    save:SetScript("OnEnter", function(self)
+        Tip(self, "Save & reload", "WoW only writes settings to disk on a reload – that is when the bridge picks up new links.")
+    end)
+    save:SetScript("OnLeave", GameTooltip_Hide)
+    local test = Button(o, "Send test", 110, 24, function() ns.SendTest() end)
+    test:SetPoint("LEFT", save, "RIGHT", 8, 0)
+    local guide = Button(o, "How it works", 120, 24, function() HideBlizzardMenus(); ns.ShowHelp() end)
+    guide:SetPoint("LEFT", test, "RIGHT", 8, 0)
+    local unlock = Button(o, "Unlock bars", 110, 24, function()
+        HideBlizzardMenus()
+        ns.StartMove()
+        if panel and not panel:IsShown() then ns.TogglePanel() end
+    end)
+    unlock:SetPoint("LEFT", guide, "RIGHT", 8, 0)
+    y = y - 34
+
+    local status = o:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    status:SetPoint("TOPLEFT", o, "TOPLEFT", L, y)
+    status:SetWidth(W - 4)
+    status:SetJustifyH("LEFT")
+    status:SetJustifyV("TOP")
+    status:SetSpacing(3)
+
+    local function OnShow()
+        chips:Refresh()
+        for _, e in ipairs(fields) do e:Load() end
+        for _, cb in ipairs(checks) do cb:SetChecked(cb.get()) end
+        local d = db()
+        status:SetText("Instant alerts: " .. (d.instant == false and "|cff808080off|r"
+                or d.instantOK == false and "|cffff8040not working here – the chat log is used (yellow bar)|r"
+                or d.instantOK and "|cff40ff40working|r" or "|cffffd100press Send test to check|r")
+            .. "\n|cff808080Install the bridge once: get |cffffd100WatchX-Bridge.zip|cff808080 from |cffffd100" .. ns.BRIDGE_URL
+            .. "|cff808080, unzip it and double-click \"Install (Mac)\" or \"Install (Windows)\".|r")
+    end
+
+
+    page:SetScript("OnShow", OnShow)
+    o:SetHeight(-y + 70)   -- the whole page, for the scroll bar
+
+    -- the second page: the rare scan and how alerts look
+    local alertsPage = NewPage(nil, "Alerts & scan", "Alerts & scan", "the rare scan, the mini bar and the red alert")
+    section("RARE SCAN")
     local preset = ns.PRESETS[1]
     check(preset.name, preset.note,
         function() return db().watch[preset.name] and true or false end, function(v) ns.SetWatched(preset.name, v) end)
@@ -538,7 +711,6 @@ local function BuildSettings()
     entry.hint = entry:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
     entry.hint:SetPoint("LEFT", entry, "LEFT", 2, 0)
     entry.hint:SetText("Type a mob or player name...")
-    local chips
     local function AddTyped()
         local name = ns.Trim(entry:GetText())
         if name == "" then return end
@@ -627,7 +799,7 @@ local function BuildSettings()
         end
         self.empty:SetShown(#names == 0)
     end
-    ns.RefreshWatchChips = function() if page:IsShown() then chips:Refresh() end end
+    ns.RefreshWatchChips = function() if alertsPage:IsShown() then chips:Refresh() end end
     page.watchEntry, page.watchChips = entry, chips
     y = y - math.ceil(ns.MAX_CUSTOM / COLS) * CHIP_H - 4
 
@@ -636,14 +808,10 @@ local function BuildSettings()
         function() return db().whisper end, function(v) db().whisper = v end)
     check("Instant alerts", "with a screenshot",
         function() return db().instant ~= false end, function(v) db().instant = v; db().instantOK = nil end, true)
-    check("AFK logout warning", "5 min before",
-        function() return db().afkWarn end, function(v) db().afkWarn = v end)
     check("Alert on death", "when it's killed",
-        function() return db().notifyDeath end, function(v) db().notifyDeath = v end, true)
+        function() return db().notifyDeath end, function(v) db().notifyDeath = v end)
     check("Sound", "raid warning",
-        function() return db().sound end, function(v) db().sound = v end)
-    check("Attacked", "while idle or AFK",
-        function() return db().attackAlert end, function(v) db().attackAlert = v end, true)
+        function() return db().sound end, function(v) db().sound = v end, true)
 
     section("DISPLAY")
     check("Mini bar", "status on screen",
@@ -652,69 +820,27 @@ local function BuildSettings()
         function() return db().miniQuiet end, function(v) db().miniQuiet = v end, true)
     check("Auto-hide", "when nothing is watched",
         function() return db().hideIdle end, function(v) db().hideIdle = v end)
-    check("Minimap button", nil,
-        function() return not db().minimap.hide end, function(v) ns.SetMinimapShown(v) end, true)
     check("Alert in the mini bar's spot", "off: own spot",
-        function() return db().alertSame ~= false end, function(v) db().alertSame = v end)
-    check("Spots on the map", "where to stand (Prince Nazjak)",
-        function() return db().mapSpots ~= false end, function(v) db().mapSpots = v; ns.Safe("map pins", ns.UpdateMapPins) end)
+        function() return db().alertSame ~= false end, function(v) db().alertSame = v end, true)
     local move = Button(o, "Unlock bars", 110, 22, function()
         HideBlizzardMenus()
         ns.StartMove()
         if panel and not panel:IsShown() then ns.TogglePanel() end   -- its Lock button locks them again
     end)
-    move:SetPoint("TOPLEFT", o, "TOPLEFT", COL2 + 2, y + 26)
+    move:SetPoint("TOPLEFT", o, "TOPLEFT", L, y - 4)
     move:SetScript("OnEnter", function(self)
         Tip(self, "Unlock bars", "Shows the mini bar – and the red alert, if it has its own spot – so you can drag "
             .. "them. Press Lock (top of the screen) or type /wx lock when done.")
     end)
     move:SetScript("OnLeave", GameTooltip_Hide)
-    y = y - 14
-
-    local save = Button(o, "Save & reload", 130, 24, function()
-        for _, e in ipairs(fields) do e:Store() end
-        -- "ntfy.sh/topic" is fine too: https:// is added when it's missing
-        for _, key in ipairs({ "ntfyUrl", "discordWebhook" }) do
-            local v = db()[key]
-            if v ~= "" and not v:match("^%a+://") then db()[key] = "https://" .. v end
-        end
-        for _, e in ipairs(fields) do e:Load() end
-        ns.Print("Saved – reloading so the bridge can read it.")
-        ReloadUI()
-    end)
-    save:SetPoint("TOPLEFT", o, "TOPLEFT", L, y)
-    save:SetScript("OnEnter", function(self)
-        Tip(self, "Save & reload", "WoW only writes settings to disk on a reload – that is when the bridge picks up new links.")
-    end)
-    save:SetScript("OnLeave", GameTooltip_Hide)
-    local test = Button(o, "Send test", 110, 24, function() ns.SendTest() end)
-    test:SetPoint("LEFT", save, "RIGHT", 8, 0)
-    local guide = Button(o, "How it works", 120, 24, function() HideBlizzardMenus(); ns.ShowHelp() end)
-    guide:SetPoint("LEFT", test, "RIGHT", 8, 0)
-    local reset = Button(o, "Reset timers", 110, 24, function() StaticPopup_Show("WATCHX_RESET") end)
-    reset:SetPoint("LEFT", guide, "RIGHT", 8, 0)
+    local reset = Button(o, "Reset timers", 110, 22, function() StaticPopup_Show("WATCHX_RESET") end)
+    reset:SetPoint("LEFT", move, "RIGHT", 8, 0)
     y = y - 34
 
-    local status = o:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    status:SetPoint("TOPLEFT", o, "TOPLEFT", L, y)
-    status:SetWidth(W - 4)
-    status:SetJustifyH("LEFT")
-    status:SetJustifyV("TOP")
-    status:SetSpacing(3)
+    alertsPage:SetScript("OnShow", OnShow)
+    o:SetHeight(-y + 70)
+    page.alerts = alertsPage
 
-    page:SetScript("OnShow", function()
-        chips:Refresh()
-        for _, e in ipairs(fields) do e:Load() end
-        for _, cb in ipairs(checks) do cb:SetChecked(cb.get()) end
-        local d = db()
-        status:SetText("Instant alerts: " .. (d.instant == false and "|cff808080off|r"
-                or d.instantOK == false and "|cffff8040not working here – the chat log is used (yellow bar)|r"
-                or d.instantOK and "|cff40ff40working|r" or "|cffffd100press Send test to check|r")
-            .. "\n|cff808080Install the bridge once: get |cffffd100WatchX-Bridge.zip|cff808080 from |cffffd100" .. ns.BRIDGE_URL
-            .. "|cff808080, unzip it and double-click \"Install (Mac)\" or \"Install (Windows)\".|r")
-    end)
-
-    o:SetHeight(-y + 70)   -- the whole page, for the scroll bar
     settingsPage = page
     if Settings and Settings.RegisterCanvasLayoutCategory and Settings.RegisterAddOnCategory then
         local ok, cat = pcall(Settings.RegisterCanvasLayoutCategory, page, "WatchX")
@@ -725,7 +851,14 @@ local function BuildSettings()
     elseif InterfaceOptions_AddCategory then
         InterfaceOptions_AddCategory(page)
     end
-    ns.BuildNearbySettings()
+    ns.BuildNearbySettings()   -- "PvP" first, then the rest
+    alertsPage.parent = "WatchX"
+    if settingsCategory and Settings and Settings.RegisterCanvasLayoutSubcategory then
+        local ok, cat = pcall(Settings.RegisterCanvasLayoutSubcategory, settingsCategory, alertsPage, "Alerts & scan")
+        if ok and cat then page.alertsCat = cat end
+    elseif InterfaceOptions_AddCategory then
+        InterfaceOptions_AddCategory(alertsPage)
+    end
     ns.BuildLevelSettings()
     ns.BuildBuffSettings()
 end
@@ -773,16 +906,9 @@ local function BuildHistory()
     f:SetClampedToScreen(true)
     f:SetScript("OnDragStart", f.StartMoving)
     f:SetScript("OnDragStop", f.StopMovingOrSizing)
-    Flat(f, 0.97)
+    Window(f, "Players met", 200)
     tinsert(UISpecialFrames, "WatchXHistory")
-    local strip = f:CreateTexture(nil, "BORDER")
-    strip:SetPoint("TOPLEFT", 1, -1); strip:SetPoint("TOPRIGHT", -1, -1)
-    strip:SetHeight(2)
-    strip:SetColorTexture(ACCENT[1], ACCENT[2], ACCENT[3], 0.9)
     CloseX(f)
-    local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-    title:SetPoint("TOP", f, "TOP", 0, -12)
-    title:SetText("Players met  |cff7f7f7fWatchX history|r")
 
     f.tab, f.sort = "all", { all = { "lastSeen", true }, guilds = { "lastSeen", true } }
     f.tabs = {}
@@ -1123,7 +1249,7 @@ end
 
 function ns.BuildNearbySettings()
     local page = CreateFrame("Frame", "WatchXNearbyOptions", UIParent)
-    page.name, page.parent = "Nearby", "WatchX"
+    page.name, page.parent = "PvP", "WatchX"
     page:Hide()
     local scroll = CreateFrame("ScrollFrame", nil, page, "UIPanelScrollFrameTemplate")
     scroll:SetPoint("TOPLEFT", page, "TOPLEFT", 0, -4)
@@ -1135,10 +1261,10 @@ function ns.BuildNearbySettings()
 
     local title = o:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
     title:SetPoint("TOPLEFT", o, "TOPLEFT", 16, -16)
-    title:SetText("Nearby")
+    title:SetText("PvP")
     local sub = o:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
     sub:SetPoint("LEFT", title, "RIGHT", 10, -1)
-    sub:SetText("enemy players around you, like Spy  ·  in game only")
+    sub:SetText("the Nearby list, KOS, avoid list and nameplate icons")
 
     local y = -50
     local checks = {}
@@ -1431,7 +1557,7 @@ function ns.BuildNearbySettings()
     help:SetJustifyH("LEFT")
     help:SetSpacing(4)
     help:SetText(table.concat({
-        "|cff38ccadHOW IT WORKS|r",
+        "|cffffd100HOW IT WORKS|r",
         "|cffaaaaaa•|r  Every enemy player your nameplates, target or mouseover show is listed, newest first.",
         "|cffaaaaaa•|r  Bright row = near now (last 30 seconds). Dim row = seen in the last few minutes.",
         "|cffaaaaaa•|r  |cffffd100Click a row|r to target that player.  |cffff5050> you|r = has you targeted.",
@@ -1460,7 +1586,7 @@ function ns.BuildNearbySettings()
     o:SetHeight(-y + 200)
     nearbyPage = page
     if settingsCategory and Settings and Settings.RegisterCanvasLayoutSubcategory then
-        local ok, cat = pcall(Settings.RegisterCanvasLayoutSubcategory, settingsCategory, page, "Nearby")
+        local ok, cat = pcall(Settings.RegisterCanvasLayoutSubcategory, settingsCategory, page, "PvP")
         if ok and cat then nearbyCategory = cat end
     elseif InterfaceOptions_AddCategory then
         InterfaceOptions_AddCategory(page)
@@ -1492,43 +1618,33 @@ local function BuildPanel()
     p:SetScript("OnDragStart", p.StartMoving)
     p:SetScript("OnDragStop", function(self) self:StopMovingOrSizing(); SavePoint(self, "panelPoint") end)
     LoadPoint(p, "panelPoint", { "CENTER", "CENTER", 320, 120 })
-    Flat(p)
+    p.title = Window(p, "WatchX", 170)
     p:Hide()
     tinsert(UISpecialFrames, "WatchXPanel")
 
     -- the strip at the top: green watching, red when something is up, orange when something is missing
     p.strip = p:CreateTexture(nil, "ARTWORK")
-    p.strip:SetPoint("TOPLEFT", p, "TOPLEFT", 1, -1)
-    p.strip:SetPoint("TOPRIGHT", p, "TOPRIGHT", -1, -1)
+    p.strip:SetPoint("TOPLEFT", p, "TOPLEFT", 8, -24)
+    p.strip:SetPoint("TOPRIGHT", p, "TOPRIGHT", -8, -24)
     p.strip:SetHeight(2)
 
-    p.logo = p:CreateTexture(nil, "ARTWORK")
-    p.logo:SetSize(18, 18)
-    p.logo:SetPoint("TOPLEFT", p, "TOPLEFT", PAD, -11)
+    p.logo = p:CreateTexture(nil, "OVERLAY")
+    p.logo:SetSize(16, 16)
+    p.logo:SetPoint("RIGHT", p.title, "LEFT", -4, 0)
     p.logo:SetTexture(LOGO)
-    p.title = p:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    p.title:SetPoint("LEFT", p.logo, "RIGHT", 7, 0)
-    p.title:SetText("WatchX")
 
-    local close = CreateFrame("Button", nil, p)
-    close:SetSize(14, 14)
-    close:SetPoint("TOPRIGHT", p, "TOPRIGHT", -10, -13)
-    close:SetNormalTexture("Interface\\Buttons\\UI-StopButton")
-    close:SetHighlightTexture("Interface\\Buttons\\UI-StopButton", "ADD")
-    local ct = close:GetNormalTexture()
-    if ct then ct:SetVertexColor(0.6, 0.6, 0.6) end
-    close:SetScript("OnClick", function() p:Hide() end)
+    CloseX(p)
 
-    -- the status tag at the right of the title
+    -- the status tag, right under the header plate
     p.tag = CreateFrame("Frame", nil, p)
     p.tag:SetHeight(16)
-    p.tag:SetPoint("RIGHT", close, "LEFT", -6, 0)
+    p.tag:SetPoint("TOPRIGHT", p, "TOPRIGHT", -PAD, -28)
     p.tag.bg = p.tag:CreateTexture(nil, "BACKGROUND")
     p.tag.bg:SetAllPoints()
     p.tag.text = p.tag:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     p.tag.text:SetPoint("CENTER", 0, 0)
 
-    local y = -38
+    local y = -48
     p.rowsTop = y
     p.rows = {}
     for i = 1, ROWS do
@@ -1688,7 +1804,7 @@ local function BuildPanel()
         b.key = item[1]
         b:SetScript("OnEnter", function(self) if self.tip then Tip(self, item[2], self.tip) end end)
         b:SetScript("OnLeave", GameTooltip_Hide)
-        b:SetScript("OnClick", function(self) if self.key ~= "plates" then ns.OpenSettings() end end)
+        b:SetScript("OnClick", function(self) if self.key ~= "plates" then ns.OpenAlertSettings() end end)
         p.ready[item[1]] = b
     end
     ly = ly - 22
@@ -1708,7 +1824,7 @@ local function BuildPanel()
     local bw = (PANEL_W - PAD * 2 - 12) / 3
     local test = FlatButton(p.buttons, "Send test", bw, 22, function() ns.SendTest() end)
     test:SetPoint("TOPLEFT", p.buttons, "TOPLEFT", PAD, 0)
-    local set = FlatButton(p.buttons, "Settings", bw, 22, function() ns.OpenSettings() end)
+    local set = FlatButton(p.buttons, "Settings", bw, 22, function() ns.OpenAlertSettings() end)
     set:SetPoint("LEFT", test, "RIGHT", 6, 0)
     p.lock = FlatButton(p.buttons, "Unlock", bw, 22, function() ns.ToggleUnlock() end)
     p.lock:SetPoint("LEFT", set, "RIGHT", 6, 0)
@@ -2073,16 +2189,10 @@ local function BuildMini()
         RefreshMini()
         ns.UpdateChatLogPrompt()
     end)
-    local bg = m:CreateTexture(nil, "BACKGROUND")
-    bg:SetAllPoints(m)
-    bg:SetColorTexture(0, 0, 0, 0.6)
+    Flat(m, 0.85)
     local lit = m:CreateTexture(nil, "HIGHLIGHT")
-    lit:SetAllPoints(m)
+    lit:SetPoint("TOPLEFT", 3, -3); lit:SetPoint("BOTTOMRIGHT", -3, 3)
     lit:SetColorTexture(1, 1, 1, 0.06)
-    local strip = m:CreateTexture(nil, "BORDER")
-    strip:SetPoint("TOPLEFT"); strip:SetPoint("BOTTOMLEFT")
-    strip:SetWidth(2)
-    strip:SetColorTexture(ACCENT[1], ACCENT[2], ACCENT[3], 0.9)
     m.icon = m:CreateTexture(nil, "ARTWORK")
     m.icon:SetSize(20, 20)
     m.icon:SetPoint("TOPLEFT", m, "TOPLEFT", 5, -3)
@@ -2225,12 +2335,9 @@ local function BuildAlertSpot()
     f:RegisterForDrag("LeftButton")
     f:RegisterForClicks("RightButtonUp")
     local bg = f:CreateTexture(nil, "BACKGROUND")
-    bg:SetAllPoints()
+    bg:SetPoint("TOPLEFT", 3, -3); bg:SetPoint("BOTTOMRIGHT", -3, 3)
     bg:SetColorTexture(0.50, 0.06, 0.06, 0.95)
-    local edge = f:CreateTexture(nil, "BORDER")
-    edge:SetPoint("TOPLEFT"); edge:SetPoint("BOTTOMLEFT")
-    edge:SetWidth(3)
-    edge:SetColorTexture(1, 0.3, 0.3, 1)
+    RedEdge(f)
     local icon = f:CreateTexture(nil, "ARTWORK")
     icon:SetSize(28, 28)
     icon:SetPoint("LEFT", f, "LEFT", 9, 0)
@@ -2304,10 +2411,6 @@ local function LockBar()
     f:SetSize(430, 34)
     f:SetPoint("TOP", UIParent, "TOP", 0, -70)
     Flat(f)
-    local strip = f:CreateTexture(nil, "BORDER")
-    strip:SetPoint("TOPLEFT", 1, -1); strip:SetPoint("TOPRIGHT", -1, -1)
-    strip:SetHeight(2)
-    strip:SetColorTexture(1, 0.82, 0, 0.9)
     local text = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
     text:SetPoint("LEFT", f, "LEFT", 12, -1)
     text:SetText("|cffffd100WatchX unlocked|r – drag the bars, pull their edges")
@@ -2451,11 +2554,7 @@ local function BuildNearby()
     f:SetScale(NearbyScale())
     LoadPoint(f, "nearbyPoint", { "TOPRIGHT", "TOPRIGHT", -240, -220 })
     Flat(f)
-    local strip = f:CreateTexture(nil, "BORDER")
-    strip:SetPoint("TOPLEFT", 1, -1); strip:SetPoint("TOPRIGHT", -1, -1)
-    strip:SetHeight(2)
-    strip:SetColorTexture(ACCENT[1], ACCENT[2], ACCENT[3], 0.9)
-    f.title = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    f.title = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     f.title:SetPoint("TOPLEFT", f, "TOPLEFT", 8, -6)
     f.title:SetText("Nearby")
     -- History: the big list of everyone you've met
@@ -2692,7 +2791,7 @@ function ns.ShowStealthToast(e, kind)
         end)
         Flat(toast)
         toast.edge = toast:CreateTexture(nil, "BORDER")
-        toast.edge:SetPoint("TOPLEFT", 1, -1); toast.edge:SetPoint("BOTTOMLEFT", 1, 1)
+        toast.edge:SetPoint("TOPLEFT", 4, -4); toast.edge:SetPoint("BOTTOMLEFT", 4, 4)
         toast.edge:SetWidth(3)
         toast.icon = toast:CreateTexture(nil, "ARTWORK")
         toast.icon:SetSize(28, 28)
@@ -2718,6 +2817,7 @@ function ns.ShowStealthToast(e, kind)
     toast.head:SetText(k.head)
     toast.head:SetTextColor(k.r, k.g, k.b)
     toast.edge:SetColorTexture(k.r, k.g, k.b, 1)
+    if toast.SetBackdropBorderColor then toast:SetBackdropBorderColor(k.r, k.g, k.b, 1) end
     local coords = e.class and CLASS_ICON_TCOORDS and CLASS_ICON_TCOORDS[e.class]
     if coords then
         toast.icon:SetTexture("Interface\\TargetingFrame\\UI-Classes-Circles")
@@ -3010,12 +3110,9 @@ local function CreateTargetButton()
     b:SetAttribute("useOnKeyDown", false)
     b:SetAttribute("type1", "macro")
     local bg = b:CreateTexture(nil, "BACKGROUND")
-    bg:SetAllPoints()
+    bg:SetPoint("TOPLEFT", 3, -3); bg:SetPoint("BOTTOMRIGHT", -3, 3)
     bg:SetColorTexture(0.50, 0.06, 0.06, 0.95)
-    local edge = b:CreateTexture(nil, "BORDER")
-    edge:SetPoint("TOPLEFT"); edge:SetPoint("BOTTOMLEFT")
-    edge:SetWidth(3)
-    edge:SetColorTexture(1, 0.3, 0.3, 1)
+    RedEdge(b)
     local hl = b:CreateTexture(nil, "HIGHLIGHT")
     hl:SetAllPoints()
     hl:SetColorTexture(1, 1, 1, 0.15)
@@ -3245,13 +3342,11 @@ local function BuildHelp()
     f:SetClampedToScreen(true)
     f:SetScript("OnDragStart", f.StartMoving)
     f:SetScript("OnDragStop", f.StopMovingOrSizing)
-    Flat(f, 0.96)
+    Window(f, "WatchX – how it works", 240)
     f:Hide()
     tinsert(UISpecialFrames, "WatchXHelp")
 
     CloseX(f)
-    local title = Text(f, "GameFontNormalLarge", -12, 30)
-    title:SetText("WatchX  |cff7f7f7fhow it works|r")
 
     local scroll = CreateFrame("ScrollFrame", nil, f, "UIPanelScrollFrameTemplate")
     scroll:SetPoint("TOPLEFT", f, "TOPLEFT", PAD, -40)
@@ -3602,9 +3697,11 @@ function ns.ApplyLayout()
         LoadPoint(nb, "nearbyPoint", { "TOPRIGHT", "TOPRIGHT", -240, -220 })
         RefreshNearby()
     end
-    if settingsPage and settingsPage:IsShown() then
-        local fn = settingsPage:GetScript("OnShow")
-        if fn then fn(settingsPage) end
+    for _, pg in ipairs({ settingsPage or false, settingsPage and settingsPage.alerts or false }) do
+        if pg and pg:IsShown() then
+            local fn = pg:GetScript("OnShow")
+            if fn then fn(pg) end
+        end
     end
     ns.UpdateProfileLabels()
     ns.Safe("map pins", ns.UpdateMapPins)
@@ -3823,10 +3920,6 @@ local function BuildLevel()
     f:SetScale(LevelScale())
     LoadPoint(f, "levelPoint", { "TOPRIGHT", "TOPRIGHT", -240, -440 })
     Flat(f)
-    local strip = f:CreateTexture(nil, "BORDER")
-    strip:SetPoint("TOPLEFT", 1, -1); strip:SetPoint("TOPRIGHT", -1, -1)
-    strip:SetHeight(2)
-    strip:SetColorTexture(1, 0.82, 0, 0.9)
     f.icons = {}
     for i = 1, LV_MAX do
         local b = CreateFrame("Button", "WatchXLevelIcon" .. i, f, "SecureActionButtonTemplate")
@@ -4096,7 +4189,7 @@ function ns.BuildLevelSettings()
     help:SetJustifyH("LEFT")
     help:SetSpacing(4)
     help:SetText(table.concat({
-        "|cff38ccadWHAT IT CHECKS|r",
+        "|cffffd100WHAT IT CHECKS|r",
         "|cffaaaaaa•|r  |cffffd100Camp Tent|r – at a campfire, tops rested up to 5% of a level. Then |cffffd100Boosted Rest|r: 1 hour wait.",
         "|cffaaaaaa•|r  |cffffd100Well Fed|r – XP food, +5% kill XP for about 15 minutes. Gone when you die.",
         "|cffaaaaaa•|r  |cffffd100XP food|r – food whose tooltip says \"Experience gained from kills is increased\". None left: a warning.",
@@ -4108,7 +4201,7 @@ function ns.BuildLevelSettings()
         "you get a warning mid-screen. Hover an icon for what it is and how to get it. The numbers come from the",
         "Forever guides and may change.",
         "",
-        "|cff38ccadCLICKS|r",
+        "|cffffd100CLICKS|r",
         "|cffaaaaaa•|r  |cffffd100Hover|r an icon: everything you can use for it pops up in a column above it – your XP food,",
         "    campfires, tent and other camp features. Click one to use it now (right-click: just pick it).",
         "|cffaaaaaa•|r  |cffffd100Click|r an icon: eat the food or use the sleeping bag. The camp icon puts the campfire down",

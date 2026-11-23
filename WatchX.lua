@@ -92,6 +92,7 @@ local defaults = {
     locked = false,       -- mini bar locked
     miniQuiet = false,    -- mini bar only shows when something is up (the alert spot stays)
     hideIdle = false,     -- mini bar hidden while nothing is watched
+    scanOn = true,        -- rare scan (like unitscan): the watch list is live (off: nothing on it is looked for)
     mapSpots = true,      -- the best places to stand, as pins on the world map and minimap
     alertSame = true,     -- the big alert pops up in the mini bar's spot (false: alertPoint)
     minimap = { hide = false },
@@ -225,7 +226,7 @@ function ns.RebuildWatch()
     wipe(watchByLower)
     wipe(activeLoot)
     for _, mob in ipairs(ns.GetMobList()) do
-        if mob.enabled then
+        if mob.enabled and db.scanOn ~= false then
             watchByLower[mob.name:lower()] = mob.name
             local p = PresetFor(mob.name)
             if p and p.loot then
@@ -246,6 +247,14 @@ local function FindAny(name)
     end
 end
 ns.FindAny = FindAny
+
+-- The rare scan as a whole on or off (the list and each name's own switch stay as they are).
+function ns.SetScan(on)
+    db.scanOn = on and true or false
+    ns.RebuildWatch()
+    if ns.UpdateMapPins then ns.Safe("map pins", ns.UpdateMapPins) end
+    Refresh()
+end
 
 function ns.SetWatched(name, on)
     db.watch[name] = on and true or nil
@@ -2372,7 +2381,7 @@ local PROFILE_KEYS = { "enemyPlayers", "friendlyPlayers", "attackAlert", "whispe
     "stealthWarn", "stealthSound", "nearbyShowEmpty", "nearbyKeep", "newEnemyCard", "warnDock", "nearbyAttach", "nearbyMax", "nearbyNoBG", "nearbyHideDungeon", "nearbyHideRaid",
     "plateIcons", "plateFriendly", "plateHealer", "plateSize", "plateKOS",
     "levelHelper", "levelMissing", "levelFlash", "levelWarn", "levelHideCombat", "levelHideInstance", "levelPoint", "levelScale", "levelWidth",
-    "buffWarn", "buffSoon", "buffGone", "buffGroups", "avoidGroup", "avoidChat" }
+    "buffWarn", "buffSoon", "buffGone", "buffGroups", "avoidGroup", "avoidChat", "scanOn" }
 local PROFILE_MAX_NAME = 16
 
 local function Copy(v)
