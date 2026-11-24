@@ -2146,6 +2146,8 @@ function ns.BuildNearbySettings()
         function() return db().wantedFriends ~= false end, function(v) db().wantedFriends = v end)
     check("Card + sound when one shows up", nil,
         function() return db().wantedAlert ~= false end, function(v) db().wantedAlert = v end)
+    check("Announce my bounties in guild chat", "posted, claimed (by whom, where) and paid – with the reward",
+        function() return db().wantedAnnounce == true end, function(v) db().wantedAnnounce = v end)
     addRow("Bounty", "Name: 50g 20s note", function(t)
         local name, rest = t:match("^([^:]+):%s*(.*)$")
         name = ns.Trim(name or t)
@@ -3790,7 +3792,10 @@ function ns.BountyCard(kind, who, reward, from, class)
             return
         end
         toast.head:SetText(k.head .. (reward and ("   " .. reward) or ""))
-        toast.hint:SetText(from and ("|cffcccccc" .. from .. "|r") or "")
+        -- who did it / who posted it: on the name's line (in the corner it ran into the heading)
+        toast.name:SetText((who or "?") .. (from and ("  |cffcccccc" .. from .. "|r") or ""))
+        toast.hint:SetText("")
+        PlaceToast()   -- as wide as the new lines need (on its own spot)
         toast.untilT = GetTime() + 9
         toast.bountyUntil = toast.untilT   -- a new-enemy card doesn't push it away
     end

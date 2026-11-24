@@ -2767,6 +2767,24 @@ end
         return table.concat(t, " ")
     end
     ns.Money = Money
+
+    -- Your bounties in guild chat, when ticked: posted, claimed, paid – with the reward. Only the one who put it up
+    -- says it (else every WatchX in the guild would). Plain words: chat takes no colours or coin icons.
+    local function Announce(msg)
+        if not (db.wantedAnnounce and IsInGuild and Plain(IsInGuild()) == true) then return end
+        local ok = pcall(SendChat, msg:sub(1, 250), "GUILD")
+        if not ok then Log("announce failed") end
+    end
+    local function Gold(c)
+        c = math.floor(tonumber(c) or 0)
+        local g, sv, cp = math.floor(c / 10000), math.floor(c / 100) % 100, c % 100
+        local t = {}
+        if g > 0 then t[#t + 1] = g .. "g" end
+        if sv > 0 then t[#t + 1] = sv .. "s" end
+        if cp > 0 or #t == 0 then t[#t + 1] = cp .. "c" end
+        return table.concat(t, " ")
+    end
+    local function RewardWords(w) return (w.copper and w.copper > 0) and Gold(w.copper) or tostring(w.reward or "a reward") end
     local UNITS = { g = 10000, gold = 10000, s = 100, silver = 100, c = 1, copper = 1 }
     -- "50g 20s ninja looter" -> 502000, "ninja looter"
     function ns.ParseMoney(text)
@@ -2983,6 +3001,7 @@ end
             Print(why) return false, why
         end
         local r = ns.EnemyRecord(key, name)
+        local fresh = not old or old.copper ~= copper   -- (a new bounty or a new reward is said in guild; a note isn't)
         r.wanted = { copper = copper, note = Clean(note, MAX_NOTE), by = MyFull(), t = time(), forever = forever and true or nil }
         r.wantedHide = nil
         local gone = Gone(key)
@@ -2990,6 +3009,10 @@ end
         SendAdd(key, r)
         Print("|cffffa000WANTED|r posted: " .. r.name .. " – " .. Money(copper)
             .. (r.wanted.note and (" (" .. r.wanted.note .. ")") or "") .. " |cffaaaaaa– sent to your guild and friends|r")
+        if fresh then
+            Announce("WANTED: " .. r.name .. " – " .. Gold(copper) .. " reward" .. (r.wanted.note and (" (" .. r.wanted.note .. ")") or "")
+                .. ". Kill them and claim it!")
+        end
         Changed()
         return true
     end
@@ -3028,6 +3051,8 @@ end
         w.claimed = { by = MyFull(), full = MyFull(), t = time(), zone = Clean(zone, 40) }
         Send({ VER, "C", key, w.claimed.by, w.claimed.t, w.t or 0, w.claimed.full, w.claimed.zone or "" })
         local mine = ns.WantedMine(w)
+        if mine then Announce("BOUNTY CLAIMED: " .. (r.name or key) .. " was killed by " .. Show(w.claimed.by) .. (zone and (" in " .. zone) or "")
+            .. " – " .. RewardWords(w) .. " reward.") end
         Card("bountyKill", r.name or key, ns.WantedReward(w), mine and "yours" or ("from " .. Show(w.by)),
             "Bounty claimed: " .. (r.name or key) .. (zone and (" in " .. zone) or "") .. (ns.WantedReward(w) and (" – " .. ns.WantedReward(w)) or "")
             .. (mine and "" or (" from " .. Show(w.by) .. " (they pay by mail)")), r.class)
@@ -3042,6 +3067,7 @@ end
         w.paid = time()
         Send({ VER, "P", key, w.by or MyFull(), w.t or 0 })
         Print("|cff40ff40Bounty paid|r: " .. Show(w.claimed.full or w.claimed.by) .. " got " .. (ns.WantedReward(w) or "it") .. " for " .. (r.name or key) .. ".")
+        Announce("BOUNTY PAID: " .. Show(w.claimed.full or w.claimed.by) .. " got " .. RewardWords(w) .. " for " .. (r.name or key) .. ".")
         Changed()
         return true
     end
@@ -3148,6 +3174,7 @@ end
             w.claimed = { by = from, full = from, t = ct, zone = Clean(f[6], 40) }   -- the claimer is the sender, always
             local where = w.claimed.zone and (" in " .. w.claimed.zone) or ""
             if ns.WantedMine(w) then
+                Announce("BOUNTY CLAIMED: " .. Show(from) .. " killed " .. (r.name or key) .. where .. " – " .. RewardWords(w) .. " reward.")
                 Card("bountyOwe", r.name or key, ns.WantedReward(w), "to " .. Show(from),
                     Show(from) .. " killed " .. (r.name or key) .. where .. " and claimed your bounty – you owe "
                     .. (ns.WantedReward(w) or "the reward") .. ". Pay it at a mailbox.", r.class)
@@ -3540,7 +3567,7 @@ local PROFILE_KEYS = { "enemyPlayers", "friendlyPlayers", "attackAlert", "whispe
     "stealthWarn", "stealthSound", "nearbyShowEmpty", "nearbyKeep", "newEnemyCard", "warnDock", "nearbyAttach", "nearbyMax", "nearbyNoBG", "nearbyHideDungeon", "nearbyHideRaid",
     "plateIcons", "plateFriendly", "plateHealer", "plateSize", "plateKOS",
     "levelHelper", "levelMissing", "levelFlash", "levelWarn", "levelHideCombat", "levelHideInstance", "levelPoint", "levelScale", "levelWidth",
-    "buffWarn", "buffSoon", "buffGone", "buffGroups", "avoidGroup", "avoidChat", "scanOn", "wantedOn", "wantedGuild", "wantedFriends", "wantedAlert" }
+    "buffWarn", "buffSoon", "buffGone", "buffGroups", "avoidGroup", "avoidChat", "scanOn", "wantedOn", "wantedGuild", "wantedFriends", "wantedAlert", "wantedAnnounce" }
 local PROFILE_MAX_NAME = 16
 
 local function Copy(v)
