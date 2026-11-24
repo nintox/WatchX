@@ -5837,13 +5837,17 @@ do (function()
             end
             local pf = (what == "mp") and UnitPowerPercent or UnitHealthPercent
             local scale = CurveConstants and CurveConstants.ScaleTo100
+            local pctShown = false
             if pf and scale then
-                pcall(function()
+                pctShown = pcall(function()
                     local v = (what == "mp") and pf("player", 0, false, scale) or pf("player", false, scale)
                     r.pct:SetFormattedText(color .. "%d%%|r", v)
                 end)
             end
-            r.info:SetText((tk and a.left) and (color .. "+" .. Short(tk.ps * a.left) .. "|r |cffccccccto come|r") or "")
+            -- the tick over the %, when the game could show it
+            local y = pctShown and 24 or 6
+            if r.tick and r.tickY ~= y then r.tickY = y; r.tick:ClearAllPoints(); r.tick:SetPoint("BOTTOM", r, "TOP", 0, y) end
+            r.info:SetText("")   -- (the % and the tick say it; a line under each icon only crowded them)
             return
         end
         r.pct:SetText(color .. math.floor(cur / max * 100 + 0.5) .. "%|r")

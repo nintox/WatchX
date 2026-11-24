@@ -35,7 +35,7 @@ check(4 <= ev('PLAYS') <= 6, "5 s with UNIT_AURA every 0.25 s: one tick a second
 # health/mana hidden: no %, but what's still to come from the buff's words
 ex('local s = {}; SECRET[s] = true; MP = s; tick(0.3)')
 check(ev('R.pct.__text') == "", "hidden mana: no %")
-check("to come" in str(ev('R.info.__text')), "what's to come: " + str(ev('R.info.__text')))
+check(ev('R.info.__text') == "", "no line under the icon: " + str(ev('R.info.__text')))
 check(ev('R.bar:IsShown()'), "the game's own fill for hidden mana")
 check("+151" in str(ev('R.tick.__text')), "the tick still comes")
 
