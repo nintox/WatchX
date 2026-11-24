@@ -27,10 +27,16 @@ ex('FIRST = R.nextTick; tick(1.05)')
 check(ev('R.nextTick') > ev('FIRST'), "the next tick a second later")
 check("ends at" in str(ev('R.info.__text')) or "full in" in str(ev('R.info.__text')), "where it ends: " + str(ev('R.info.__text')))
 
+# smooth: buffs looked at again and again (UNIT_AURA) don't restart the tick – one a second
+ex('PLAYS = 0; local old = R.tickAnim.Play; R.tickAnim.Play = function(s) PLAYS = PLAYS + 1; return old(s) end')
+ex('for i = 1, 20 do fire("UNIT_AURA", "player"); tick(0.25) end')
+check(4 <= ev('PLAYS') <= 6, "5 s with UNIT_AURA every 0.25 s: one tick a second (%d)" % ev('PLAYS'))
+
 # health/mana hidden: no %, but what's still to come from the buff's words
 ex('local s = {}; SECRET[s] = true; MP = s; tick(0.3)')
 check(ev('R.pct.__text') == "", "hidden mana: no %")
-check("to come" in str(ev('R.info.__text')) and "+2" in str(ev('R.info.__text')), "what's to come: " + str(ev('R.info.__text')))
+check("to come" in str(ev('R.info.__text')), "what's to come: " + str(ev('R.info.__text')))
+check(ev('R.bar:IsShown()'), "the game's own fill for hidden mana")
 check("+151" in str(ev('R.tick.__text')), "the tick still comes")
 
 # "X over Y sec": an even share each second

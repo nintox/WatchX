@@ -5706,20 +5706,28 @@ do (function()
         -- a tick: "+151" rises from above the icon and fades, each time the food or drink gives (the game's own
         -- animation – no Lua per frame)
         t.tick = t.frame:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-        t.tick:SetPoint("BOTTOM", t, "TOP", 0, 24)
+        t.tick:SetPoint("BOTTOM", t, "TOP", 0, 6)
         Big(t.tick, 13)
         t.tick:SetAlpha(0)
         if t.tick.CreateAnimationGroup then
             local ag = t.tick:CreateAnimationGroup()
             local up = ag:CreateAnimation("Translation")
-            if up.SetOffset then up:SetOffset(0, 18) end
-            up:SetDuration(0.9)
+            if up.SetOffset then up:SetOffset(0, 14) end
+            up:SetDuration(0.85)
+            if up.SetSmoothing then up:SetSmoothing("OUT") end
             local fade = ag:CreateAnimation("Alpha")
             fade:SetFromAlpha(1); fade:SetToAlpha(0)
-            fade:SetStartDelay(0.5); fade:SetDuration(0.4)
+            fade:SetStartDelay(0.45); fade:SetDuration(0.4)
             if ag.SetToFinalAlpha then ag:SetToFinalAlpha(true) end
             t.tickAnim = ag
         end
+        -- the fill when your health/mana can only be read by the game itself (hidden values): a status bar takes them
+        t.bar = CreateFrame("StatusBar", nil, t)
+        t.bar:SetAllPoints(t)
+        t.bar:SetFrameLevel(t:GetFrameLevel())
+        if t.bar.SetOrientation then t.bar:SetOrientation("VERTICAL") end
+        t.bar:SetStatusBarTexture("Interface\\Buttons\\WHITE8X8")
+        t.bar:Hide()
         return t
     end
 
@@ -5797,8 +5805,14 @@ do (function()
             tk = a.src[k] or nil
         end
         -- the tick over the icon: one "+N" per interval while it lasts
-        local id = a.src or a
+        local id = (a.src and (tostring(a.kind) .. label .. tostring(a.src.ex))) or a
         if r.tickFor ~= id then r.tickFor, r.nextTick = id, nil end
+        local tickY = (cur and max and max > 0) and 24 or 6
+        if r.tick and r.tickY ~= tickY then
+            r.tickY = tickY
+            r.tick:ClearAllPoints()
+            r.tick:SetPoint("BOTTOM", r, "TOP", 0, tickY)
+        end
         if tk and a.left and a.left > 0 and r.tick then
             local now = GetTime()
             if not r.nextTick or now >= r.nextTick then
@@ -5808,9 +5822,27 @@ do (function()
                 if r.tickAnim then r.tickAnim:Stop(); r.tickAnim:Play() end
             end
         end
+        if r.bar then r.bar:Hide() end
         if not (cur and max and max > 0) then
-            -- your health / mana can't be read here: what's still to come, from the buff's own words
+            -- your health / mana can't be read here: what's still to come, from the buff's own words – and the fill
+            -- and % as far as the game shows hidden values itself
             r.pct:SetText(""); r.fill:Hide(); r.fillTop:Hide()
+            local rawCur, rawMax
+            if what == "mp" then rawCur, rawMax = UnitPower("player", 0), UnitPowerMax("player", 0)
+            else rawCur, rawMax = UnitHealth("player"), UnitHealthMax("player") end
+            if r.bar and rawCur ~= nil and rawMax ~= nil
+                    and pcall(r.bar.SetMinMaxValues, r.bar, 0, rawMax) and pcall(r.bar.SetValue, r.bar, rawCur) then
+                if what == "mp" then r.bar:SetStatusBarColor(0.15, 0.45, 1, 0.45) else r.bar:SetStatusBarColor(0.15, 0.8, 0.2, 0.45) end
+                r.bar:Show()
+            end
+            local pf = (what == "mp") and UnitPowerPercent or UnitHealthPercent
+            local scale = CurveConstants and CurveConstants.ScaleTo100
+            if pf and scale then
+                pcall(function()
+                    local v = (what == "mp") and pf("player", 0, false, scale) or pf("player", false, scale)
+                    r.pct:SetFormattedText(color .. "%d%%|r", v)
+                end)
+            end
             r.info:SetText((tk and a.left) and (color .. "+" .. Short(tk.ps * a.left) .. "|r |cffccccccto come|r") or "")
             return
         end
@@ -5929,8 +5961,8 @@ do (function()
                     Paint(r, l[1], l[2], l[3], l[4])
                     if r.danger then r:SetAlpha(0.35 + 0.65 * math.abs(math.sin(GetTime() * 6))) end
                 end
-                r:ClearAllPoints()
-                r:SetPoint("CENTER", f, "CENTER", (i - (n + 1) / 2) * (ICON + 18), 0)
+                local x = (i - (n + 1) / 2) * (ICON + 18)
+                if r.x ~= x then r.x = x; r:ClearAllPoints(); r:SetPoint("CENTER", f, "CENTER", x, 0) end
                 r:Show()
             else
                 r:Hide()
