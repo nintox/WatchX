@@ -453,19 +453,24 @@ function ns.EnemyMenu(anchor, key)
     local mineW = r.wanted and ns.WantedMine(r.wanted)
     if r.wanted and not mineW then
         items[#items + 1] = { "|cff909090Bounty by " .. ((r.wanted.by or "?"):gsub("%-", " ")) .. " – only they can change it|r", nil }
-    elseif r.wanted and r.wanted.claimed then
-        if not r.wanted.paid and not (ns.ClaimedByMe and ns.ClaimedByMe(r.wanted)) then
-            items[#items + 1] = { "|cff40ff40Mark paid|r (paid by trade)", function() ns.MarkPaid(key) end }
-        end
-        items[#items + 1] = { "Take the bounty down...", function() StaticPopup_Show("WATCHX_TAKEDOWN", r.name, nil, key) end }
     elseif r.wanted then
-        items[#items + 1] = { "|cffffa000Edit bounty|r", function() ns.ShowBounty(key) end }
+        local st = ns.WantedState(r.wanted)
+        local shown = 0
+        for _, e in ipairs(st.debts) do   -- what you owe, per player (paid by trade: mark it here)
+            if shown < 3 and not ns.IsMe(e.full) then
+                shown = shown + 1
+                local who = e.full
+                items[#items + 1] = { "|cff40ff40Mark paid|r: " .. (who:gsub("%-", " ")) .. " " .. ns.Money(e.copper)
+                    .. (e.n > 1 and (" (" .. e.n .. " kills)") or ""), function() ns.MarkPaid(key, who) end }
+            end
+        end
+        if st.open then items[#items + 1] = { "|cffffa000Edit bounty|r", function() ns.ShowBounty(key) end } end
         items[#items + 1] = { "Take the bounty down...", function() StaticPopup_Show("WATCHX_TAKEDOWN", r.name, nil, key) end }
     else
         items[#items + 1] = { "|cffffa000WANTED|r – put a bounty on them", function() ns.ShowBounty(key) end }
     end
     items[#items + 1] = { r.note and "Edit note" or "Add note", function() StaticPopup_Show("WATCHX_NOTE", r.name, nil, key) end }
-    if r.wanted and not r.wanted.paid and not ns.WantedMine(r.wanted) then   -- someone else's bounty keeps them here
+    if r.wanted and not ns.WantedMine(r.wanted) and not ns.WantedState(r.wanted).settled then   -- someone else's bounty keeps them here
         items[#items + 1] = { "|cff606060Can't forget – " .. (r.wanted.by or "someone") .. " has a bounty on them|r", nil }
     else
         items[#items + 1] = { "|cff909090Forget this player...|r", function() StaticPopup_Show("WATCHX_FORGET", r.name, nil, key) end }
@@ -518,7 +523,7 @@ do
     end
     local function Build()
         local f = CreateFrame("Frame", "WatchXBounty", UIParent)
-        f:SetSize(340, 216)
+        f:SetSize(340, 244)
         f:SetPoint("CENTER", 0, 120)
         f:SetFrameStrata("DIALOG")
         f:SetToplevel(true)
@@ -572,14 +577,23 @@ do
         f.whoBox:SetScript("OnTabPressed", function() f.lastBox:SetFocus() end)
         f.lastBox:SetScript("OnEnterPressed", function() f.coins[1]:SetFocus() end)
         f.lastBox:SetScript("OnTabPressed", function() f.coins[1]:SetFocus() end)
+        -- several kills: the reward is for each one, up to this many
+        Label("Kills", -132)
+        f.kills = Box(f, 40, 3, "")
+        f.kills:SetNumeric(true)
+        f.kills:SetJustifyH("CENTER")
+        f.kills:SetPoint("TOPLEFT", f, "TOPLEFT", BX + 4, -132)
+        local kl = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        kl:SetPoint("LEFT", f.kills, "RIGHT", 8, 0)
+        kl:SetText("|cff808080the reward is paid for each kill, up to this many|r")
         f.forever = CreateFrame("CheckButton", nil, f, "UICheckButtonTemplate")
         f.forever:SetSize(22, 22)
-        f.forever:SetPoint("TOPLEFT", f, "TOPLEFT", BX, -128)
+        f.forever:SetPoint("TOPLEFT", f, "TOPLEFT", BX, -158)
         local fl = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
         fl:SetPoint("LEFT", f.forever, "RIGHT", 2, 1)
         fl:SetText("No end date  |cff808080(else it ends after 14 days)|r")
         f.err = f:CreateFontString(nil, "OVERLAY", "GameFontRedSmall")
-        f.err:SetPoint("TOP", f, "TOP", 0, -152)
+        f.err:SetPoint("TOP", f, "TOP", 0, -182)
         Label("Note", -104)
         f.note = Box(f, 222, 100, "why? e.g. ninja looter")
         f.note:SetPoint("TOPLEFT", f, "TOPLEFT", BX + 4, -104)
@@ -603,7 +617,8 @@ do
                 name = ns.ProperName(first .. " " .. last)   -- "bob smith" is Bob Smith
                 key = ns.KeyFromName(name)
             end
-            local ok, why = ns.SetWanted(key, name, c, f.note:GetText(), f.forever:GetChecked() and true or false)
+            local ok, why = ns.SetWanted(key, name, c, f.note:GetText(), f.forever:GetChecked() and true or false,
+                math.max(1, tonumber(f.kills:GetText()) or 1))
             if ok then f:Hide() else f.err:SetText(why or "Couldn't post it – see chat."); f.shareHint:Hide() end
         end
         for i, e in ipairs(f.coins) do
@@ -651,6 +666,7 @@ do
         bw.err:SetText("")
         bw.shareHint:Show()
         bw.forever:SetChecked(w and w.forever and true or false)
+        bw.kills:SetText(tostring(w and w.kills or 1))
         bw.note:SetText(w and w.note or "")
         bw.down:SetShown((w and ns.WantedMine(w)) and true or false)
         local d = db()
@@ -1686,13 +1702,12 @@ function ns.RefreshHistory()
                 if wantedTab and w then
                     local it = items[#items]
                     it.reward, it.by, it.posted = w.copper or 0, (w.by or "~"):lower(), w.t or 0
-                    it.status = w.paid and "4" or w.claimed and "3" or "1"
+                    local st = ns.WantedState(w)
+                    it.st = st
+                    it.status = st.settled and "4" or (st.kills > 0 and "3") or "1"
                     it.note = (w.note or "~"):lower()
-                    local mine = ns.WantedMine(w)
-                    local byMe = ns.ClaimedByMe and ns.ClaimedByMe(w)
-                    it.group = (w.claimed and not w.paid and mine and not byMe) and 1
-                        or (w.claimed and not w.paid and byMe and not mine) and 2
-                        or (not w.claimed) and 3 or (not w.paid) and 4 or 5
+                    -- what you owe first, then what you're owed, the open ones, the rest
+                    it.group = (st.owe > 0) and 1 or (st.owed > 0) and 2 or st.open and 3 or (not st.settled) and 4 or 5
                 end
             end
         end
@@ -1726,8 +1741,9 @@ function ns.RefreshHistory()
             row.key, row.guild = it.key, nil
             row.bar:SetColorTexture(0.11 + alt, 0.09 + alt, 0.06 + alt, 0.9)
             row.edge:SetColorTexture(cr, cg, cb, 1)
-            local v = { (it.kos and "|cffff3030KOS|r " or "") .. (r.wanted and (r.wanted.paid and "|cff40ff40PAID|r "
-                    or r.wanted.claimed and ((ns.WantedMine(r.wanted) and not (ns.ClaimedByMe and ns.ClaimedByMe(r.wanted))) and "|cffff8040OWED|r " or "|cffffd100CLAIMED|r ") or "|cffffa000WANTED|r ") or "")
+            local wst = r.wanted and ns.WantedState(r.wanted)
+            local v = { (it.kos and "|cffff3030KOS|r " or "") .. (wst and ((wst.owe > 0 and "|cffff8040OWED|r ")
+                    or (wst.open and "|cffffa000WANTED|r ") or (wst.settled and "|cff40ff40PAID|r ") or "|cffffd100CLAIMED|r ") or "")
                 .. (r.avoid and "|cffff8040AVOID|r " or "") .. (r.name or it.key),
                 (r.level and r.level > 0) and r.level or "??", ClassName(r.class), r.guild or "|cff606060-|r",
                 (r.kills or 0) > 0 and ("|cffffd100" .. r.kills .. "|r") or "0",
@@ -1738,8 +1754,14 @@ function ns.RefreshHistory()
                 -- one bounty: name (class colour), reward, who put it up and when, where it stands, the note
                 local w = r.wanted
                 local mine = ns.WantedMine(w)
+                local st = it.st or ns.WantedState(w)
                 local status
-                if w.paid then
+                if st.limit > 1 then   -- several kills: how many are in, and the latest
+                    local c = st.last
+                    status = (st.open and "|cffffa000OPEN|r" or (st.settled and "|cff40ff40PAID|r" or "|cffffd100DONE|r"))
+                        .. "  |cffffd100" .. st.kills .. "/" .. st.limit .. " kills|r"
+                        .. (c and ("  |cffaaaaaalast by " .. ((c.by or "?"):gsub("%-", " ")) .. " " .. ns.AgoLong(now - (c.t or now)) .. " ago|r") or "")
+                elseif w.paid then
                     status = "|cff40ff40PAID|r  |cffaaaaaa" .. (w.claimed and ("to " .. (w.claimed.by or "?")) or "") .. "|r"
                 elseif w.claimed then
                     local c = w.claimed
@@ -1749,16 +1771,20 @@ function ns.RefreshHistory()
                     status = "|cffffa000OPEN|r  |cffaaaaaa" .. (w.forever and "no end date"
                         or ("ends in " .. math.max(0, math.ceil(((w.t or now) + 14 * 86400 - now) / 86400)) .. " d")) .. "|r"
                 end
-                local v = { r.name or it.key, ns.WantedReward(w) or "?",
+                local v = { r.name or it.key, (ns.WantedReward(w) or "?") .. (st.limit > 1 and (" ×" .. st.limit) or ""),
                     mine and "|cffffd100you|r" or (w.by or "?"), w.t and ns.AgoLong(now - w.t) or "-", status, w.note or "" }
                 if it.group == 1 then        -- you owe it: orange row, can't be missed
                     row.bar:SetColorTexture(0.45, 0.18, 0.04, 0.95)
                     row.edge:SetColorTexture(1, 0.5, 0.1, 1)
-                    v[5] = "|cffff9040YOU OWE|r  " .. ns.WantedReward(w) .. " to " .. (w.claimed.by or "?") .. "  |cffffd100– pay at a mailbox|r"
+                    local e
+                    for _, x in ipairs(st.debts) do if not ns.IsMe(x.full) then e = e or x end end
+                    v[5] = "|cffff9040YOU OWE|r  " .. ns.Money(st.owe) .. " to " .. ((e and e.full or "?"):gsub("%-", " "))
+                        .. ((#st.debts > 1) and (" +" .. (#st.debts - 1)) or "") .. "  |cffffd100– pay at a mailbox|r"
                 elseif it.group == 2 then    -- owed to you
                     row.bar:SetColorTexture(0.32, 0.26, 0.05, 0.95)
                     row.edge:SetColorTexture(1, 0.82, 0, 1)
-                    v[5] = "|cffffd100OWED TO YOU|r  by " .. (w.by or "?") .. (w.claimed.zone and ("  |cffaaaaaa" .. w.claimed.zone .. "|r") or "")
+                    v[5] = "|cffffd100OWED TO YOU|r  " .. ns.Money(st.owed) .. " by " .. (w.by or "?")
+                        .. ((st.last and st.last.zone) and ("  |cffaaaaaa" .. st.last.zone .. "|r") or "")
                 end
                 for c = 1, #WCOLS do row.cells[c]:SetText(v[c]); row.cells[c]:SetTextColor(1, 1, 1) end
                 for c = #WCOLS + 1, #row.cells do row.cells[c]:SetText("") end
@@ -1778,8 +1804,8 @@ function ns.RefreshHistory()
     local owe, oweC, due, dueC = 0, 0, 0, 0
     if wantedTab then
         for _, it in ipairs(items) do
-            if it.group == 1 then owe, oweC = owe + 1, oweC + (it.r.wanted.copper or 0) end
-            if it.group == 2 then due, dueC = due + 1, dueC + (it.r.wanted.copper or 0) end
+            if it.st and it.st.owe > 0 then owe, oweC = owe + 1, oweC + it.st.owe end
+            if it.st and it.st.owed > 0 then due, dueC = due + 1, dueC + it.st.owed end
         end
     end
     local M = ns.Money or tostring
@@ -2148,13 +2174,15 @@ function ns.BuildNearbySettings()
         function() return db().wantedAlert ~= false end, function(v) db().wantedAlert = v end)
     check("Announce my bounties in guild chat", "posted, claimed (by whom, where) and paid – with the reward",
         function() return db().wantedAnnounce == true end, function(v) db().wantedAnnounce = v end)
-    addRow("Bounty", "Name: 50g 20s note", function(t)
+    addRow("Bounty", "Name: 1g x10 note", function(t)
         local name, rest = t:match("^([^:]+):%s*(.*)$")
         name = ns.Trim(name or t)
         local copper, note = ns.ParseMoney(rest or "")
+        local kills = note:match("^[xX](%d+)%s*")   -- "1g x10 ninja": 1g a kill, up to ten kills
+        if kills then note = note:gsub("^[xX]%d+%s*", "") end
         local key = ns.KeyFromName(name)
         if not key then ns.Print("That isn't a player name: " .. name) return false end
-        return ns.SetWanted(key, name, copper, note) ~= false
+        return ns.SetWanted(key, name, copper, note, nil, tonumber(kills)) ~= false
     end, "Bounty on target", function()
         local key, full
         if UnitExists("target") and UnitIsPlayer("target") then key, full = ns.PlayerKey("target") end

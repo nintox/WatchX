@@ -1073,7 +1073,7 @@ end
 
 function ns.ForgetEnemy(key)
     local fw = db.enemies[key] and db.enemies[key].wanted
-    if fw and not fw.paid and ns.WantedMine and not ns.WantedMine(fw) then
+    if fw and ns.WantedMine and not ns.WantedMine(fw) and not (ns.WantedState and ns.WantedState(fw).settled) then
         Print("Can't forget " .. (db.enemies[key].name or key) .. ": " .. (fw.by or "someone") .. " has a bounty on them.")
         return false
     end
@@ -2805,26 +2805,123 @@ end
 
     -- Is this bounty yours? Only the one who put it up can change it, take it down or mark it paid.
     function ns.WantedMine(w) return w and (w.by == nil or IsMe(w.by)) or false end
-    local function ClaimedByMe(w) return w and w.claimed and IsMe(w.claimed.full or w.claimed.by) or false end
+    -- A bounty can be for several kills (w.kills, the reward is per kill). Every kill claimed on it:
+    -- { by, full, t, zone, paid } – in w.claims, or (one kill, as always) w.claimed / w.paid.
+    local MAX_KILLS = 50
+    local function Limit(w) return math.max(1, math.min(MAX_KILLS, math.floor(tonumber(w and w.kills) or 1))) end
+    local function Claims(w)
+        if not w then return {} end
+        if w.claims then return w.claims end
+        if w.claimed then
+            local c = w.claimed
+            return { { by = c.by, full = c.full, t = c.t, zone = c.zone, paid = w.paid, one = true } }
+        end
+        return {}
+    end
+    local function IsOpen(w) return w ~= nil and #Claims(w) < Limit(w) end
+    local function Last(w) local c = Claims(w); return c[#c] end
+    -- What's owed, per claimer: { { full, n, copper, t (the latest kill) }, ... }, oldest first.
+    local function Debts(w)
+        local by, out = {}, {}
+        for _, c in ipairs(Claims(w)) do
+            if not c.paid then
+                local who = c.full or c.by
+                local k = Norm(who) or "?"
+                local e = by[k]
+                if not e then e = { full = who, n = 0, copper = 0, t = c.t or 0 }; by[k] = e; out[#out + 1] = e end
+                e.n = e.n + 1
+                e.copper = e.copper + math.floor(w.copper or 0)
+                e.t = math.max(e.t, c.t or 0)
+            end
+        end
+        table.sort(out, function(a, b) return a.t < b.t end)
+        return out
+    end
+    -- All kills in and all paid: nothing more to happen.
+    local function Settled(w) return w ~= nil and not IsOpen(w) and #Debts(w) == 0 end
+    local function ClaimedByMe(w)
+        for _, c in ipairs(Claims(w)) do if IsMe(c.full or c.by) then return true end end
+        return false
+    end
+    -- How it stands, for the lists: open, kills, limit, what you owe, what you're owed (copper), the latest kill.
+    function ns.WantedState(w)
+        local st = { open = IsOpen(w), kills = #Claims(w), limit = Limit(w), last = Last(w), owe = 0, owed = 0, debts = Debts(w) }
+        local mine = ns.WantedMine(w)
+        for _, e in ipairs(st.debts) do
+            if mine and not IsMe(e.full) then st.owe = st.owe + e.copper end
+            if not mine and IsMe(e.full) then st.owed = st.owed + e.copper end
+        end
+        st.settled = not st.open and #st.debts == 0
+        return st
+    end
+    ns.WantedDebts = Debts
     ns.ClaimedByMe = ClaimedByMe
     ns.MyName = MyFull
+    -- A kill claimed: one kill = the earliest wins (then the name), the same on every client; several = each kill
+    -- counts once (claimer + time), the earliest ones up to the limit. True when it was new.
+    local function AddClaim(w, c)
+        if Limit(w) == 1 and not w.claims then
+            local o = w.claimed
+            if o and ((o.t or 0) < c.t or ((o.t or 0) == c.t and Norm(o.full or o.by) <= Norm(c.full or c.by))) then return false end
+            w.claimed = { by = c.by, full = c.full, t = c.t, zone = c.zone }
+            return true
+        end
+        w.claims = w.claims or {}
+        for _, o in ipairs(w.claims) do
+            if Norm(o.full or o.by) == Norm(c.full or c.by) and math.abs((o.t or 0) - (c.t or 0)) <= 2 then
+                if c.paid and not o.paid then o.paid = c.paid; return true end
+                return false
+            end
+        end
+        local new = { by = c.by, full = c.full, t = c.t, zone = c.zone, paid = c.paid }
+        table.insert(w.claims, new)
+        table.sort(w.claims, function(x, y)
+            if (x.t or 0) ~= (y.t or 0) then return (x.t or 0) < (y.t or 0) end
+            return (Norm(x.full or x.by) or "") < (Norm(y.full or y.by) or "")
+        end)
+        while #w.claims > Limit(w) do table.remove(w.claims) end   -- over the limit: the latest kills don't count
+        for _, o in ipairs(w.claims) do if o == new then return true end end
+        return false
+    end
+    -- Paid: a claimer's kills up to a time (nil: all of them).
+    local function PayClaims(w, who, upto)
+        local any = false
+        if w.claims then
+            for _, c in ipairs(w.claims) do
+                if not c.paid and (not who or Same(c.full or c.by, who)) and (not upto or (c.t or 0) <= upto) then c.paid = time(); any = true end
+            end
+        elseif w.claimed and not w.paid and (not who or Same(w.claimed.full or w.claimed.by, who)) then
+            w.paid = time(); any = true
+        end
+        if w.claims and not IsOpen(w) and #Debts(w) == 0 then w.paid = w.paid or time() end
+        return any
+    end
+    local function KillsWords(w) local n = Limit(w) return n > 1 and (" (kill " .. #Claims(w) .. "/" .. n .. ")") or "" end
 
     -- The bounty on this player (still open), or nil. A bounty on just a first name ("Bob") counts for any Bob.
     function ns.Wanted(key)
         if not (key and db and On()) then return end
         local r = db.enemies[key]
         local w = r and r.wanted
-        if w and not w.claimed then return w, r end
+        if w and IsOpen(w) then return w, r end
         local first = key:match("^([^%-]+)%-")
         local fr = first and db.enemies[first]
-        if fr and fr.wanted and not fr.wanted.claimed then return fr.wanted, fr, first end
+        if fr and fr.wanted and IsOpen(fr.wanted) then return fr.wanted, fr, first end
     end
     -- A line for tooltips and lists.
     function ns.WantedLine(w)
         if not w then return "" end
         local rw = ns.WantedReward(w)
-        local s = "|cffffa000WANTED|r" .. (rw and (" |cffffd100" .. rw .. "|r") or "")
+        local s = "|cffffa000WANTED|r" .. (rw and (" |cffffd100" .. rw .. (Limit(w) > 1 and " a kill" or "") .. "|r") or "")
             .. (w.by and ("|cffaaaaaa by " .. Show(w.by) .. "|r") or "") .. (w.note and (" – " .. w.note) or "")
+        if Limit(w) > 1 then
+            local st = ns.WantedState(w)
+            s = s .. "  |cffffd100" .. st.kills .. "/" .. st.limit .. " kills|r"
+            if st.owe > 0 then s = s .. "  |cffff8040· you owe " .. Money(st.owe) .. "|r"
+            elseif st.owed > 0 then s = s .. "  |cffffd100· " .. Show(w.by) .. " owes you " .. Money(st.owed) .. "|r"
+            elseif st.settled then s = s .. "  |cff40ff40· all paid|r" end
+            return s
+        end
         if w.claimed then
             local mine, byMe = ns.WantedMine(w), ClaimedByMe(w)
             s = s .. "  |cff40ff40claimed by " .. (byMe and "you" or Show(w.claimed.by)) .. "|r"
@@ -2870,7 +2967,24 @@ end
         local rw = ns.WantedReward(w) or "?"
         local mine, byMe = ns.WantedMine(w), ClaimedByMe(w)
         tip:AddLine(" ")
-        tip:AddDoubleLine("|cffffa000WANTED|r " .. rw, (mine and "by you" or ("by " .. Show(w.by))) .. ", " .. Ago(w.t), 1, 1, 1, 0.7, 0.7, 0.7)
+        tip:AddDoubleLine("|cffffa000WANTED|r " .. rw .. (Limit(w) > 1 and (" a kill, " .. Limit(w) .. " kills") or ""),
+            (mine and "by you" or ("by " .. Show(w.by))) .. ", " .. Ago(w.t), 1, 1, 1, 0.7, 0.7, 0.7)
+        if Limit(w) > 1 then
+            local claims = Claims(w)
+            if not IsOpen(w) then tip:AddLine("All " .. Limit(w) .. " kills are in.", 0.6, 0.6, 0.6)
+            elseif not w.forever then tip:AddLine("Ends in " .. math.max(0, math.ceil(((w.t or time()) + OPEN_DAYS * 86400 - time()) / 86400)) .. " days", 0.6, 0.6, 0.6) end
+            if w.note then tip:AddLine("\"" .. w.note .. "\"", 1, 0.85, 0.5, true) end
+            for i = #claims, math.max(1, #claims - 5), -1 do
+                local c = claims[i]
+                tip:AddDoubleLine("|cff40ff40Kill " .. i .. ":|r " .. (IsMe(c.full or c.by) and "you" or Show(c.by)) .. (c.zone and ("  |cff999999" .. c.zone .. "|r") or ""),
+                    (c.paid and "|cff40ff40paid|r  " or "") .. Ago(c.t), 1, 1, 1, 0.7, 0.7, 0.7)
+            end
+            for _, e in ipairs(Debts(w)) do
+                if mine and not IsMe(e.full) then tip:AddLine("You owe " .. Money(e.copper) .. " to " .. Show(e.full) .. " (" .. e.n .. (e.n == 1 and " kill" or " kills") .. ") – a Pay button shows at the mailbox.", 1, 0.5, 0.25, true)
+                elseif not mine and IsMe(e.full) then tip:AddLine(Show(w.by) .. " owes you " .. Money(e.copper) .. " (" .. e.n .. (e.n == 1 and " kill" or " kills") .. ").", 1, 0.82, 0, true) end
+            end
+            return
+        end
         if not w.claimed then
             tip:AddLine(w.forever and "No end date – until it's claimed or taken down"
                 or ("Ends in " .. math.max(0, math.ceil(((w.t or time()) + OPEN_DAYS * 86400 - time()) / 86400)) .. " days if nobody claims it"), 0.6, 0.6, 0.6)
@@ -2951,16 +3065,21 @@ end
         local w = r.wanted
         local rk = key .. (w.t or 0)
         if not fromSync then recent[rk] = time() end
-        local c = w.claimed
+        local c = Limit(w) == 1 and w.claimed or nil   -- (several kills: the claims go one by one, as R)
         local f = { VER, "A", key, r.name or key, r.class or "", (w.copper and tostring(w.copper)) or w.reward or "", "",
-            w.by or MyFull(), w.t or 0, c and c.by or "", c and c.t or 0, c and c.full or "", w.paid and tostring(w.paid) or "0",
-            c and (Clean(c.zone, 40) or "") or "", w.forever and 1 or 0 }
+            w.by or MyFull(), w.t or 0, c and c.by or "", c and c.t or 0, c and c.full or "", (c and w.paid) and tostring(w.paid) or "0",
+            c and (Clean(c.zone, 40) or "") or "", w.forever and 1 or 0, Limit(w) }
         local room = 250 - #table.concat(f, SEP)
         local note = w.note or ""
         if #note > room then note = room > 0 and (note:sub(1, room):gsub("[\192-\255][\128-\191]*$", "")) or "" end
         f[7] = note
         Send(f, fromSync and rk or nil)
         if fromSync then recent[rk] = recent[rk] or 0 end
+        if w.claims and fromSync then   -- the kills so far, each with whether it's paid
+            for _, cl in ipairs(w.claims) do
+                Send({ VER, "R", key, cl.full or cl.by, cl.t or 0, w.t or 0, Clean(cl.zone, 40) or "", cl.paid and 1 or 0 })
+            end
+        end
     end
 
     local function ForeignCounts(poster)
@@ -2978,8 +3097,9 @@ end
 
     -- reward: copper, or text like "50g 20s"; a bounty needs one. forever: no end date (stays until claimed or
     -- taken down).
-    function ns.SetWanted(key, name, reward, note, forever)
+    function ns.SetWanted(key, name, reward, note, forever, kills)
         if not key then return false end
+        kills = math.max(1, math.min(MAX_KILLS, math.floor(tonumber(kills) or 1)))
         key, name = ns.ProperName(key), ns.ProperName(name)   -- "bob-smith" is Bob-Smith
         if not ValidKey(key) then
             local why = "That isn't a player name WatchX can use."
@@ -2992,26 +3112,28 @@ end
         end
         copper = math.min(copper, 1e10)
         local old = db.enemies[key] and db.enemies[key].wanted
-        if old and old.claimed and not old.paid then
+        if old and #Debts(old) > 0 then
             local why = "Claimed and not paid yet – settle that first."
             Print("The bounty on " .. (db.enemies[key].name or key) .. ": " .. why) return false, why
         end
-        if old and not old.claimed and not ns.WantedMine(old) then
+        if old and IsOpen(old) and not ns.WantedMine(old) then
             local why = Show(old.by) .. " has a bounty on them – only they can change it."
             Print(why) return false, why
         end
         local r = ns.EnemyRecord(key, name)
-        local fresh = not old or old.copper ~= copper   -- (a new bounty or a new reward is said in guild; a note isn't)
-        r.wanted = { copper = copper, note = Clean(note, MAX_NOTE), by = MyFull(), t = time(), forever = forever and true or nil }
+        local fresh = not old or old.copper ~= copper or Limit(old) ~= kills   -- (new, or a new reward: said in guild; a note isn't)
+        r.wanted = { copper = copper, note = Clean(note, MAX_NOTE), by = MyFull(), t = time(), forever = forever and true or nil,
+            kills = kills > 1 and kills or nil }
         r.wantedHide = nil
         local gone = Gone(key)
         gone[key] = nil
         SendAdd(key, r)
-        Print("|cffffa000WANTED|r posted: " .. r.name .. " – " .. Money(copper)
+        local per = kills > 1 and (" a kill, " .. kills .. " kills") or ""
+        Print("|cffffa000WANTED|r posted: " .. r.name .. " – " .. Money(copper) .. per
             .. (r.wanted.note and (" (" .. r.wanted.note .. ")") or "") .. " |cffaaaaaa– sent to your guild and friends|r")
         if fresh then
-            Announce("WANTED: " .. r.name .. " – " .. Gold(copper) .. " reward" .. (r.wanted.note and (" (" .. r.wanted.note .. ")") or "")
-                .. ". Kill them and claim it!")
+            Announce("WANTED: " .. r.name .. " – " .. Gold(copper) .. (kills > 1 and (" per kill, up to " .. kills .. " kills") or " reward")
+                .. (r.wanted.note and (" (" .. r.wanted.note .. ")") or "") .. ". Kill them and claim it!")
         end
         Changed()
         return true
@@ -3048,26 +3170,34 @@ end
         local sub = Plain(GetSubZoneText and GetSubZoneText())
         zone = type(zone) == "string" and zone ~= "" and zone or nil
         if zone and type(sub) == "string" and sub ~= "" and sub ~= zone then zone = sub .. ", " .. zone end
-        w.claimed = { by = MyFull(), full = MyFull(), t = time(), zone = Clean(zone, 40) }
-        Send({ VER, "C", key, w.claimed.by, w.claimed.t, w.t or 0, w.claimed.full, w.claimed.zone or "" })
+        local c = { by = MyFull(), full = MyFull(), t = time(), zone = Clean(zone, 40) }
+        if not AddClaim(w, c) then return end
+        if ns.WantedMine(w) then PayClaims(w, MyFull()) end   -- your own kill on your own bounty: nothing to pay
+        Send({ VER, "C", key, c.by, c.t, w.t or 0, c.full, c.zone or "" })
         local mine = ns.WantedMine(w)
-        if mine then Announce("BOUNTY CLAIMED: " .. (r.name or key) .. " was killed by " .. Show(w.claimed.by) .. (zone and (" in " .. zone) or "")
-            .. " – " .. RewardWords(w) .. " reward.") end
+        if mine then Announce("BOUNTY CLAIMED: " .. (r.name or key) .. " was killed by " .. Show(c.by) .. (zone and (" in " .. zone) or "")
+            .. KillsWords(w) .. " – " .. RewardWords(w) .. " reward.") end
         Card("bountyKill", r.name or key, ns.WantedReward(w), mine and "yours" or ("from " .. Show(w.by)),
-            "Bounty claimed: " .. (r.name or key) .. (zone and (" in " .. zone) or "") .. (ns.WantedReward(w) and (" – " .. ns.WantedReward(w)) or "")
+            "Bounty claimed" .. KillsWords(w) .. ": " .. (r.name or key) .. (zone and (" in " .. zone) or "") .. (ns.WantedReward(w) and (" – " .. ns.WantedReward(w)) or "")
             .. (mine and "" or (" from " .. Show(w.by) .. " (they pay by mail)")), r.class)
         Changed()
     end
 
     -- Paid (by mail, or "Mark paid" after a trade): only the one who put it up.
-    function ns.MarkPaid(key)
+    function ns.MarkPaid(key, who)
         local r = key and db.enemies[key]
         local w = r and r.wanted
-        if not (w and w.claimed and not w.paid and ns.WantedMine(w)) then return false end
-        w.paid = time()
-        Send({ VER, "P", key, w.by or MyFull(), w.t or 0 })
-        Print("|cff40ff40Bounty paid|r: " .. Show(w.claimed.full or w.claimed.by) .. " got " .. (ns.WantedReward(w) or "it") .. " for " .. (r.name or key) .. ".")
-        Announce("BOUNTY PAID: " .. Show(w.claimed.full or w.claimed.by) .. " got " .. RewardWords(w) .. " for " .. (r.name or key) .. ".")
+        if not (w and ns.WantedMine(w)) then return false end
+        local debts = Debts(w)
+        local e
+        for _, x in ipairs(debts) do if not who or Same(x.full, who) then e = x; break end end
+        if not e then return false end
+        local upto = time()
+        PayClaims(w, e.full, upto)
+        Send({ VER, "P", key, w.by or MyFull(), w.t or 0, e.full, upto })
+        local kills = e.n > 1 and (" (" .. e.n .. " kills)") or ""
+        Print("|cff40ff40Bounty paid|r: " .. Show(e.full) .. " got " .. Money(e.copper) .. kills .. " for " .. (r.name or key) .. ".")
+        Announce("BOUNTY PAID: " .. Show(e.full) .. " got " .. Gold(e.copper) .. kills .. " for " .. (r.name or key) .. ".")
         Changed()
         return true
     end
@@ -3076,7 +3206,11 @@ end
         local out = {}
         for key, r in pairs(db and db.enemies or {}) do
             local w = r.wanted
-            if w and w.claimed and not w.paid and ClaimedByMe(w) and not ns.WantedMine(w) then out[#out + 1] = { key = key, r = r, w = w } end
+            if w and not ns.WantedMine(w) then
+                for _, e in ipairs(Debts(w)) do
+                    if IsMe(e.full) then out[#out + 1] = { key = key, r = r, w = w, copper = e.copper, n = e.n } end
+                end
+            end
         end
         return out
     end
@@ -3085,9 +3219,13 @@ end
         local out = {}
         for key, r in pairs(db and db.enemies or {}) do
             local w = r.wanted
-            if w and w.claimed and not w.paid and ns.WantedMine(w) and not ClaimedByMe(w) then out[#out + 1] = { key = key, r = r, w = w } end
+            if w and ns.WantedMine(w) then
+                for _, e in ipairs(Debts(w)) do
+                    if not IsMe(e.full) then out[#out + 1] = { key = key, r = r, w = w, to = e.full, copper = e.copper, n = e.n, t = e.t } end
+                end
+            end
         end
-        table.sort(out, function(a, b) return (a.w.claimed.t or 0) < (b.w.claimed.t or 0) end)
+        table.sort(out, function(a, b) return (a.t or 0) < (b.t or 0) end)
         return out
     end
 
@@ -3109,9 +3247,11 @@ end
             local r = db.enemies[key]
             local w = r and r.wanted
             recent[key .. t] = now
+            local kills = Int(f[14], 1, MAX_KILLS) or 1
             if w then
                 if (w.t or 0) > t then return end                       -- we know a newer one
                 if (w.t or 0) == t then
+                    if kills > 1 then w.kills = kills; return end       -- (its kills come as R messages)
                     -- the same bounty: a claim or payment we missed (never on yours, never a claim in your name)
                     if not ns.WantedMine(w) then
                         local cby = Clean(f[8], 60)
@@ -3125,7 +3265,7 @@ end
                     return
                 end
                 -- a newer one: only from the same poster, and never over a claim that isn't paid
-                if not Same(by, w.by) or (w.claimed and not w.paid) then return end
+                if not Same(by, w.by) or #Debts(w) > 0 then return end
             else
                 local all, his = ForeignCounts(by)
                 if all >= FOREIGN_MAX or his >= PER_POSTER_MAX then return end
@@ -3141,9 +3281,9 @@ end
             end
             local cp = Int(f[4], 1, 1e10)
             r.wanted = { copper = cp, reward = (not cp) and Clean(f[4], MAX_REWARD) or nil, note = Clean(f[5], MAX_NOTE),
-                by = by, t = t, forever = forever or nil }
+                by = by, t = t, forever = forever or nil, kills = kills > 1 and kills or nil }
             local cby = Clean(f[8], 60)
-            if cby and not IsMe(cby) then
+            if cby and not IsMe(cby) and kills == 1 then
                 r.wanted.claimed = { by = cby, t = Int(f[9], 1, now + 300) or t, full = Clean(f[10], 60) or cby, zone = Clean(f[12], 40) }
                 local pt = f[11] ~= "0" and f[11] ~= "" and (Int(f[11], 1, now + 300) or (f[11] == "1" and now)) or nil
                 if pt then r.wanted.paid = pt end
@@ -3151,7 +3291,8 @@ end
             if now - t < 600 and not r.wanted.claimed then
                 Card("bountyNew", r.name or key, ns.WantedReward(r.wanted), "from " .. Show(by),
                     "WANTED from " .. Show(by) .. ": " .. (r.name or key)
-                    .. (ns.WantedReward(r.wanted) and (" – " .. ns.WantedReward(r.wanted)) or "") .. (r.wanted.note and (" (" .. r.wanted.note .. ")") or ""), r.class)
+                    .. (ns.WantedReward(r.wanted) and (" – " .. ns.WantedReward(r.wanted) .. (kills > 1 and (" a kill, " .. kills .. " kills") or "")) or "")
+                    .. (r.wanted.note and (" (" .. r.wanted.note .. ")") or ""), r.class)
             end
             Changed()
         elseif op == "D" then
@@ -3167,29 +3308,41 @@ end
         elseif op == "C" then
             local r = db.enemies[key]
             local w = r and r.wanted
-            if not w or w.paid or Int(f[4], 0, now + 300) ~= (w.t or 0) or IsMe(from) then return end
+            if not w or Settled(w) or Int(f[4], 0, now + 300) ~= (w.t or 0) or IsMe(from) then return end
             local ct = Int(f[3], 1, now + 300) or now
-            -- two in a group both claim: the earliest kill wins (then the name), the same on every client
-            if w.claimed and ((w.claimed.t or 0) < ct or ((w.claimed.t or 0) == ct and Norm(w.claimed.full or w.claimed.by) <= Norm(from))) then return end
-            w.claimed = { by = from, full = from, t = ct, zone = Clean(f[6], 40) }   -- the claimer is the sender, always
-            local where = w.claimed.zone and (" in " .. w.claimed.zone) or ""
+            -- the claimer is the sender, always. One kill: the earliest wins (then the name), the same on every
+            -- client; several: each kill counts once, the earliest up to the limit
+            local c = { by = from, full = from, t = ct, zone = Clean(f[6], 40) }
+            if not AddClaim(w, c) then return end
+            local where = c.zone and (" in " .. c.zone) or ""
             if ns.WantedMine(w) then
-                Announce("BOUNTY CLAIMED: " .. Show(from) .. " killed " .. (r.name or key) .. where .. " – " .. RewardWords(w) .. " reward.")
+                Announce("BOUNTY CLAIMED: " .. Show(from) .. " killed " .. (r.name or key) .. where .. KillsWords(w) .. " – " .. RewardWords(w) .. " reward.")
                 Card("bountyOwe", r.name or key, ns.WantedReward(w), "to " .. Show(from),
-                    Show(from) .. " killed " .. (r.name or key) .. where .. " and claimed your bounty – you owe "
+                    Show(from) .. " killed " .. (r.name or key) .. where .. KillsWords(w) .. " and claimed your bounty – you owe "
                     .. (ns.WantedReward(w) or "the reward") .. ". Pay it at a mailbox.", r.class)
             else
                 Card("bountyKill", r.name or key, ns.WantedReward(w), "by " .. Show(from),
-                    "Bounty claimed: " .. (r.name or key) .. " by " .. Show(from) .. where
+                    "Bounty claimed" .. KillsWords(w) .. ": " .. (r.name or key) .. " by " .. Show(from) .. where
                     .. (ns.WantedReward(w) and (" – " .. ns.WantedReward(w)) or "") .. (w.by and (", from " .. Show(w.by)) or ""), r.class)
             end
             Changed()
+        elseif op == "R" then
+            local r = db.enemies[key]
+            local w = r and r.wanted
+            if not w or ns.WantedMine(w) or Limit(w) == 1 or Int(f[4], 0, now + 300) ~= (w.t or 0) then return end
+            local who = Clean(f[2], 60)
+            if not who or IsMe(who) then return end
+            local c = { by = who, full = who, t = Int(f[3], 1, now + 300) or now, zone = Clean(f[5], 40), paid = f[6] == "1" and now or nil }
+            if AddClaim(w, c) then Changed() end
         elseif op == "P" then
             local r = db.enemies[key]
             local w = r and r.wanted
-            if w and w.claimed and not w.paid and Same(from, w.by) and Int(f[3], 0, now + 300) == (w.t or 0) then
-                w.paid = now
-                if ClaimedByMe(w) then
+            if w and #Debts(w) > 0 and Same(from, w.by) and Int(f[3], 0, now + 300) == (w.t or 0) then
+                local who = Clean(f[4], 60)
+                local mineBefore = false
+                for _, e in ipairs(Debts(w)) do if IsMe(e.full) and (not who or Same(who, e.full)) then mineBefore = true end end
+                PayClaims(w, who, Int(f[5], 1, now + 300))
+                if mineBefore then
                     Card("bountyPaid", r.name or key, ns.WantedReward(w), "from " .. Show(w.by),
                         Show(w.by) .. " paid you " .. (ns.WantedReward(w) or "the bounty") .. " for " .. (r.name or key) .. " – check your mail.", r.class)
                 end
@@ -3212,6 +3365,14 @@ end
         end
         for key, g in pairs(type(db.wantedGone) == "table" and db.wantedGone or {}) do
             if g.mine and now - (g.at or 0) < GONE_DAYS * 86400 then Send({ VER, "D", key, MyFull(), now }) end
+        end
+        for key, r in pairs(db.enemies) do   -- your kills not paid yet: again (the poster may have been away)
+            local w = r.wanted
+            if w and not ns.WantedMine(w) then
+                for _, c in ipairs(Claims(w)) do
+                    if not c.paid and IsMe(c.full or c.by) then Send({ VER, "C", key, c.by, c.t or 0, w.t or 0, c.full or c.by, c.zone or "" }) end
+                end
+            end
         end
     end
 
@@ -3263,9 +3424,11 @@ end
         local gone = Gone("")
         for key, r in pairs(db.enemies) do
             local w = r.wanted
-            if w and ((w.paid and now - w.paid > CLAIMED_DAYS * 86400)
-                    or (w.claimed and not w.paid and now - (w.claimed.t or 0) > OPEN_DAYS * 86400)
-                    or (not w.claimed and not w.forever and now - (w.t or 0) > OPEN_DAYS * 86400)) then
+            local last = w and Last(w)
+            local debts = w and #Debts(w) or 0
+            if w and ((Settled(w) and now - (w.paid or (last and last.t) or 0) > CLAIMED_DAYS * 86400)
+                    or (debts > 0 and now - ((last and last.t) or 0) > OPEN_DAYS * 86400)
+                    or (debts == 0 and IsOpen(w) and not w.forever and now - (w.t or 0) > OPEN_DAYS * 86400)) then
                 gone[key] = { t = w.t or now, at = now, mine = ns.WantedMine(w) or nil }
                 r.wanted = nil
             end
@@ -3292,28 +3455,31 @@ end
             payBtn:SetScript("OnClick", function(self) ns.Safe("wanted", function()
                 local r = self.key and db.enemies[self.key]
                 local w = r and r.wanted
-                if not (w and w.claimed and not w.paid and ns.WantedMine(w)) then UpdatePayButton() return end
-                local to = w.claimed.full or w.claimed.by
+                local e
+                for _, x in ipairs(w and ns.WantedMine(w) and Debts(w) or {}) do if Same(x.full, self.to) then e = x end end
+                if not e then UpdatePayButton() return end
+                local to = e.full
                 StaticPopupDialogs["WATCHX_PAYBOUNTY"] = StaticPopupDialogs["WATCHX_PAYBOUNTY"] or {
                     button1 = ACCEPT or "Send", button2 = CANCEL or "Cancel",
                     timeout = 0, whileDead = true, hideOnEscape = true,
                 }
                 local d = StaticPopupDialogs["WATCHX_PAYBOUNTY"]
-                d.text = "Send %s by mail to |cffffd100" .. Show(to) .. "|r for the bounty on " .. (r.name or self.key) .. "?"
+                d.text = "Send %s by mail to |cffffd100" .. Show(to) .. "|r for the bounty on " .. (r.name or self.key)
+                    .. (e.n > 1 and (" (" .. e.n .. " kills)") or "") .. "?"
                 d.OnAccept = function() ns.Safe("wanted", function()
                     if not (SetSendMailMoney and SendMail) then Print("Mail can't be sent from here.") return end
-                    local money = math.floor(w.copper or 0)
+                    local money = math.floor(e.copper or 0)
                     if GetMoney and money > (tonumber(Plain(GetMoney())) or 0) then Print("You don't have " .. Money(money) .. ".") return end
                     if not SetSendMailMoney(money) then Print("The game didn't take the money for the mail.") return end
-                    pending = self.key
-                    SendMail(to, Subject(self.key), "WatchX bounty on " .. (r.name or self.key) .. ".")
+                    pending = { key = self.key, to = to }
+                    SendMail(to, Subject(self.key), "WatchX bounty on " .. (r.name or self.key) .. (e.n > 1 and (", " .. e.n .. " kills") or "") .. ".")
                 end) end
-                StaticPopup_Show("WATCHX_PAYBOUNTY", Money(w.copper or 0))
+                StaticPopup_Show("WATCHX_PAYBOUNTY", Money(e.copper or 0))
             end) end)
         end
         local o = owed[1]
-        payBtn.key = o.key
-        payBtn:SetText("Pay bounty: " .. Show(o.w.claimed.full or o.w.claimed.by) .. " – " .. (ns.WantedReward(o.w) or "?")
+        payBtn.key, payBtn.to = o.key, o.to
+        payBtn:SetText("Pay bounty: " .. Show(o.to) .. " – " .. Money(o.copper) .. (o.n > 1 and (" (" .. o.n .. " kills)") or "")
             .. (#owed > 1 and ("  (+" .. (#owed - 1) .. ")") or ""))
         payBtn:Show()
     end
@@ -3342,7 +3508,7 @@ end
                     local due = ns.OwedToMe()
                     if #due > 0 then
                         local names = {}
-                        for i = 1, math.min(3, #due) do names[i] = Show(due[i].w.by) .. " " .. (ns.WantedReward(due[i].w) or "") end
+                        for i = 1, math.min(3, #due) do names[i] = Show(due[i].w.by) .. " " .. Money(due[i].copper or 0) end
                         Print("|cffffd100Owed to you:|r " .. table.concat(names, ", ") .. (#due > 3 and (" and " .. (#due - 3) .. " more") or "")
                             .. " |cffaaaaaa(History > Wanted)|r")
                     end
@@ -3354,7 +3520,7 @@ end
             if event == "MAIL_CLOSED" then pending = nil end
             ns.Safe("wanted", UpdatePayButton)
         elseif event == "MAIL_SEND_SUCCESS" then
-            if pending then ns.MarkPaid(pending); pending = nil end
+            if pending then ns.MarkPaid(pending.key, pending.to); pending = nil end
             ns.Safe("wanted", UpdatePayButton)
         elseif event == "MAIL_FAILED" then
             if pending then Print("|cffff6060The bounty mail wasn't sent.|r"); pending = nil end
