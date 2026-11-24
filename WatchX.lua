@@ -1506,6 +1506,7 @@ local function ReadAuras()
                 break
             end
             name, count, expires, sid = Plain(name), Plain(count), Plain(expires), Plain(sid)
+            if name == nil and sid == nil then found.unreadable = true end   -- there, but hidden (secret): an unsure read
             if filter == "HELPFUL" and type(name) == "string" and name:lower():find("campfire", 1, true) then
                 found.campfire = true   -- e.g. Welcoming Campfire: there's a fire close by
             end
@@ -1820,8 +1821,10 @@ function ns.QuietHere()
 end
 
 local function CheckBoosts(now)
-    -- right after a loading screen auras and bags can read empty for a moment: no news from that
+    -- right after a loading screen auras and bags can read empty for a moment: no news from that; nor from a fight
+    -- (buffs can read hidden there): it's compared with the last good look afterwards
     if bagState.loadingUntil and GetTime() < bagState.loadingUntil then return end
+    if now.unsure then return end
     local was = lastBoost
     lastBoost = now
     if not was or db.levelWarn == false then return end
@@ -1857,11 +1860,26 @@ local function CheckBoosts(now)
         if not pendingWarn.fed then pendingWarn.food = "You've used your last XP food – cook or buy more." end
         now.foodOut = nil
     end
-    if gone("rested") then pendingWarn.bag = "Well-Rested (Sleeping Bag) has run out." end
-    if gone("boost") and now.lowRested then pendingWarn.tent = "Camp Tent works again – your rested is under 5%." end
+    -- gone only when it stays gone for a while (a new stack or a renewal can take it off for a moment)
+    local G = ns.boostGone or {}
+    ns.boostGone = G
+    for _, k in ipairs({ "rested", "boost" }) do
+        if now[k] then G[k] = nil elseif was[k] and not G[k] then G[k] = GetTime() end
+    end
+    if G.rested and GetTime() - G.rested >= 15 then G.rested = nil; pendingWarn.bag = "Well-Rested (Sleeping Bag) has run out." end
+    if G.boost and GetTime() - G.boost >= 15 then
+        G.boost = nil
+        if now.lowRested then pendingWarn.tent = "Camp Tent works again – your rested is under 5%." end
+    end
     if gone("bagCd") and not now.rested then pendingWarn.bagReady = "Your Cozy Sleeping Bag is ready again." end
     if InCombatLockdown() then return end
     if ns.QuietHere() then wipe(pendingWarn) return end   -- in town: nothing to say
+    -- only what's still true now (it may have come back since it was noted)
+    if now.fed or now.eating then pendingWarn.fed = nil end
+    if now.rested then pendingWarn.bag = nil end
+    if now.boost then pendingWarn.tent = nil end
+    if now.bagCd then pendingWarn.bagReady = nil end
+    if (now.food or 0) > 0 then pendingWarn.food = nil end
     for k, msg in pairs(pendingWarn) do
         Warn(msg)
         pendingWarn[k] = nil
@@ -2078,7 +2096,8 @@ end)()
 if CreateFrame then
     local bagEvents = CreateFrame("Frame")
     for _, e in ipairs({ "BAG_UPDATE_DELAYED", "BAG_UPDATE", "PLAYER_ENTERING_WORLD", "TOYS_UPDATED",
-                         "PLAYER_LEVEL_UP", "PLAYER_XP_UPDATE", "UPDATE_EXHAUSTION", "GET_ITEM_INFO_RECEIVED" }) do
+                         "PLAYER_LEVEL_UP", "PLAYER_XP_UPDATE", "UPDATE_EXHAUSTION", "GET_ITEM_INFO_RECEIVED",
+                         "PLAYER_REGEN_ENABLED" }) do
         pcall(bagEvents.RegisterEvent, bagEvents, e)
     end
     -- your auras only (all units' would wake this for every nameplate in a busy city)
@@ -2093,6 +2112,9 @@ if CreateFrame then
             if unit == "player" and ns.OnCampCast then pcall(ns.OnCampCast, spellID) end
         elseif event == "UNIT_AURA" then
             if unit == "player" then statusCache.dirty = true end
+        elseif event == "PLAYER_REGEN_ENABLED" then
+            ns.combatEnd = GetTime()
+            if C_Timer then C_Timer.After(3.2, function() statusCache.dirty = true end) end   -- a good look then
         elseif event == "PLAYER_XP_UPDATE" or event == "UPDATE_EXHAUSTION" or event == "PLAYER_LEVEL_UP" then
             statusCache.dirty = true
         else
@@ -2191,9 +2213,12 @@ ComputeLevelStatus = function()
     local level = tonumber(Plain(UnitLevel("player"))) or 0
     if level <= 0 or level >= ns.MaxLevel() then return nil end
     ReadBags()
-    if not InCombatLockdown() or not auraCache.found then
+    -- in a fight (and a moment either side of it) buffs can read hidden: the last good look is used then, and a
+    -- look that couldn't make out every buff never replaces a good one
+    local unsure = ns.AurasUnsure()
+    if not unsure or not auraCache.found then
         local ok, found = pcall(ReadAuras)
-        if ok then auraCache.found, auraCache.at = found, GetTime() end
+        if ok and not (found.unreadable and auraCache.found) then auraCache.found, auraCache.at = found, GetTime() end
     end
     local passed = GetTime() - auraCache.at
     local function aura(id)
@@ -2204,6 +2229,7 @@ ComputeLevelStatus = function()
         return { left = left, stacks = a.stacks }
     end
     local rows, seen = {}, {}
+    seen.unsure = (unsure or (auraCache.found and auraCache.found.unreadable)) and true or nil   -- no news from this look
     seen.eating = auraCache.found and auraCache.found.eating or nil
     local name, icon, slot, use, options
     local function add(state, text, tip, timer, count)
@@ -2367,6 +2393,7 @@ local function ReadBuffs()
             break
         end
         name, caster = Plain(name), Plain(caster)
+        if name == nil and Plain(sid) == nil then out.unreadable = true end   -- there, but hidden: an unsure read
         if type(name) == "string" and name ~= "" then
             out[#out + 1] = { name = name, icon = Plain(icon), dur = tonumber(Plain(dur)) or 0,
                 expires = tonumber(Plain(expires)) or 0, caster = type(caster) == "string" and caster or nil,
@@ -2428,7 +2455,14 @@ end
 -- A buff that's gone at its time waits a few seconds before the warning: camp buffs (Welcoming Campfire and
 -- the camp features) end and come straight back while you sit by the fire. One that comes back like that renews
 -- by itself: no "runs out in" warnings for it this session.
-local BUFF_GRACE = 6
+local BUFF_GRACE = 10
+
+-- Can WatchX trust a look at your buffs right now? Not in a fight, nor in the first seconds after one (buffs can
+-- read hidden then, and an empty look would say everything ran out). On ns: the main chunk is at the locals limit.
+function ns.AurasUnsure()
+    if InCombatLockdown() or Plain(UnitAffectingCombat("player")) == true then return true end
+    return ns.combatEnd ~= nil and GetTime() - ns.combatEnd < 3
+end
 local buffPendingGone, buffSelfRenew = {}, {}
 
 local function BuffGoneNow(k, t, now)
@@ -2440,10 +2474,11 @@ function ns.CheckBuffs()
     if db.buffWarn == false then wipe(buffTracked); wipe(buffPendingGone) return end
     if Plain(UnitIsDeadOrGhost("player")) == true then wipe(buffTracked); wipe(buffPendingGone) return end   -- dying took them
     local now, soon = GetTime(), tonumber(db.buffSoon) or 60
-    local fight = InCombatLockdown()
+    local fight = ns.AurasUnsure()
     if not fight then
         local ok, list = pcall(ReadBuffs)
-        if ok then
+        if ok and list.unreadable then fight = true end   -- couldn't make them all out: no conclusions this time
+        if ok and not fight then
             local here = {}
             for _, a in ipairs(list) do
                 local g = a.expires > 0 and ns.BuffGroup(a)
@@ -2478,14 +2513,14 @@ function ns.CheckBuffs()
     for k, t in pairs(buffTracked) do
         local left = t.expires - now
         if left <= 0 then
-            if fight then BuffGoneNow(k, t, now) end   -- can't see it in a fight: by the clock it's gone
+            -- (in a fight it can't be seen: it may have been renewed – the first good look after the fight decides)
         elseif not t.soon and soon > 0 and left <= soon and t.dur > soon + 5 and not (buffSelfRenew[k] and now < buffSelfRenew[k]) then
             t.soon = true
             if not ns.QuietHere() then Warn(BuffMsg(t, left)) end
         end
     end
     for k, p in pairs(buffPendingGone) do
-        if now - p.at >= BUFF_GRACE then
+        if now - p.at >= BUFF_GRACE and not fight then   -- still gone in a look it can trust
             buffPendingGone[k] = nil
             if db.buffGone ~= false and not ns.QuietHere() then Warn(BuffMsg(p.t)) end
         end

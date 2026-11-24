@@ -5527,12 +5527,19 @@ do (function()
             local t = line.leftText
             if type(t) == "string" and not (issecretvalue and issecretvalue(t)) then
                 t = t:lower():gsub(",", "")
+                -- returns: per second, one tick's amount, seconds between ticks
                 local n = tonumber(t:match("(%d+) " .. what .. " per second"))
-                if n then return n end
+                if n then return n, n, 1 end
                 local m, sec = t:match("(%d+) " .. what .. " every (%d+%.?%d*) sec")
-                if m then return tonumber(m) / math.max(1, tonumber(sec)) end
+                if m then
+                    sec = math.max(1, tonumber(sec))
+                    return tonumber(m) / sec, tonumber(m), sec
+                end
                 local tot, over = t:match("(%d+) " .. what .. " over (%d+%.?%d*) sec")
-                if tot then return tonumber(tot) / math.max(1, tonumber(over)), true end
+                if tot then
+                    local ps = tonumber(tot) / math.max(1, tonumber(over))
+                    return ps, ps, 1
+                end
             end
         end
     end
@@ -5696,6 +5703,23 @@ do (function()
         t.info = t.frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
         t.info:SetPoint("TOP", t, "BOTTOM", 0, -6)
         Big(t.info, 10)
+        -- a tick: "+151" rises from above the icon and fades, each time the food or drink gives (the game's own
+        -- animation – no Lua per frame)
+        t.tick = t.frame:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+        t.tick:SetPoint("BOTTOM", t, "TOP", 0, 24)
+        Big(t.tick, 13)
+        t.tick:SetAlpha(0)
+        if t.tick.CreateAnimationGroup then
+            local ag = t.tick:CreateAnimationGroup()
+            local up = ag:CreateAnimation("Translation")
+            if up.SetOffset then up:SetOffset(0, 18) end
+            up:SetDuration(0.9)
+            local fade = ag:CreateAnimation("Alpha")
+            fade:SetFromAlpha(1); fade:SetToAlpha(0)
+            fade:SetStartDelay(0.5); fade:SetDuration(0.4)
+            if ag.SetToFinalAlpha then ag:SetToFinalAlpha(true) end
+            t.tickAnim = ag
+        end
         return t
     end
 
@@ -5757,11 +5781,39 @@ do (function()
 
     -- One tile: the power it restores (health or mana), what's left of the buff, and how far it'll get you.
     local function Paint(r, a, what, label, color)
-        local cur = what == "mp" and N(UnitPower("player", 0)) or N(UnitHealth("player"))
-        local max = what == "mp" and N(UnitPowerMax("player", 0)) or N(UnitHealthMax("player"))
+        local cur, max   -- (not "a and b or c": mana that can't be read must not turn into health)
+        if what == "mp" then cur, max = N(UnitPower("player", 0)), N(UnitPowerMax("player", 0))
+        else cur, max = N(UnitHealth("player")), N(UnitHealthMax("player")) end
         r.icon:SetTexture(what == "mp" and WATER or FOOD)
         r.time:SetText(a.left and ("%.1f"):format(a.left) or "")
-        if not (cur and max and max > 0) then r.pct:SetText(""); r.info:SetText(""); r.fill:Hide(); r.fillTop:Hide() return end
+        -- what the buff gives, from its own text (read once, then kept with it): per second, a tick, its interval
+        local tk
+        if a.src and a.index then
+            local k = "tick" .. label
+            if a.src[k] == nil then
+                local ps, amount, period = RateFromText(a.index, label)
+                a.src[k] = ps and { ps = ps, amount = amount, period = period } or false
+            end
+            tk = a.src[k] or nil
+        end
+        -- the tick over the icon: one "+N" per interval while it lasts
+        local id = a.src or a
+        if r.tickFor ~= id then r.tickFor, r.nextTick = id, nil end
+        if tk and a.left and a.left > 0 and r.tick then
+            local now = GetTime()
+            if not r.nextTick or now >= r.nextTick then
+                r.nextTick = (r.nextTick and now - r.nextTick < tk.period) and (r.nextTick + tk.period) or (now + tk.period)
+                r.tick:SetText(color .. "+" .. Short(tk.amount) .. "|r")
+                r.tick:SetAlpha(1)
+                if r.tickAnim then r.tickAnim:Stop(); r.tickAnim:Play() end
+            end
+        end
+        if not (cur and max and max > 0) then
+            -- your health / mana can't be read here: what's still to come, from the buff's own words
+            r.pct:SetText(""); r.fill:Hide(); r.fillTop:Hide()
+            r.info:SetText((tk and a.left) and (color .. "+" .. Short(tk.ps * a.left) .. "|r |cffccccccto come|r") or "")
+            return
+        end
         r.pct:SetText(color .. math.floor(cur / max * 100 + 0.5) .. "%|r")
         local fr, fg, fb = (what == "mp") and 0.15 or 0.15, (what == "mp") and 0.45 or 0.8, (what == "mp") and 1 or 0.2
         r.fill:SetVertexColor(fr, fg, fb, 0.45)
@@ -5772,14 +5824,8 @@ do (function()
         if not s then s = { v = cur, t = GetTime() }; seen[what] = s end
         if cur < s.v then s.v, s.t = cur, GetTime() end   -- took damage / cast: measure from here
         -- per second ("X over Y sec" is divided already); read from the buff's text once, then kept with it
-        local rate
-        if a.src and a.index then
-            local k = "rate" .. label
-            if a.src[k] == nil then a.src[k] = RateFromText(a.index, label) or false end
-            rate = a.src[k] or nil
-        elseif a.index then
-            rate = RateFromText(a.index, label)
-        end
+        local rate = tk and tk.ps
+        if not rate and not a.src and a.index then rate = RateFromText(a.index, label) end
         if not rate and GetTime() - s.t >= 2 then rate = (cur - s.v) / (GetTime() - s.t) end
         local missing = max - cur
         -- eating with damage over time on you: will the food keep you alive?

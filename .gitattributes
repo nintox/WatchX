@@ -3,3 +3,5 @@
 *.sh      text eol=lf
 *.command text eol=lf
 *.lua     text eol=lf
+# third-party libraries: kept byte for byte as they came
+Libs/** -text

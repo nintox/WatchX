@@ -34,3 +34,13 @@ jobs:
           bash -n bridge/watchx_bridge.sh
           bash -n "bridge/Install (Mac).command"
           bash -n "bridge/Uninstall (Mac).command"
+
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install lupa
+      - run: PY=python bash tests/run_all.sh

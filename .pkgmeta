@@ -8,3 +8,4 @@ ignore:
   - Media/logo.png
   - Media/make_logo.py
   - .github
+  - tests
