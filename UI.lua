@@ -600,7 +600,7 @@ do
                 first, last = first:gsub("%s+", ""), last:gsub("%s+", "")
                 if first == "" then f.err:SetText("Who? Put in the first name"); f.shareHint:Hide(); f.whoBox:SetFocus() return end
                 if last == "" then f.err:SetText("And the last name – every name has one"); f.shareHint:Hide(); f.lastBox:SetFocus() return end
-                name = first .. " " .. last
+                name = ns.ProperName(first .. " " .. last)   -- "bob smith" is Bob Smith
                 key = ns.KeyFromName(name)
             end
             local ok, why = ns.SetWanted(key, name, c, f.note:GetText(), f.forever:GetChecked() and true or false)
@@ -3259,26 +3259,48 @@ local function BuildNearby()
     f.title = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     f.title:SetPoint("TOPLEFT", f, "TOPLEFT", 8, -6)
     f.title:SetText("Nearby")
-    -- History: the big list of everyone you've met
-    f.hist = CreateFrame("Button", nil, f)   -- a small list icon (≡), on the title's line
-    f.hist:SetSize(18, 16)
-    f.hist:SetPoint("TOPRIGHT", f, "TOPRIGHT", -7, -5)
-    f.hist:SetScript("OnClick", function() ns.ShowHistory() end)
-    local hhl = f.hist:CreateTexture(nil, "HIGHLIGHT")
-    hhl:SetAllPoints()
-    hhl:SetColorTexture(1, 0.82, 0, 0.2)
-    for i = 0, 2 do   -- three short lines: ≡
-        local ln = f.hist:CreateTexture(nil, "ARTWORK")
-        ln:SetColorTexture(EDGE[1], EDGE[2], EDGE[3], 1)
-        ln:SetSize(10, 2)
-        ln:SetPoint("CENTER", f.hist, "CENTER", 0, 4 - i * 4)
+    -- Bounty news (a new bounty, a claim, a debt, paid): a coin with a count, on the title's line where you can't
+    -- miss it. Click: the Wanted list; right-click: seen. Hover: what happened. (A plain button: fine in a fight.)
+    f.news = CreateFrame("Button", nil, f)
+    f.news:SetSize(18, 16)
+    f.news:SetPoint("TOPRIGHT", f, "TOPRIGHT", -7, -5)
+    f.news:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+    local coin = f.news:CreateTexture(nil, "ARTWORK")
+    coin:SetSize(15, 15)
+    coin:SetPoint("CENTER")
+    coin:SetTexture("Interface\\Icons\\INV_Misc_Coin_02")
+    coin:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+    local glow = f.news:CreateTexture(nil, "OVERLAY")
+    glow:SetAllPoints()
+    glow:SetColorTexture(1, 0.63, 0, 0.35)
+    if glow.CreateAnimationGroup then   -- a soft pulse while there's something new (the game's animation)
+        local ag = glow:CreateAnimationGroup()
+        ag:SetLooping("BOUNCE")
+        local a = ag:CreateAnimation("Alpha")
+        a:SetFromAlpha(0.1); a:SetToAlpha(0.6); a:SetDuration(0.7)
+        f.news.pulse = ag
     end
-    f.hist:SetScript("OnEnter", function(self)
-        Tip(self, "History", "Everyone you've met: kills, deaths, last seen, KOS, guilds and notes.")
+    f.news.num = f.news:CreateFontString(nil, "OVERLAY", "NumberFontNormalSmall")
+    f.news.num:SetPoint("BOTTOMRIGHT", f.news, "BOTTOMRIGHT", 3, -2)
+    f.news:SetScript("OnClick", function(_, button)
+        if button == "LeftButton" then ns.ShowHistory("wanted") end
+        ns.BountyNewsSeen()
     end)
-    f.hist:SetScript("OnLeave", GameTooltip_Hide)
+    f.news:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_BOTTOMRIGHT")
+        GameTooltip:SetText("Bounty news")
+        local now = time()
+        for i = #(ns.bountyNews or {}), math.max(1, #(ns.bountyNews or {}) - 7), -1 do
+            local n = ns.bountyNews[i]
+            GameTooltip:AddLine(n.msg .. "  |cff808080" .. ns.AgoLong(now - n.t) .. " ago|r", 1, 1, 1, true)
+        end
+        GameTooltip:AddLine("|cffffd100Click:|r the Wanted list  ·  |cffffd100Right-click:|r seen", 0.8, 0.8, 0.8)
+        GameTooltip:Show()
+    end)
+    f.news:SetScript("OnLeave", GameTooltip_Hide)
+    f.news:Hide()
     f.count = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    f.count:SetPoint("RIGHT", f.hist, "LEFT", -8, 0)
+    f.count:SetPoint("RIGHT", f.news, "LEFT", -8, 0)   -- (the coin's place stays: nothing moves when it shows)
     f.count:SetTextColor(ACCENT[1], ACCENT[2], ACCENT[3])
     -- ms and fps after the title, once a second (two cheap calls): green / yellow / red by how good it is
     f.stats = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
@@ -3338,10 +3360,15 @@ local function BuildNearby()
     end
     f:EnableMouse(true)
     f:RegisterForDrag("LeftButton")
-    f:SetScript("OnMouseUp", function(_, button) if button == "RightButton" and not moving then ns.OpenNearbySettings() end end)
+    -- the header: click = the list (History), right-click = settings
+    f:SetScript("OnMouseUp", function(_, button)
+        if moving then return end
+        if button == "RightButton" then ns.OpenNearbySettings() elseif button == "LeftButton" then ns.ShowHistory() end
+    end)
     f:SetScript("OnEnter", function(self)
         if moving then return end
-        Tip(self, "Nearby", "Enemy players around you. Click a row to target.", "|cffffd100Right-click here:|r settings")
+        Tip(self, "Nearby", "Enemy players around you. Click a row to target.",
+            "|cffffd100Click here:|r everyone you've met (History)  ·  |cffffd100Right-click:|r settings")
     end)
     f:SetScript("OnLeave", GameTooltip_Hide)
     f:SetScript("OnDragStart", function(self)
@@ -3463,6 +3490,14 @@ local function RefreshNearby()
     local d = db()
     local combat = InCombatLockdown()
     local list = d.nearby and ns.NearbyList() or {}
+    -- the coin: shown while there's bounty news you haven't looked at (a plain button: also in a fight)
+    local news = (ns.bountyUnread or 0) > 0
+    if nb.news.shown ~= news then
+        nb.news.shown = news
+        nb.news:SetShown(news)
+        if nb.news.pulse then if news then nb.news.pulse:Play() else nb.news.pulse:Stop() end end
+    end
+    if news then nb.news.num:SetText(ns.bountyUnread > 1 and ns.bountyUnread or "") end
     local now, near = time(), 0
     for _, e in ipairs(list) do if now - e.last <= ns.NEARBY_ACTIVE then near = near + 1 end end
     local hidden = #list - NearbyMax()
@@ -3470,7 +3505,7 @@ local function RefreshNearby()
         .. (hidden > 0 and ("  |cffaaaaaa+" .. hidden .. "|r") or ""))
     if not combat then
         local zone = ns.NearbyZoneMode()
-        local want = d.nearby and (moving or (zone ~= "hide" and (#list > 0 or d.nearbyShowEmpty == true)))
+        local want = d.nearby and (moving or (zone ~= "hide" and (#list > 0 or d.nearbyShowEmpty == true or news)))
         nb:SetShown(want and true or false)
         if not want then nb.rowSig = nil; Card() return end
         local n = math.min(#list, NearbyMax())
@@ -3728,6 +3763,20 @@ function ns.OnWantedSeen(e, w)
         end
     end
     Card()
+end
+
+-- Bounty news for the Nearby header: the last 10, and how many you haven't looked at.
+function ns.AddBountyNews(kind, who, reward, from, msg)
+    ns.bountyNews = ns.bountyNews or {}
+    table.insert(ns.bountyNews, { kind = kind, who = who, msg = msg or (tostring(who) .. " – " .. tostring(kind)), t = time() })
+    while #ns.bountyNews > 10 do table.remove(ns.bountyNews, 1) end
+    ns.bountyUnread = (ns.bountyUnread or 0) + 1
+    if ns.RefreshUI then ns.RefreshUI() end
+end
+function ns.BountyNewsSeen()
+    ns.bountyUnread = 0
+    GameTooltip_Hide()
+    if ns.RefreshUI then ns.RefreshUI() end
 end
 
 -- Bounty news as a card, like the stealth one: kind = bountyNew / bountyKill / bountyOwe / bountyPaid.

@@ -1010,8 +1010,31 @@ function ns.IsKOS(key, first, guild)
 end
 
 -- A typed name ("Shixa Nightblade", "Shixa-Nightblade" or just "Shixa") -> the key it's stored by.
+-- Names as the game writes them: a capital first letter, the rest small, for the first name and the surname –
+-- so "bob smith" finds Bob Smith. Letters like æ ø å é are one byte pair in UTF-8: capital = small - 32.
+function ns.ProperName(s)
+    if type(s) ~= "string" then return s end
+    local function up(c)
+        if #c == 1 then return c:upper() end
+        local b1, b2 = c:byte(1, 2)
+        if b1 == 195 and b2 >= 160 and b2 <= 190 and b2 ~= 183 then return string.char(195, b2 - 32) end
+        return c
+    end
+    local function low(c)
+        if #c == 1 then return c:lower() end
+        local b1, b2 = c:byte(1, 2)
+        if b1 == 195 and b2 >= 128 and b2 <= 158 and b2 ~= 151 then return string.char(195, b2 + 32) end
+        return c
+    end
+    return (s:gsub("[^%s%-]+", function(w)
+        local first, rest = w:match("^([%z\1-\127\194-\244][\128-\191]*)(.*)$")
+        if not first then return w end
+        return up(first) .. rest:gsub("[%z\1-\127\194-\244][\128-\191]*", low)
+    end))
+end
+
 function ns.KeyFromName(name)
-    name = Trim(name or "")
+    name = ns.ProperName(Trim(name or ""))
     if name == "" then return end
     local key = name:gsub("%s+", "-")
     for k in pairs(db.enemies) do if k:lower() == key:lower() then return k end end
@@ -2570,7 +2593,7 @@ end
 function ns.SetAvoid(name, on, note)
     local key = ns.KeyFromName(name)
     if not key then return end
-    local r = ns.EnemyRecord(key, not db.enemies[key] and Trim(name):gsub("%-", " ") or nil)
+    local r = ns.EnemyRecord(key, not db.enemies[key] and ns.ProperName((Trim(name):gsub("%-", " "))) or nil)
     r.avoid = on and true or nil
     note = Trim(note or "")
     if note ~= "" then r.note = note end
@@ -2798,6 +2821,7 @@ end
     -- Bounty news: a card like the stealth one (and a chat line); at most one card every few seconds (the rest only
     -- in chat), the plain mid-screen warning if there's no card.
     local function Card(kind, who, reward, from, msg, class)
+        if ns.AddBountyNews then ns.AddBountyNews(kind, who, reward, from, msg) end
         local now = GetTime()
         if now - (ns.lastBountyCard or -100) < 4 then Print("|cffffa000" .. msg .. "|r") return end
         ns.lastBountyCard = now
@@ -2938,6 +2962,7 @@ end
     -- taken down).
     function ns.SetWanted(key, name, reward, note, forever)
         if not key then return false end
+        key, name = ns.ProperName(key), ns.ProperName(name)   -- "bob-smith" is Bob-Smith
         if not ValidKey(key) then
             local why = "That isn't a player name WatchX can use."
             Print(why .. " (" .. tostring(name or key) .. ")") return false, why
@@ -3044,7 +3069,7 @@ end
     -- do what (only the poster takes a bounty down or marks it paid; a claim is always the sender's own); a bounty
     -- passed on by someone else can be learned, never change one you have; never one "by you" from anyone else.
     local function Apply(op, f, from)
-        local key = f[1]
+        local key = ns.ProperName(f[1])   -- (one written in small letters by someone else is the same player)
         if not ValidKey(key) then return end
         local now = time()
         if op == "A" then
@@ -3773,6 +3798,18 @@ local function OnEvent(_, event, arg1, arg2, ...)
             local chars, k = "abcdefghijkmnpqrstuvwxyz23456789", {}
             for i = 1, 12 do local n = math.random(1, #chars); k[i] = chars:sub(n, n) end
             db.bridgeKey = table.concat(k)
+        end
+        do   -- players saved in small letters by older versions (a typed "bob smith") get the game's spelling
+            local fix = {}
+            for key in pairs(db.enemies or {}) do
+                local p = ns.ProperName(key)
+                if p ~= key and not db.enemies[p] then fix[key] = p end
+            end
+            for key, p in pairs(fix) do
+                local r = db.enemies[key]
+                db.enemies[key], db.enemies[p] = nil, r
+                if type(r.name) == "string" then r.name = ns.ProperName(r.name) end
+            end
         end
         do   -- the player history kept to its size now, not in the middle of a busy nameplate moment
             local n = 0
