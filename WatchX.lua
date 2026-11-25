@@ -3927,7 +3927,7 @@ local PROFILE_KEYS = { "enemyPlayers", "friendlyPlayers", "attackAlert", "whispe
     "levelHelper", "levelMissing", "levelFlash", "levelWarn", "levelHideCombat", "levelHideInstance", "levelPoint", "levelScale", "levelWidth",
     "buffWarn", "buffSoon", "buffGone", "buffGroups", "avoidGroup", "avoidChat", "scanOn", "wantedOn", "wantedGuild", "wantedFriends", "wantedAlert", "wantedAnnounce", "sounds",
     "shareParty", "shareGuild", "shareStealth", "shareKOS", "shareWanted", "shareAll", "xpRateOnBar",
-    "rebuffOn", "rebuffVertical", "rebuffAll", "rebuffPoint", "rebuffScale" }
+    "rebuffOn", "rebuffVertical", "rebuffAll", "rebuffPoint", "rebuffScale", "rebuffWeaponAlways" }
 local PROFILE_MAX_NAME = 16
 
 local function Copy(v)
