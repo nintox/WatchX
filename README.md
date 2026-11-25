@@ -4,6 +4,10 @@
 
 **Made by Rikerud** – a PvP addon for World of Warcraft: Forever, with a rare scan like unitscan. `/wx`
 
+> **Note:** WatchX is in active development. Not everything has been fully tested in game yet – the rare scan
+> (unitscan-style) least of all – so bugs can happen. Please report them on
+> [GitHub Issues](https://github.com/nintox/WatchX/issues).
+
 ## PvP
 
 - **Nearby** – the enemy players around you, newest first: who has you targeted, who went into Stealth or
