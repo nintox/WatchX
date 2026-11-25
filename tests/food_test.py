@@ -12,7 +12,8 @@ ex(r'''
 HP = 500
 function UnitHealth() return HP end function UnitHealthMax() return 2000 end
 BAG = { [3] = 21023 }   -- slot -> item
-C_Container.GetContainerItemID = function(bag, slot) if bag == 0 then return BAG[slot] end end
+C_Container.GetContainerItemID = nil   -- (like WoW Forever)
+C_Container.GetContainerItemInfo = function(bag, slot) local id = bag == 0 and BAG[slot] if id then return { itemID = id, stackCount = 5 } end end
 C_Item.GetItemSpell = function(id) if id == 21023 then return "Food", 433 end end
 C_Item.GetItemNameByID = function(id) if id == 21023 then return "Dirge's Kickin' Chimaerok Chops" end return "Item" .. id end
 C_Item.GetItemIconByID = function(id) if id == 21023 then return 777 end return 1 end

@@ -59,9 +59,13 @@ CLASS = "ROGUE"; KNOWN = {}
 NS.db.rebuffAll = false
 ITEMS = { [6947] = "Instant Poison", [6949] = "Instant Poison II", [2892] = "Deadly Poison", [3775] = "Crippling Poison", [2589] = "Linen Cloth" }
 BAGS = { 6947, 6949, 2892, 3775, 2589 }
-C_Container.GetContainerItemID = function(bag, slot) if bag == 0 then return BAGS[slot] end end
-C_Item.GetItemNameByID = function(id) return ITEMS[id] or ("Item" .. id) end
-C_Item.GetItemCount = function(id) return 20 end
+-- like WoW Forever: no GetContainerItemID – the bags are read with GetContainerItemInfo (name and count in it)
+C_Container.GetContainerItemID = nil
+C_Container.GetContainerItemInfo = function(bag, slot)
+  local id = bag == 0 and BAGS[slot]
+  if id then return { itemID = id, itemName = ITEMS[id], stackCount = 20 } end
+end
+C_Item.GetItemNameByID = function(id) return nil end   -- (names not loaded: they come from the bag slot)
 GetItemInfo = function(id) return ITEMS[id] end
 C_TooltipInfo.GetHyperlink = function(link)
   local id = tonumber(link:match("item:(%d+)"))

@@ -6175,12 +6175,11 @@ do (function()
         c = { retry = GetTime() + 20 }
         foodInfo[sid] = c
         local C, I = C_Container, C_Item
-        if C and C.GetContainerNumSlots and C.GetContainerItemID and I and I.GetItemSpell then
+        if C and C.GetContainerNumSlots and I and I.GetItemSpell then
             for bag = 0, 4 do
                 local okN, n = pcall(C.GetContainerNumSlots, bag)
                 for slot = 1, (okN and N(n) or 0) do
-                    local okI, id = pcall(C.GetContainerItemID, bag, slot)
-                    id = okI and N(id)
+                    local id = ns.SlotItem and ns.SlotItem(bag, slot)
                     if id and not c.id then
                         local okS, _, spell = pcall(I.GetItemSpell, id)
                         if okS and N(spell) == sid then c.id = id end
@@ -7028,6 +7027,26 @@ function ns.BuildBuffSettings()
 end
 end
 
+-- What's in a bag slot: item ID, name, how many. GetContainerItemInfo first (what the XP food scan uses and WoW
+-- Forever has), GetContainerItemID as a fallback. Hidden values (secrets) count as nothing.
+function ns.SlotItem(bag, slot)
+    local C = C_Container
+    if not C then return nil end
+    local function P(v) if issecretvalue and v ~= nil and issecretvalue(v) then return nil end return v end
+    if C.GetContainerItemInfo then
+        local ok, info = pcall(C.GetContainerItemInfo, bag, slot)
+        if ok and type(info) == "table" and not (issecretvalue and issecretvalue(info)) then
+            local id = tonumber(P(info.itemID))
+            if id then return id, P(info.itemName), tonumber(P(info.stackCount)) or 1 end
+        end
+    end
+    if C.GetContainerItemID then
+        local ok, id = pcall(C.GetContainerItemID, bag, slot)
+        id = ok and tonumber(P(id))
+        if id then return id, nil, 1 end
+    end
+end
+
 -- ---------------------------------------------------------------- rebuff icons (WatchX > Rebuff icons)
 -- Your own buffs to keep up (per class: Ice Armor on a mage, Battle Shout on a warrior …): an icon for each one you're
 -- missing, pulsing; click it to cast it on yourself. A line may hold alternatives – "Arcane Intellect / Arcane
@@ -7119,11 +7138,12 @@ do (function()
     -- Every poison, oil and stone in your bags – found by its text ("Coats a weapon with poison …", "… applied to a
     -- weapon"), so all of WoW Forever's, whatever they're called; each rank its own. Read again when your bags change.
     local weaponItem = {}   -- itemID -> true / false (its text, read once)
-    local function IsWeaponItem(id)
+    local unread = false     -- an item's text wasn't there yet: the bags are looked at again in a moment
+    local function IsWeaponItem(id, bag, slot)
         local c = weaponItem[id]
         if c ~= nil then return c end
-        local text = ns.ItemTooltipText and ns.ItemTooltipText(id)
-        if type(text) ~= "string" then return false end   -- (not loaded yet: asked again next time)
+        local text = ns.ItemTooltipText and ns.ItemTooltipText(id, bag, slot)
+        if type(text) ~= "string" then unread = true return false end
         local l = text:lower()
         c = (l:find("coats a weapon", 1, true) or l:find("coats your weapon", 1, true)
             or (l:find("weapon", 1, true) and (l:find("sharpen", 1, true) or l:find("oil", 1, true)
@@ -7137,26 +7157,33 @@ do (function()
         bagWeaponDirty = false
         wipe(bagWeapon)
         local C = C_Container
-        if not (C and C.GetContainerNumSlots and C.GetContainerItemID) then return bagWeapon end
-        local seen = {}
+        if not (C and C.GetContainerNumSlots) then return bagWeapon end
+        local byID = {}
+        unread = false
         for bag = 0, 4 do
             local okN, n = pcall(C.GetContainerNumSlots, bag)
-            for slot = 1, (okN and Plain0(n) or 0) do
-                local okI, id = pcall(C.GetContainerItemID, bag, slot)
-                id = okI and Plain0(id)
-                if id and not seen[id] then
-                    seen[id] = true
-                    local name = ns.ItemName and ns.ItemName(id, nil)
-                    if type(name) == "string" and IsWeaponItem(id) then
-                        ns.weaponItemByName = ns.weaponItemByName or {}
-                        ns.weaponItemByName[name:lower()] = id
-                        local okC, cnt = pcall(C_Item and C_Item.GetItemCount or GetItemCount, id)
-                        bagWeapon[#bagWeapon + 1] = { id = id, name = name, count = okC and Plain0(cnt) or nil }
+            for slot = 1, (okN and tonumber(Plain0(n)) or 0) do
+                local id, name, count = ns.SlotItem(bag, slot)
+                if id then
+                    local e = byID[id]
+                    if e then e.count = (e.count or 0) + (count or 1)
+                    else
+                        name = type(name) == "string" and name or (ns.ItemName and ns.ItemName(id, nil))
+                        if type(name) == "string" and IsWeaponItem(id, bag, slot) then
+                            ns.weaponItemByName = ns.weaponItemByName or {}
+                            ns.weaponItemByName[name:lower()] = id
+                            e = { id = id, name = name, count = count or 1 }
+                            byID[id] = e
+                            bagWeapon[#bagWeapon + 1] = e
+                        end
                     end
                 end
             end
         end
         table.sort(bagWeapon, function(a, b) return a.name < b.name end)
+        if unread and C_Timer then   -- some text not loaded yet: again in 2 s
+            C_Timer.After(2, function() bagWeaponDirty = true; ns.Safe("rebuff icons", ns.RefreshRebuff) end)
+        end
         return bagWeapon
     end
     function ns.RebuffBagsChanged() bagWeaponDirty = true end
