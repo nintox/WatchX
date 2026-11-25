@@ -1870,6 +1870,8 @@ local function Clock(sec)
 end
 ns.Clock = Clock
 ns.ItemIcon = ItemIcon
+ns.ItemName = ItemName
+ns.ItemTooltipText = ItemTooltipText   -- (the plain item's text, safely: the eating tiles read a food's with it)
 
 -- Warnings when a boost has run out (or a wait is over): a raid-warning line mid-screen, a sound and chat.
 -- Not in combat (it waits until the fight is over) and not when you've just died.

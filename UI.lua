@@ -5893,10 +5893,59 @@ do (function()
                 if ex and ex > 0 and dur and dur > 0 then s.wrEx, s.wrDur = ex, dur end
             end
             if kind then
-                s.list[#s.list + 1] = { kind = kind, index = i, icon = a.icon, ex = N(a.expirationTime), dur = N(a.duration) }
+                s.list[#s.list + 1] = { kind = kind, index = i, icon = a.icon, ex = N(a.expirationTime), dur = N(a.duration),
+                    sid = N(a.spellId) }
             end
         end
         return s
+    end
+
+    -- What you're eating or drinking: the item in your bags whose Use: is this buff's spell – its name, icon, and
+    -- whether it makes you Well Fed (its text says "well fed", or XP from kills). Looked up once per buff; not found
+    -- (you ate the last one) is tried again in 20 s. The buff's own text is asked too, for "well fed".
+    local foodInfo = {}
+    local function FoodInfo(a)
+        local sid = a and a.src and a.src.sid
+        if not sid then return nil end
+        local c = foodInfo[sid]
+        if c and (c.id or GetTime() < c.retry) then return c end
+        c = { retry = GetTime() + 20 }
+        foodInfo[sid] = c
+        local C, I = C_Container, C_Item
+        if C and C.GetContainerNumSlots and C.GetContainerItemID and I and I.GetItemSpell then
+            for bag = 0, 4 do
+                local okN, n = pcall(C.GetContainerNumSlots, bag)
+                for slot = 1, (okN and N(n) or 0) do
+                    local okI, id = pcall(C.GetContainerItemID, bag, slot)
+                    id = okI and N(id)
+                    if id and not c.id then
+                        local okS, _, spell = pcall(I.GetItemSpell, id)
+                        if okS and N(spell) == sid then c.id = id end
+                    end
+                end
+                if c.id then break end
+            end
+        end
+        local text = c.id and ns.ItemTooltipText and ns.ItemTooltipText(c.id)
+        if c.id then
+            c.name = ns.ItemName and ns.ItemName(c.id, nil)
+            c.icon = ns.ItemIcon and ns.ItemIcon(c.id)
+        end
+        if not text and C_TooltipInfo and C_TooltipInfo.GetUnitAura and a.index then   -- the buff's own words
+            local ok, data = pcall(C_TooltipInfo.GetUnitAura, "player", a.index, "HELPFUL")
+            if ok and type(data) == "table" and not (issecretvalue and issecretvalue(data)) then
+                local parts = {}
+                for _, l in ipairs(type(data.lines) == "table" and data.lines or {}) do
+                    local t = type(l) == "table" and l.leftText
+                    if type(t) == "string" and not (issecretvalue and issecretvalue(t)) then parts[#parts + 1] = t end
+                end
+                text = table.concat(parts, " ")
+            end
+        end
+        text = type(text) == "string" and text:lower() or ""
+        c.buff = text:find("well fed", 1, true) ~= nil or text:find("experience gained from kills", 1, true) ~= nil
+            or text:find("experience from kills", 1, true) ~= nil
+        return c
     end
 
     local function Find()
@@ -5971,8 +6020,13 @@ do (function()
         t.pct = t.frame:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
         t.pct:SetPoint("BOTTOM", t, "TOP", 0, 6)
         Big(t.pct, 14)
+        t.food = t.frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")   -- what it is, and Well Fed in 7s
+        t.food:SetPoint("TOP", t, "BOTTOM", 0, -6)
+        t.food:SetWidth(ICON + 44)
+        t.food:SetWordWrap(false)   -- a long name ends in "…" (explicit lines still break)
+        Big(t.food, 10)
         t.info = t.frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-        t.info:SetPoint("TOP", t, "BOTTOM", 0, -6)
+        t.info:SetPoint("TOP", t.food, "BOTTOM", 0, -2)
         Big(t.info, 10)
         -- a tick: "+151" rises from above the icon and fades, each time the food or drink gives (the game's own
         -- animation – no Lua per frame)
@@ -6082,7 +6136,19 @@ do (function()
         local cur, max   -- (not "a and b or c": mana that can't be read must not turn into health)
         if what == "mp" then cur, max = N(UnitPower("player", 0)), N(UnitPowerMax("player", 0))
         else cur, max = N(UnitHealth("player")), N(UnitHealthMax("player")) end
-        r.icon:SetTexture(what == "mp" and WATER or FOOD)
+        -- the food or drink itself: its icon, its name under the tile, and for buff food the 10 seconds until Well Fed
+        local fi = a.src and FoodInfo(a)
+        r.icon:SetTexture((fi and fi.icon) or (what == "mp" and WATER or FOOD))
+        local foodLine = ""
+        if fi and not (a.kind == "both" and what == "mp") then   -- (food & drink: said once, on the food)
+            foodLine = fi.name and ("|cffdddddd" .. fi.name .. "|r") or ""
+            if fi.buff and a.dur and a.left then
+                local wait = 10 - (a.dur - a.left)
+                local wf = wait > 0 and ("|cffffd100Well Fed in " .. math.ceil(wait) .. "s|r") or "|cff40ff40Well Fed!|r"
+                foodLine = foodLine ~= "" and (foodLine .. "\n" .. wf) or wf
+            end
+        end
+        if r.foodLine ~= foodLine then r.foodLine = foodLine; r.food:SetText(foodLine) end
         r.time:SetText(a.left and ("%.1f"):format(a.left) or "")
         -- what the buff gives, from its own text (read once, then kept with it): per second, a tick, its interval
         local tk
@@ -6205,6 +6271,7 @@ do (function()
 
     local BAGICON, FIREICON = "Interface\\Icons\\INV_Misc_Bag_08", "Interface\\Icons\\Spell_Fire_Fire"
     local function PaintCamp(r, a)
+        if r.foodLine ~= "" then r.foodLine = ""; r.food:SetText("") end   -- (the tile may have shown a food before)
         r.fill:Hide(); r.fillTop:Hide()
         r:SetAlpha(1)
         if a.kind == "bag" and a.done then
