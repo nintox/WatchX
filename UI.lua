@@ -5001,11 +5001,37 @@ local function BuildLevel()
             "|cffffd100Right-click:|r settings  ·  gone at level " .. ns.MaxLevel())
     end)
     f:SetScript("OnLeave", GameTooltip_Hide)
-    -- the extra XP all together, beside the icons: "+8%" (food + sleeping bag), and rested when you have it
-    f.bonus = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightLarge")
-    f.bonus:SetPoint("LEFT", f, "RIGHT", 8, 0)
-    do local fnt = f.bonus:GetFont(); if fnt then f.bonus:SetFont(fnt, 16, "OUTLINE") end end
-    f.bonus:SetShadowOffset(0, 0)
+    -- the extra XP all together, in a small window beside the strip with one tile the size of the icons:
+    -- "+8%" (food + sleeping bag) and "XP", or "R 12%" under it when you're rested. A plain frame, not secure:
+    -- it may show, hide and change in a fight (it hangs on the strip; nothing protected hangs on it).
+    local box = CreateFrame("Frame", nil, f)
+    box:SetSize(LV_H, LV_H)
+    Flat(box)
+    box.edge = box:CreateTexture(nil, "BORDER", nil, 1)
+    box.edge:SetSize(LV_ICON + 4, LV_ICON + 4)
+    box.edge:SetPoint("CENTER")
+    box.edge:SetColorTexture(0.25, 0.9, 0.3, 1)
+    box.inner = box:CreateTexture(nil, "BORDER", nil, 2)
+    box.inner:SetSize(LV_ICON, LV_ICON)
+    box.inner:SetPoint("CENTER")
+    box.inner:SetColorTexture(0.06, 0.06, 0.06, 1)
+    local function Text(size, y)
+        local t = box:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        local fnt = t:GetFont()
+        if fnt then t:SetFont(fnt, size, "OUTLINE") end
+        t:SetShadowOffset(0, 0)
+        t:SetPoint("CENTER", box, "CENTER", 0, y)
+        return t
+    end
+    f.bonus, f.bonus2 = Text(12, 5), Text(9, -7)
+    box:EnableMouse(true)
+    box:SetScript("OnEnter", function() local h = f:GetScript("OnEnter"); if h then h(f) end end)
+    box:SetScript("OnLeave", GameTooltip_Hide)
+    box:SetScript("OnMouseUp", function(_, button)
+        if button == "RightButton" and not moving and ns.OpenLevelSettings then ns.OpenLevelSettings() end
+    end)
+    box:Hide()
+    f.bonusBox = box
     -- (secure icons inside: it can't move in a fight, and a stray drag while locked doesn't move or save it)
     f:SetScript("OnDragStart", function(self)
         if moving and not InCombatLockdown() then self.dragging = true; self:StartMoving() end
@@ -5090,14 +5116,30 @@ local function PaintLevelIcon(b, r)
     if lvMenu and lvMenu:IsShown() and lvMenu.owner == b then OpenLevelMenu(b) end   -- keep the column current
 end
 
--- "+8% XP" beside the icons (a plain text: fine in a fight too)
+-- "+8% / XP" in the small window beside the icons (not secure: fine in a fight too). It sits on the side
+-- that faces the middle of the screen, so it never goes off the edge.
 local function PaintBonus()
-    if not (lv and lv.bonus) then return end
+    local box = lv and lv.bonusBox
+    if not box then return end
     local b = ns.levelBonus
     local pct = b and (b.food + b.bag) or 0
-    local t = pct > 0 and ("|cff40ff40+" .. pct .. "%|r |cffccccccXP|r") or ""
-    if b and (b.rested or 0) > 0 then t = t .. (t ~= "" and "\n" or "") .. "|cff80b8ffrested " .. b.rested .. "%|r" end
-    if lv.bonusText ~= t then lv.bonusText = t; lv.bonus:SetText(t) end
+    local rested = b and b.rested or 0
+    local top = pct > 0 and ("|cff40ff40+" .. pct .. "%|r") or (rested > 0 and "|cff80b8ffR|r" or "")
+    local bottom = rested > 0 and ("|cff80b8ff" .. (pct > 0 and "R " or "") .. rested .. "%|r") or (pct > 0 and "|cffccccccXP|r" or "")
+    local key = top .. "|" .. bottom
+    if lv.bonusText ~= key then
+        lv.bonusText = key
+        lv.bonus:SetText(top)
+        lv.bonus2:SetText(bottom)
+        if pct > 0 then box.edge:SetColorTexture(0.25, 0.9, 0.3, 1) else box.edge:SetColorTexture(0.5, 0.72, 1, 1) end
+        box:SetShown(key ~= "|")
+    end
+    local right = LevelOnRight()
+    if box.onRight ~= right then
+        box.onRight = right
+        box:ClearAllPoints()
+        if right then box:SetPoint("RIGHT", lv, "LEFT", -3, 0) else box:SetPoint("LEFT", lv, "RIGHT", 3, 0) end
+    end
 end
 
 function ns.RefreshLevel()
