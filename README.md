@@ -40,6 +40,8 @@
 - An XP bar with rested and quest XP, XP boosts (rested, XP food, sleeping bag, campfire and tent), and what a camp gave you (Camp Benefits).
 - An eating & drinking timer: time left, where your health / mana ends, a tick for each gain.
 - Buff warnings before and when a buff runs out. Profiles for different setups.
+- Rebuff icons: a pulsing icon for each of your own buffs you're missing (Ice Armor, Battle Shout …) – click it to cast
+  it. Per class, with quick-add suggestions; in a row or a column.
 
 ## Install
 

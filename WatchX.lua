@@ -3926,7 +3926,8 @@ local PROFILE_KEYS = { "enemyPlayers", "friendlyPlayers", "attackAlert", "whispe
     "plateIcons", "plateFriendly", "plateHealer", "plateSize", "plateKOS",
     "levelHelper", "levelMissing", "levelFlash", "levelWarn", "levelHideCombat", "levelHideInstance", "levelPoint", "levelScale", "levelWidth",
     "buffWarn", "buffSoon", "buffGone", "buffGroups", "avoidGroup", "avoidChat", "scanOn", "wantedOn", "wantedGuild", "wantedFriends", "wantedAlert", "wantedAnnounce", "sounds",
-    "shareParty", "shareGuild", "shareStealth", "shareKOS", "shareWanted", "shareAll", "xpRateOnBar" }
+    "shareParty", "shareGuild", "shareStealth", "shareKOS", "shareWanted", "shareAll", "xpRateOnBar",
+    "rebuffOn", "rebuffVertical", "rebuffAll", "rebuffPoint", "rebuffScale" }
 local PROFILE_MAX_NAME = 16
 
 local function Copy(v)
@@ -4453,6 +4454,9 @@ local function OnSlash(input)
         name = name or rest
         if Trim(name) ~= "" then ns.SetAvoid(name, true, note)
         elseif ns.ShowHistory then ns.ShowHistory("avoid") end
+    elseif cmd == "rebuff" then
+        if rest ~= "" and ns.AddRebuff then ns.AddRebuff(rest)
+        elseif ns.OpenRebuffSettings then ns.OpenRebuffSettings() end
     elseif cmd == "buffs" or cmd == "buff" then
         if rest == "test" then ns.BuffTest()
         elseif rest ~= "" then ns.AddBuffWatch(rest)

@@ -26,7 +26,7 @@ RARE SCAN (like unitscan)
 
 LEVELING
 - XP bar, XP boosts (rested, XP food, sleeping bag, campfire, Camp Benefits), eating & drinking timer,
-  buff warnings. Profiles.
+  buff warnings, rebuff icons (click to cast the buff you're missing). Profiles.
 
 INSTALL
 1. CurseForge app: search for WatchX. Or by hand: put the "WatchX" folder in

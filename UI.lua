@@ -1164,6 +1164,7 @@ local function BuildSettings()
     end
     ns.BuildLevelSettings()
     ns.BuildBuffSettings()
+    ns.BuildRebuffSettings()
 end
 
 -- ---------------------------------------------------------------- rare catalogue
@@ -3213,6 +3214,7 @@ function ns.StartMove()
     if ns.NearbyMove then ns.NearbyMove(true) end
     if ns.LevelMove then ns.LevelMove(true) end
     if ns.EatingMove then ns.EatingMove(true) end
+    if ns.RebuffMove then ns.RebuffMove(true) end
 end
 
 function ns.ToggleUnlock()
@@ -3222,7 +3224,7 @@ end
 function ns.StopMove(why)
     if not moving then return end
     moving = false
-    for _, f in ipairs({ mini, alertSpot or false, ns.levelFrame or false }) do   -- (the list and card: NearbyMove)
+    for _, f in ipairs({ mini, alertSpot or false, ns.levelFrame or false, WatchXRebuff or false }) do   -- (the list and card: NearbyMove)
         if f and f.dragging then f.dragging = nil; f:StopMovingOrSizing() end   -- a drag still going (a fight starts)
     end
     if ns.ShowGrid then ns.ShowGrid(false) end
@@ -3238,6 +3240,7 @@ function ns.StopMove(why)
     if ns.NearbyMove then ns.NearbyMove(false) end
     if ns.LevelMove then ns.LevelMove(false) end
     if ns.EatingMove then ns.EatingMove(false) end
+    if ns.RebuffMove then ns.RebuffMove(false) end
     ns.Print(why or "Locked.")
     ns.RefreshUI()
     ns.UpdateTargetButton()
@@ -6997,6 +7000,427 @@ function ns.BuildBuffSettings()
     end
 end
 end
+
+-- ---------------------------------------------------------------- rebuff icons (WatchX > Rebuff icons)
+-- Your own buffs to keep up (per class: Ice Armor on a mage, Battle Shout on a warrior …): an icon for each one you're
+-- missing, pulsing; click it to cast it on yourself. A line may hold alternatives – "Arcane Intellect / Arcane
+-- Brilliance": any of them counts, the first is cast. Spells you don't know are left out. In a row or a column.
+-- The icons are secure buttons (they cast): they're laid out out of combat only – your buffs can't be read in a
+-- fight on Forever anyway, so in a fight they stay as they were. Read again only when your buffs change.
+do (function()
+    local ICON, GAP, PAD = 32, 5, 4
+    local f, label
+    local function ClassKey() local _, c = UnitClass("player"); return type(c) == "string" and c or "ANY" end
+    function ns.RebuffList()
+        local d = db()
+        if type(d.rebuff) ~= "table" then d.rebuff = {} end
+        local k = ClassKey()
+        if type(d.rebuff[k]) ~= "table" then d.rebuff[k] = {} end
+        return d.rebuff[k]
+    end
+    local function Names(line)   -- "A / B" -> { "A", "B" }
+        local t = {}
+        for part in tostring(line):gmatch("[^/]+") do
+            part = part:match("^%s*(.-)%s*$")
+            if part ~= "" then t[#t + 1] = part end
+        end
+        return t
+    end
+    local function SpellIcon(name)
+        local get = (C_Spell and C_Spell.GetSpellTexture) or GetSpellTexture
+        if not get then return nil end
+        local ok, t = pcall(get, name)
+        if ok and (type(t) == "number" or type(t) == "string") and not (issecretvalue and issecretvalue(t)) then return t end
+    end
+    local function Known(name)   -- in your spellbook (a name only finds spells you have)
+        if C_Spell and C_Spell.GetSpellInfo then
+            local ok, i = pcall(C_Spell.GetSpellInfo, name)
+            if ok and type(i) == "table" then return true end
+        end
+        if GetSpellInfo then
+            local ok, n = pcall(GetSpellInfo, name)
+            if ok and n then return true end
+        end
+        return false
+    end
+
+    local function Build()
+        f = CreateFrame("Frame", "WatchXRebuff", UIParent)
+        f:SetFrameStrata("MEDIUM")
+        f:SetClampedToScreen(true)
+        f:SetMovable(true)
+        f:SetSize(ICON + PAD * 2, ICON + PAD * 2)
+        f:SetScale(ClampScale(db().rebuffScale))
+        LoadPoint(f, "rebuffPoint", { "CENTER", "CENTER", 0, -170 })
+        f.bg = f:CreateTexture(nil, "BACKGROUND")   -- only while unlocked: something to grab
+        f.bg:SetAllPoints()
+        f.bg:SetColorTexture(0, 0, 0, 0.45)
+        f.bg:Hide()
+        f.icons = {}
+        f:RegisterForDrag("LeftButton")
+        f:SetScript("OnDragStart", function(self)
+            if moving and not InCombatLockdown() then self.dragging = true; self:StartMoving() end
+        end)
+        f:SetScript("OnDragStop", function(self)
+            if not self.dragging then return end
+            self.dragging = nil
+            self:StopMovingOrSizing()
+            if ns.Snap then ns.Snap(self) end
+            SavePoint(self, "rebuffPoint")
+        end)
+        f:SetScript("OnMouseWheel", function(self, delta)
+            if not moving or InCombatLockdown() then return end
+            Rescale(self, "rebuffScale", delta)
+            SavePoint(self, "rebuffPoint")
+        end)
+        f:Hide()
+    end
+    local function Icon(i)
+        local b = CreateFrame("Button", "WatchXRebuffIcon" .. i, f, "SecureActionButtonTemplate")
+        b:RegisterForClicks("AnyUp")
+        b:SetAttribute("useOnKeyDown", false)
+        b:SetAttribute("type1", "spell")
+        b:SetAttribute("unit", "player")
+        b:SetSize(ICON, ICON)
+        b.border = b:CreateTexture(nil, "BACKGROUND")
+        b.border:SetPoint("TOPLEFT", -2, 2); b.border:SetPoint("BOTTOMRIGHT", 2, -2)
+        b.border:SetColorTexture(1, 0.2, 0.2, 1)
+        b.icon = b:CreateTexture(nil, "ARTWORK")
+        b.icon:SetAllPoints()
+        b.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+        b.flash = b:CreateTexture(nil, "OVERLAY")
+        b.flash:SetAllPoints()
+        b.flash:SetColorTexture(1, 0.15, 0.15, 1)
+        b.flash:SetAlpha(0)
+        local hl = b:CreateTexture(nil, "HIGHLIGHT")
+        hl:SetAllPoints()
+        hl:SetColorTexture(1, 1, 1, 0.15)
+        -- the missing ones pulse: the game's own animation (no Lua each frame)
+        if b.flash.CreateAnimationGroup then
+            local ag = b.flash:CreateAnimationGroup()
+            ag:SetLooping("BOUNCE")
+            local an = ag:CreateAnimation("Alpha")
+            an:SetFromAlpha(0.05); an:SetToAlpha(0.5); an:SetDuration(0.6)
+            if an.SetSmoothing then an:SetSmoothing("IN_OUT") end
+            b.pulse = ag
+        end
+        b:SetScript("OnEnter", function(self)
+            if moving or not self.line then return end
+            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+            GameTooltip:SetText(self.line)
+            GameTooltip:AddLine(self.have and "|cff40ff40You have it.|r" or "|cffff6060Missing|r – click to cast it on yourself.", 1, 1, 1, true)
+            GameTooltip:AddLine("|cffffd100Right-click:|r settings", 0.8, 0.8, 0.8)
+            GameTooltip:Show()
+        end)
+        b:SetScript("OnLeave", GameTooltip_Hide)
+        b:SetScript("PostClick", function(_, button)
+            if button == "RightButton" and not InCombatLockdown() and ns.OpenRebuffSettings then ns.OpenRebuffSettings() end
+        end)
+        b:Hide()
+        f.icons[i] = b
+        return b
+    end
+
+    -- which lines are up: your buffs' names, read again only when they changed (UNIT_AURA) or after 10 s
+    local have, haveGen, haveAt = {}, nil, 0
+    local function ReadHave()
+        if haveGen == ns.auraGen and GetTime() - haveAt < 10 then return true end
+        if ns.AurasUnsure and ns.AurasUnsure() then return false end
+        local list = ns.ReadBuffs and ns.ReadBuffs() or {}
+        if list.unreadable then return false end
+        wipe(have)
+        for _, a in ipairs(list) do if type(a.name) == "string" then have[a.name:lower()] = true end end
+        haveGen, haveAt = ns.auraGen, GetTime()
+        return true
+    end
+
+    function ns.RefreshRebuff()
+        if InCombatLockdown() then return end   -- (secure icons; and your buffs are hidden in a fight)
+        local d = db()
+        if not d then return end
+        local rows = {}
+        if d.rebuffOn ~= false and not (UnitIsDeadOrGhost and UnitIsDeadOrGhost("player") == true) and ReadHave() then
+            for _, line in ipairs(ns.RebuffList()) do
+                local names, got, cast = Names(line), false, nil
+                for _, n in ipairs(names) do
+                    if have[n:lower()] then got = true end
+                    if not cast and Known(n) then cast = n end
+                end
+                if cast and (not got or d.rebuffAll == true) then
+                    rows[#rows + 1] = { line = line, cast = cast, have = got }
+                end
+            end
+        end
+        if #rows == 0 and moving and d.rebuffOn ~= false then   -- unlocked: an example to place it by
+            rows[1] = { line = "Your buff", cast = nil, have = false, example = true }
+        end
+        if #rows == 0 then
+            if f then f:Hide() end
+            if label then label:Hide() end
+            return
+        end
+        if not f then Build() end
+        local vertical = d.rebuffVertical == true
+        for i, r in ipairs(rows) do
+            local b = f.icons[i] or Icon(i)
+            b.line, b.have = r.line, r.have
+            b:SetAttribute("spell1", r.cast or "")
+            b.icon:SetTexture((r.cast and SpellIcon(r.cast)) or "Interface\\Icons\\INV_Misc_QuestionMark")
+            b.icon:SetDesaturated(r.have)
+            b.icon:SetAlpha(r.have and 0.5 or 1)
+            if r.have then b.border:SetColorTexture(0.25, 0.9, 0.3, 1) else b.border:SetColorTexture(1, 0.2, 0.2, 1) end
+            if b.pulse then
+                if not r.have and not moving then if not b.pulse:IsPlaying() then b.pulse:Play() end
+                elseif b.pulse:IsPlaying() then b.pulse:Stop(); b.flash:SetAlpha(0) end
+            end
+            b:ClearAllPoints()
+            local off = PAD + (i - 1) * (ICON + GAP)
+            if vertical then b:SetPoint("TOPLEFT", f, "TOPLEFT", PAD, -off) else b:SetPoint("TOPLEFT", f, "TOPLEFT", off, -PAD) end
+            b:EnableMouse(not moving)
+            b:Show()
+        end
+        for i = #rows + 1, #f.icons do f.icons[i]:Hide() end
+        local long = PAD * 2 + #rows * ICON + (#rows - 1) * GAP
+        if vertical then f:SetSize(ICON + PAD * 2, long) else f:SetSize(long, ICON + PAD * 2) end
+        f:EnableMouse(moving and true or false)
+        f:EnableMouseWheel(moving and true or false)
+        f.bg:SetShown(moving)
+        f:Show()
+        if moving then
+            label = label or MakeLabel("WatchXRebuffLabel")
+            label:Set(f, "|cffffd100Rebuff icons|r · drag to move · wheel: size")
+        elseif label then
+            label:Hide()
+        end
+    end
+    function ns.RebuffMove() ns.RefreshRebuff() end
+
+    -- your buffs changed (a moment later: one look for a burst), a fight ended, you came into the world
+    local ev, waiting = CreateFrame("Frame"), false
+    if not pcall(ev.RegisterUnitEvent, ev, "UNIT_AURA", "player") then ev:RegisterEvent("UNIT_AURA") end
+    for _, e in ipairs({ "PLAYER_REGEN_ENABLED", "PLAYER_ENTERING_WORLD", "SPELLS_CHANGED", "PLAYER_DEAD", "PLAYER_UNGHOST",
+                         "PLAYER_ALIVE" }) do pcall(ev.RegisterEvent, ev, e) end
+    ev:SetScript("OnEvent", function(_, event, unit)
+        if event == "UNIT_AURA" and unit ~= "player" then return end
+        if waiting or not C_Timer or not ns.db then return end
+        waiting = true
+        C_Timer.After(event == "PLAYER_REGEN_ENABLED" and 3.5 or 0.4, function()
+            waiting = false
+            ns.Safe("rebuff icons", ns.RefreshRebuff)
+        end)
+    end)
+    if C_Timer and C_Timer.NewTicker then   -- (a buff that ran out by the clock; cheap: it reads only on a change)
+        C_Timer.NewTicker(5, function() if ns.db then ns.Safe("rebuff icons", ns.RefreshRebuff) end end)
+    end
+
+    -- ---- the settings page
+    local page, cat
+    function ns.OpenRebuffSettings()
+        if cat and Settings and Settings.OpenToCategory then pcall(Settings.OpenToCategory, cat:GetID())
+        elseif page and InterfaceOptionsFrame_OpenToCategory then
+            pcall(InterfaceOptionsFrame_OpenToCategory, page); pcall(InterfaceOptionsFrame_OpenToCategory, page)
+        else ns.OpenSettings() end
+    end
+    function ns.AddRebuff(text)
+        text = tostring(text or ""):match("^%s*(.-)%s*$")
+        if text == "" then return false end
+        local list = ns.RebuffList()
+        for _, l in ipairs(list) do if l:lower() == text:lower() then return false end end
+        list[#list + 1] = text
+        local known = false
+        for _, n in ipairs(Names(text)) do if Known(n) then known = true end end
+        ns.Print("Rebuff icon: |cffffd100" .. text .. "|r" .. (known and "" or " |cffff8040(not in your spellbook – it shows when you know it)|r"))
+        haveGen = nil
+        ns.Safe("rebuff icons", ns.RefreshRebuff)
+        return true
+    end
+    local ROWS = 10
+    -- one click to add: the usual self buffs of each class (a line's alternatives: any of them counts). Shown only
+    -- when you know one of them.
+    ns.REBUFF_SUGGEST = {
+        MAGE = { "Ice Armor / Frost Armor / Mage Armor / Molten Armor", "Arcane Intellect / Arcane Brilliance", "Dampen Magic / Amplify Magic" },
+        PRIEST = { "Power Word: Fortitude / Prayer of Fortitude", "Inner Fire", "Divine Spirit / Prayer of Spirit",
+                   "Shadow Protection / Prayer of Shadow Protection", "Shadowform" },
+        WARRIOR = { "Battle Shout", "Commanding Shout" },
+        DRUID = { "Mark of the Wild / Gift of the Wild", "Thorns", "Omen of Clarity" },
+        PALADIN = { "Blessing of Might / Greater Blessing of Might / Blessing of Kings / Greater Blessing of Kings / Blessing of Wisdom / Greater Blessing of Wisdom",
+                    "Devotion Aura / Retribution Aura / Concentration Aura / Fire Resistance Aura / Frost Resistance Aura / Shadow Resistance Aura / Sanctity Aura",
+                    "Righteous Fury" },
+        WARLOCK = { "Demon Armor / Demon Skin / Fel Armor", "Soul Link", "Unending Breath" },
+        HUNTER = { "Aspect of the Hawk / Aspect of the Monkey / Aspect of the Viper / Aspect of the Dragonhawk", "Trueshot Aura" },
+        SHAMAN = { "Lightning Shield / Water Shield", "Ghost Wolf" },
+        ROGUE = {},
+    }
+    local function Short(line)   -- "Ice Armor / Frost Armor / …" -> "Ice Armor …" (for a button)
+        local n = Names(line)
+        return n[1] and (n[1] .. (#n > 1 and " …" or "")) or line
+    end
+    function ns.BuildRebuffSettings()
+        page = CreateFrame("Frame", "WatchXRebuffOptions", UIParent)
+        page.name, page.parent = "Rebuff icons", "WatchX"
+        page:Hide()
+        local L, W = 20, 560
+        local title = page:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+        title:SetPoint("TOPLEFT", page, "TOPLEFT", 16, -16)
+        title:SetText("Rebuff icons")
+        local sub = page:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+        sub:SetPoint("LEFT", title, "RIGHT", 10, -1)
+        sub:SetText("a pulsing icon for each of your buffs you're missing – click it to cast it")
+        local y, checks = -50, {}
+        local Refresh
+        local function check(label, hint, get, set)
+            local cb = CreateFrame("CheckButton", nil, page, "UICheckButtonTemplate")
+            cb:SetSize(26, 26)
+            cb:SetPoint("TOPLEFT", page, "TOPLEFT", L - 4, y + 2)
+            local name = page:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+            name:SetPoint("LEFT", cb, "RIGHT", 2, 1)
+            name:SetText(label .. (hint and ("  |cff808080" .. hint .. "|r") or ""))
+            cb.get = get
+            cb:SetScript("OnClick", function(self)
+                set(self:GetChecked() and true or false)
+                self:SetChecked(get())
+                ns.Safe("rebuff icons", ns.RefreshRebuff)
+            end)
+            checks[#checks + 1] = cb
+            y = y - 26
+        end
+        check("Show rebuff icons", nil, function() return db().rebuffOn ~= false end, function(v) db().rebuffOn = v end)
+        check("In a column", "off: in a row", function() return db().rebuffVertical == true end, function(v) db().rebuffVertical = v end)
+        check("Also the ones you have", "dimmed, with a green edge", function() return db().rebuffAll == true end, function(v) db().rebuffAll = v end)
+        y = y - 8
+        -- add one
+        local lab = page:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        lab:SetPoint("TOPLEFT", page, "TOPLEFT", L, y - 4)
+        lab:SetText("Add a buff")
+        local eb = CreateFrame("EditBox", nil, page, "InputBoxTemplate")
+        eb:SetSize(240, 20)
+        eb:SetPoint("TOPLEFT", page, "TOPLEFT", L + 100, y)
+        eb:SetAutoFocus(false)
+        eb:SetMaxLetters(80)
+        eb.hint = eb:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+        eb.hint:SetPoint("LEFT", eb, "LEFT", 2, 0)
+        eb.hint:SetText("Ice Armor   ·   Arcane Intellect / Arcane Brilliance")
+        local function go()
+            if ns.AddRebuff(eb:GetText()) then eb:SetText("") end
+            eb:ClearFocus()
+            eb.hint:SetShown(eb:GetText() == "")
+            Refresh()
+        end
+        eb:SetScript("OnEnterPressed", go)
+        eb:SetScript("OnEscapePressed", function(self) self:SetText(""); self:ClearFocus() end)
+        eb:SetScript("OnEditFocusGained", function(self) self.hint:Hide() end)
+        eb:SetScript("OnEditFocusLost", function(self) self.hint:SetShown(self:GetText() == "") end)
+        local add = Button(page, "Add", 60, 22, go)
+        add:SetPoint("LEFT", eb, "RIGHT", 6, 0)
+        local mv = Button(page, "Move", 70, 22, function()
+            HideBlizzardMenus()
+            if not moving then ns.StartMove() end
+        end)
+        mv:SetPoint("LEFT", add, "RIGHT", 6, 0)
+        y = y - 30
+        -- suggestions for your class: "+ Ice Armor …" (filled in when the page shows: your class, what you know)
+        local sugLab = page:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+        sugLab:SetPoint("TOPLEFT", page, "TOPLEFT", L, y - 4)
+        sugLab:SetText("Quick add:")
+        local sugs = {}
+        for i = 1, 6 do
+            local b = Button(page, "", 150, 20, function(self)
+                if self.line and ns.AddRebuff(self.line) then Refresh() end
+            end)
+            b:SetPoint("TOPLEFT", page, "TOPLEFT", L + 70 + ((i - 1) % 3) * 156, y - math.floor((i - 1) / 3) * 24)
+            b:SetScript("OnEnter", function(self)
+                GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+                GameTooltip:SetText("Add: " .. tostring(self.line):gsub(" / ", "\n  or "), 1, 1, 1, 1, true)
+                GameTooltip:Show()
+            end)
+            b:SetScript("OnLeave", GameTooltip_Hide)
+            b:Hide()
+            sugs[i] = b
+        end
+        page.sugs = sugs   -- (for the tests)
+        y = y - 52
+        local head = page:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        head:SetPoint("TOPLEFT", page, "TOPLEFT", L - 4, y)
+        head:SetTextColor(ACCENT[1], ACCENT[2], ACCENT[3])
+        y = y - 18
+        local rows = {}
+        for i = 1, ROWS do
+            local r = CreateFrame("Frame", nil, page)
+            r:SetSize(300, 20)
+            r:SetPoint("TOPLEFT", page, "TOPLEFT", L, y - (i - 1) * 22)
+            r.icon = r:CreateTexture(nil, "ARTWORK")
+            r.icon:SetSize(18, 18)
+            r.icon:SetPoint("LEFT", r, "LEFT", 0, 0)
+            r.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+            r.text = r:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+            r.text:SetPoint("LEFT", r.icon, "RIGHT", 6, 0)
+            r.del = FlatButton(r, "x", 20, 18, function()
+                local list = ns.RebuffList()
+                if r.index and list[r.index] then table.remove(list, r.index) end
+                ns.Safe("rebuff icons", ns.RefreshRebuff)
+                Refresh()
+            end)
+            r.del:SetPoint("LEFT", r, "LEFT", 270, 0)
+            r:Hide()
+            rows[i] = r
+        end
+        local empty = page:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+        empty:SetPoint("TOPLEFT", page, "TOPLEFT", L + 2, y - 3)
+        empty:SetText("Nothing yet – add a buff above (its name as in your spellbook).")
+        y = y - ROWS * 22 - 10
+        local help = page:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        help:SetPoint("TOPLEFT", page, "TOPLEFT", L, y)
+        help:SetWidth(W)
+        help:SetJustifyH("LEFT")
+        help:SetSpacing(3)
+        help:SetText("|cffaaaaaaThe list is for this class (a mage's Ice Armor doesn't show on your warrior); spells you don't know "
+            .. "yet are left out. Your buffs can't be seen in a fight on Forever: the icons change when it's over.|r\n"
+            .. "|cff808080/wx rebuff – this page   ·   /wx rebuff <name> – add one|r")
+        Refresh = function()
+            for _, cb in ipairs(checks) do cb:SetChecked(cb.get()) end
+            local list = ns.RebuffList()
+            local _, cls = UnitClass("player")
+            head:SetText("YOUR " .. tostring(cls or ""):upper() .. " BUFFS")
+            for i, r in ipairs(rows) do
+                local line = list[i]
+                if line then
+                    r.index = i
+                    local cast
+                    for _, n in ipairs(Names(line)) do if not cast and Known(n) then cast = n end end
+                    r.icon:SetTexture((cast and SpellIcon(cast)) or "Interface\\Icons\\INV_Misc_QuestionMark")
+                    r.text:SetText(line .. (cast and "" or "  |cff808080(not known)|r"))
+                    r:Show()
+                else
+                    r:Hide()
+                end
+            end
+            empty:SetShown(#list == 0)
+            -- quick add: your class's usual ones you know and haven't added
+            local added = {}
+            for _, l in ipairs(list) do added[l:lower()] = true end
+            local n = 0
+            for _, line in ipairs(ns.REBUFF_SUGGEST[cls or ""] or {}) do
+                local known = false
+                for _, nm in ipairs(Names(line)) do if Known(nm) then known = true end end
+                if known and not added[line:lower()] and n < #sugs then
+                    n = n + 1
+                    sugs[n].line = line
+                    SetButtonText(sugs[n], "+ " .. Short(line))
+                    sugs[n]:Show()
+                end
+            end
+            for i = n + 1, #sugs do sugs[i]:Hide() end
+            sugLab:SetShown(n > 0)
+        end
+        page:SetScript("OnShow", function() Refresh() end)
+        if settingsCategory and Settings and Settings.RegisterCanvasLayoutSubcategory then
+            local ok, c = pcall(Settings.RegisterCanvasLayoutSubcategory, settingsCategory, page, "Rebuff icons")
+            if ok and c then cat = c end
+        elseif InterfaceOptions_AddCategory then
+            InterfaceOptions_AddCategory(page)
+        end
+    end
+end)() end
 
 do   -- (its own block: UI.lua is near Lua's 200-locals limit)
 -- ---------------------------------------------------------------- nameplate icons (WatchX > Nearby)
