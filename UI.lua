@@ -7068,6 +7068,56 @@ do (function()
         return false
     end
 
+    -- Weapon lines: "Main hand: Instant Poison / Deadly Poison" (or "Off hand: …"). Poisons, oils and stones are
+    -- weapon enchants, not buffs: missing when the weapon has none. Click: the first that you have – a spell you know
+    -- (a shaman's Windfury Weapon) is cast, an item in your bags (any rank: "Instant Poison" finds "Instant Poison
+    -- VI", the highest) is put on that weapon. The off hand only counts with a weapon there (not a shield).
+    local function WeaponLine(line)
+        local l = tostring(line):lower()
+        local rest = tostring(line):match("^%s*[Mm]ain[%s%-]*[Hh]and%s*:%s*(.+)$")
+        if rest then return 16, rest end
+        rest = tostring(line):match("^%s*[Oo]ff[%s%-]*[Hh]and%s*:%s*(.+)$")
+        if rest then return 17, rest end
+    end
+    local function Plain0(v) if issecretvalue and v ~= nil and issecretvalue(v) then return nil end return v end
+    local function HasWeapon(slot)
+        local id = Plain0(GetInventoryItemID and GetInventoryItemID("player", slot))
+        if not id then return false end
+        if slot == 16 then return true end
+        local get = C_Item and C_Item.GetItemInfoInstant or GetItemInfoInstant
+        local ok, _, _, _, _, _, classID = pcall(get or function() end, id)
+        return ok and classID == 2   -- (2 = a weapon; a shield or an off-hand item has no enchant to put on)
+    end
+    local function WeaponEnchanted(slot)   -- true / false / nil (can't tell)
+        if not GetWeaponEnchantInfo then return nil end
+        local ok, mh, _, _, _, oh = pcall(GetWeaponEnchantInfo)
+        if not ok then return nil end
+        local v = Plain0(slot == 16 and mh or oh)
+        if v == nil then return nil end
+        return v and true or false
+    end
+    -- the item in your bags whose name starts with this (the highest rank: the last in a bag scan by item ID)
+    local function BagItem(base)
+        local C = C_Container
+        if not (C and C.GetContainerNumSlots and C.GetContainerItemID) then return nil end
+        base = base:lower()
+        local best, bestName
+        for bag = 0, 4 do
+            local okN, n = pcall(C.GetContainerNumSlots, bag)
+            for slot = 1, (okN and Plain0(n) or 0) do
+                local okI, id = pcall(C.GetContainerItemID, bag, slot)
+                id = okI and Plain0(id)
+                if id then
+                    local name = ns.ItemName and ns.ItemName(id, nil)
+                    if type(name) == "string" and name:lower():sub(1, #base) == base and (not best or id > best) then
+                        best, bestName = id, name
+                    end
+                end
+            end
+        end
+        return best, bestName
+    end
+
     local function Build()
         f = CreateFrame("Frame", "WatchXRebuff", UIParent)
         f:SetFrameStrata("MEDIUM")
@@ -7103,7 +7153,7 @@ do (function()
         local b = CreateFrame("Button", "WatchXRebuffIcon" .. i, f, "SecureActionButtonTemplate")
         b:RegisterForClicks("AnyUp")
         b:SetAttribute("useOnKeyDown", false)
-        b:SetAttribute("type1", "spell")
+        b:SetAttribute("type1", "spell")   -- (a weapon line: "macro", set when it's laid out)
         b:SetAttribute("unit", "player")
         b:SetSize(ICON, ICON)
         b.border = b:CreateTexture(nil, "BACKGROUND")
@@ -7130,9 +7180,12 @@ do (function()
         end
         b:SetScript("OnEnter", function(self)
             if moving or not self.line then return end
+            if self.opts and #self.opts > 1 and ns.RebuffFlyout then ns.RebuffFlyout(self) end
             GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
             GameTooltip:SetText(self.line)
-            GameTooltip:AddLine(self.have and "|cff40ff40You have it.|r" or "|cffff6060Missing|r – click to cast it on yourself.", 1, 1, 1, true)
+            GameTooltip:AddLine(self.have and "|cff40ff40You have it.|r"
+                or self.noItem and "|cffff6060Missing|r – and none of it in your bags."
+                or "|cffff6060Missing|r – click to put it on.", 1, 1, 1, true)
             GameTooltip:AddLine("|cffffd100Right-click:|r settings", 0.8, 0.8, 0.8)
             GameTooltip:Show()
         end)
@@ -7165,13 +7218,36 @@ do (function()
         local rows = {}
         if d.rebuffOn ~= false and not (UnitIsDeadOrGhost and UnitIsDeadOrGhost("player") == true) and ReadHave() then
             for _, line in ipairs(ns.RebuffList()) do
-                local names, got, cast = Names(line), false, nil
-                for _, n in ipairs(names) do
-                    if have[n:lower()] then got = true end
-                    if not cast and Known(n) then cast = n end
-                end
-                if cast and (not got or d.rebuffAll == true) then
-                    rows[#rows + 1] = { line = line, cast = cast, have = got }
+                local slot, what = WeaponLine(line)
+                if slot then
+                    local on = WeaponEnchanted(slot)
+                    if on ~= nil and HasWeapon(slot) then
+                        -- what you could put on (spells you know, items you have); the one you picked last time first
+                        local opts, cast, item, itemName = {}, nil, nil, nil
+                        local pick = type(d.rebuffPick) == "table" and d.rebuffPick[line] or nil
+                        for _, n in ipairs(Names(what)) do
+                            if Known(n) then opts[#opts + 1] = { base = n, cast = n }
+                            else
+                                local id, nm = BagItem(n)
+                                if id then opts[#opts + 1] = { base = n, item = id, itemName = nm } end
+                            end
+                        end
+                        local first = opts[1]
+                        for _, o in ipairs(opts) do if o.base == pick then first = o end end
+                        if first then cast, item, itemName = first.cast, first.item, first.itemName end
+                        if not on or d.rebuffAll == true then
+                            rows[#rows + 1] = { line = line, cast = cast, item = item, itemName = itemName, slot = slot, have = on, opts = opts }
+                        end
+                    end
+                else
+                    local names, got, cast = Names(line), false, nil
+                    for _, n in ipairs(names) do
+                        if have[n:lower()] then got = true end
+                        if not cast and Known(n) then cast = n end
+                    end
+                    if cast and (not got or d.rebuffAll == true) then
+                        rows[#rows + 1] = { line = line, cast = cast, have = got }
+                    end
                 end
             end
         end
@@ -7187,9 +7263,19 @@ do (function()
         local vertical = d.rebuffVertical == true
         for i, r in ipairs(rows) do
             local b = f.icons[i] or Icon(i)
-            b.line, b.have = r.line, r.have
-            b:SetAttribute("spell1", r.cast or "")
-            b.icon:SetTexture((r.cast and SpellIcon(r.cast)) or "Interface\\Icons\\INV_Misc_QuestionMark")
+            b.line, b.have, b.noItem = r.line, r.have, r.slot and not r.cast and not r.item
+            b.opts, b.slot = r.opts, r.slot
+            if r.item then   -- a poison / oil from your bags onto that weapon
+                b:SetAttribute("type1", "macro")
+                b:SetAttribute("macrotext1", "/use " .. r.itemName .. "\n/use " .. r.slot)
+                b:SetAttribute("spell1", nil)
+            else
+                b:SetAttribute("type1", "spell")
+                b:SetAttribute("spell1", r.cast or "")
+                b:SetAttribute("macrotext1", nil)
+            end
+            b.icon:SetTexture((r.cast and SpellIcon(r.cast)) or (r.item and ns.ItemIcon and ns.ItemIcon(r.item))
+                or (r.slot and "Interface\\Icons\\Trade_BrewPoison") or "Interface\\Icons\\INV_Misc_QuestionMark")
             b.icon:SetDesaturated(r.have)
             b.icon:SetAlpha(r.have and 0.5 or 1)
             if r.have then b.border:SetColorTexture(0.25, 0.9, 0.3, 1) else b.border:SetColorTexture(1, 0.2, 0.2, 1) end
@@ -7219,13 +7305,96 @@ do (function()
     end
     function ns.RebuffMove() ns.RefreshRebuff() end
 
+    -- Which poison (or imbue): hover a weapon icon and a column of what you have comes up beside it – click one to
+    -- put it on that weapon; it's then the one the icon uses. Secure buttons (they use an item): out of combat only.
+    local fly
+    local function FlyButton(i)
+        local x = CreateFrame("Button", "WatchXRebuffFly" .. i, fly, "SecureActionButtonTemplate")
+        x:RegisterForClicks("AnyUp")
+        x:SetAttribute("useOnKeyDown", false)
+        x:SetSize(ICON - 4, ICON - 4)
+        x.border = x:CreateTexture(nil, "BACKGROUND")
+        x.border:SetPoint("TOPLEFT", -1, 1); x.border:SetPoint("BOTTOMRIGHT", 1, -1)
+        x.border:SetColorTexture(0.15, 0.15, 0.15, 1)
+        x.icon = x:CreateTexture(nil, "ARTWORK")
+        x.icon:SetAllPoints()
+        x.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+        local hl = x:CreateTexture(nil, "HIGHLIGHT")
+        hl:SetAllPoints()
+        hl:SetColorTexture(1, 1, 1, 0.2)
+        x:SetScript("OnEnter", function(self)
+            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+            GameTooltip:SetText(self.label or "?")
+            GameTooltip:AddLine("Click: put it on your " .. (fly.slot == 17 and "off hand" or "main hand") .. " – and use it from now on.", 1, 1, 1, true)
+            GameTooltip:Show()
+        end)
+        x:SetScript("OnLeave", GameTooltip_Hide)
+        x:SetScript("PostClick", function(self)
+            local d = db()
+            if type(d.rebuffPick) ~= "table" then d.rebuffPick = {} end
+            d.rebuffPick[fly.line] = self.base
+            if not InCombatLockdown() then fly:Hide() end
+        end)
+        fly.buttons[i] = x
+        return x
+    end
+    function ns.RebuffFlyout(owner)
+        if InCombatLockdown() then return end
+        if not fly then
+            fly = CreateFrame("Frame", "WatchXRebuffFlyout", UIParent)
+            fly:SetFrameStrata("DIALOG")
+            fly:SetClampedToScreen(true)
+            Flat(fly)
+            fly.buttons = {}
+            fly:Hide()
+            -- gone when the mouse is on neither the icon nor the column (looked at while it's up only)
+            fly:SetScript("OnShow", function(self)
+                if self.ticker then self.ticker:Cancel() end
+                self.ticker = C_Timer.NewTicker(0.25, function()
+                    if InCombatLockdown() then return end
+                    local over = (self.owner and self.owner:IsMouseOver()) or self:IsMouseOver()
+                    self.misses = over and 0 or (self.misses or 0) + 1
+                    if self.misses >= 2 then self:Hide() end   -- (twice: crossing the gap to it isn't leaving)
+                end)
+            end)
+            fly:SetScript("OnHide", function(self) if self.ticker then self.ticker:Cancel(); self.ticker = nil end end)
+        end
+        fly.owner, fly.line, fly.slot = owner, owner.line, owner.slot
+        local n = 0
+        for _, o in ipairs(owner.opts or {}) do
+            n = n + 1
+            local x = fly.buttons[n] or FlyButton(n)
+            x.base, x.label = o.base, o.itemName or o.cast
+            if o.item then
+                x:SetAttribute("type1", "macro")
+                x:SetAttribute("macrotext1", "/use " .. o.itemName .. "\n/use " .. owner.slot)
+                x.icon:SetTexture(ns.ItemIcon and ns.ItemIcon(o.item) or "Interface\\Icons\\Trade_BrewPoison")
+            else
+                x:SetAttribute("type1", "spell")
+                x:SetAttribute("spell1", o.cast)
+                x.icon:SetTexture(SpellIcon(o.cast) or "Interface\\Icons\\INV_Misc_QuestionMark")
+            end
+            x:ClearAllPoints()
+            x:SetPoint("TOPLEFT", fly, "TOPLEFT", 4, -4 - (n - 1) * ICON)
+            x:Show()
+        end
+        for i = n + 1, #fly.buttons do fly.buttons[i]:Hide() end
+        fly:SetSize(ICON + 4, n * ICON + 4)
+        fly:ClearAllPoints()
+        local _, y = owner:GetCenter()
+        local up = y and y < (UIParent:GetHeight() or 768) * 0.5
+        if up then fly:SetPoint("BOTTOM", owner, "TOP", 0, 4) else fly:SetPoint("TOP", owner, "BOTTOM", 0, -4) end
+        fly:Show()
+    end
+
     -- your buffs changed (a moment later: one look for a burst), a fight ended, you came into the world
     local ev, waiting = CreateFrame("Frame"), false
     if not pcall(ev.RegisterUnitEvent, ev, "UNIT_AURA", "player") then ev:RegisterEvent("UNIT_AURA") end
+    pcall(ev.RegisterUnitEvent, ev, "UNIT_INVENTORY_CHANGED", "player")   -- (a poison put on, a weapon changed)
     for _, e in ipairs({ "PLAYER_REGEN_ENABLED", "PLAYER_ENTERING_WORLD", "SPELLS_CHANGED", "PLAYER_DEAD", "PLAYER_UNGHOST",
-                         "PLAYER_ALIVE" }) do pcall(ev.RegisterEvent, ev, e) end
+                         "PLAYER_ALIVE", "BAG_UPDATE_DELAYED" }) do pcall(ev.RegisterEvent, ev, e) end
     ev:SetScript("OnEvent", function(_, event, unit)
-        if event == "UNIT_AURA" and unit ~= "player" then return end
+        if (event == "UNIT_AURA" or event == "UNIT_INVENTORY_CHANGED") and unit ~= "player" then return end
         if waiting or not C_Timer or not ns.db then return end
         waiting = true
         C_Timer.After(event == "PLAYER_REGEN_ENABLED" and 3.5 or 0.4, function()
@@ -7251,7 +7420,7 @@ do (function()
         local list = ns.RebuffList()
         for _, l in ipairs(list) do if l:lower() == text:lower() then return false end end
         list[#list + 1] = text
-        local known = false
+        local known = WeaponLine(text) ~= nil
         for _, n in ipairs(Names(text)) do if Known(n) then known = true end end
         ns.Print("Rebuff icon: |cffffd100" .. text .. "|r" .. (known and "" or " |cffff8040(not in your spellbook – it shows when you know it)|r"))
         haveGen = nil
@@ -7272,8 +7441,10 @@ do (function()
                     "Righteous Fury" },
         WARLOCK = { "Demon Armor / Demon Skin / Fel Armor", "Soul Link", "Unending Breath" },
         HUNTER = { "Aspect of the Hawk / Aspect of the Monkey / Aspect of the Viper / Aspect of the Dragonhawk", "Trueshot Aura" },
-        SHAMAN = { "Lightning Shield / Water Shield", "Ghost Wolf" },
-        ROGUE = {},
+        SHAMAN = { "Lightning Shield / Water Shield", "Main hand: Windfury Weapon / Flametongue Weapon / Rockbiter Weapon / Frostbrand Weapon",
+                   "Off hand: Flametongue Weapon / Windfury Weapon / Frostbrand Weapon / Rockbiter Weapon" },
+        ROGUE = { "Main hand: Instant Poison / Deadly Poison / Wound Poison / Crippling Poison / Mind-numbing Poison",
+                  "Off hand: Deadly Poison / Instant Poison / Crippling Poison / Wound Poison / Mind-numbing Poison" },
     }
     local function Short(line)   -- "Ice Armor / Frost Armor / …" -> "Ice Armor …" (for a button)
         local n = Names(line)
@@ -7410,9 +7581,10 @@ do (function()
                 if line then
                     r.index = i
                     local cast
-                    for _, n in ipairs(Names(line)) do if not cast and Known(n) then cast = n end end
-                    r.icon:SetTexture((cast and SpellIcon(cast)) or "Interface\\Icons\\INV_Misc_QuestionMark")
-                    r.text:SetText(line .. (cast and "" or "  |cff808080(not known)|r"))
+                    local wslot, wwhat = WeaponLine(line)
+                    for _, n in ipairs(Names(wwhat or line)) do if not cast and Known(n) then cast = n end end
+                    r.icon:SetTexture((cast and SpellIcon(cast)) or (wslot and "Interface\\Icons\\Trade_BrewPoison") or "Interface\\Icons\\INV_Misc_QuestionMark")
+                    r.text:SetText(line .. ((cast or wslot) and "" or "  |cff808080(not known)|r"))
                     r:Show()
                 else
                     r:Hide()
@@ -7424,8 +7596,9 @@ do (function()
             for _, l in ipairs(list) do added[l:lower()] = true end
             local n = 0
             for _, line in ipairs(ns.REBUFF_SUGGEST[cls or ""] or {}) do
-                local known = false
-                for _, nm in ipairs(Names(line)) do if Known(nm) then known = true end end
+                local wslot, wwhat = WeaponLine(line)
+                local known = wslot ~= nil and cls == "ROGUE"   -- (poisons: from your bags, nothing to know)
+                for _, nm in ipairs(Names(wwhat or line)) do if Known(nm) then known = true end end
                 if known and not added[line:lower()] and n < #sugs then
                     n = n + 1
                     sugs[n].line = line
