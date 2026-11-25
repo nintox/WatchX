@@ -1943,31 +1943,20 @@ function ns.BuildNearbySettings()
         function() return db().nearbyShowEmpty == true end, function(v) db().nearbyShowEmpty = v end)
     check("KOS alert", "a red card + sound when a KOS player shows up",
         function() return db().kosAlert ~= false end, function(v) db().kosAlert = v end)
-    -- a sound for each: [ Raid warning ] [>]  (click: next, right-click: back; > plays it)
+    -- a sound for each: [ Raid warning v ] [>]  (click: the list to pick from; > plays it)
     o.soundBtns = {}
     ns.soundBtns = o.soundBtns   -- (for the tests)
     for _, k in ipairs(ns.SOUND_KINDS) do
         local lab = o:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
         lab:SetPoint("TOPLEFT", o, "TOPLEFT", L + 2, y - 4)
         lab:SetText("Sound: " .. k.label)
-        local b = FlatButton(o, "", 130, 20)
+        local b = FlatButton(o, "", 140, 20)
         b:SetPoint("TOPLEFT", o, "TOPLEFT", L + 190, y - 1)
-        b:RegisterForClicks("LeftButtonUp", "RightButtonUp")
         function b.Paint()
             local cur = ns.SoundChoice(k.kind)
-            for _, c in ipairs(ns.SOUND_CHOICES) do
-                if c.key == cur then SetButtonText(b, c.key == "off" and "|cff808080Off|r" or c.label) end
-            end
+            SetButtonText(b, (cur == "off" and "|cff808080Off|r" or ns.SoundLabel(cur)) .. "  |cff999999v|r")
         end
-        b:SetScript("OnClick", function(_, button)
-            local list, cur, at = ns.SOUND_CHOICES, ns.SoundChoice(k.kind), 1
-            for i, c in ipairs(list) do if c.key == cur then at = i end end
-            at = (button == "RightButton") and ((at - 2) % #list + 1) or (at % #list + 1)
-            if type(db().sounds) ~= "table" then db().sounds = {} end
-            db().sounds[k.kind] = list[at].key
-            b.Paint()
-            ns.TrySound(list[at].key)   -- hear it as you pick
-        end)
+        b:SetScript("OnClick", function(self) ns.ToggleSoundMenu(self, k.kind, b.Paint) end)
         local play = FlatButton(o, ">", 22, 20, function() ns.TrySound(ns.SoundChoice(k.kind)) end)
         play:SetPoint("LEFT", b, "RIGHT", 4, 0)
         if k.hint then
@@ -3823,21 +3812,121 @@ end
 -- ---------------------------------------------------------------- PvP sounds, one choice per kind
 -- The game's own sounds (SOUNDKIT names, with stand-ins if WoW Forever lacks one). db.sounds[kind] = a key
 -- below, or "off"; "Sounds" (db.stealthSound) switches them all off at once.
--- Each: SOUNDKIT names and the game's sound kit numbers (what other addons on Forever use: the names may be
--- missing there), tried in order until the game says it plays one.
+-- Each: SOUNDKIT names and the game's sound kit numbers (what other addons on Forever use), tried in order until
+-- the game says it plays one. Sounds this client doesn't have are left out of the list (ns.SoundList).
 ns.SOUND_CHOICES = {
-    { key = "off",     label = "Off" },
-    { key = "raid",    label = "Raid warning", kit = { "RAID_WARNING", 8959 } },
-    { key = "alarm",   label = "Alarm",        kit = { "ALARM_CLOCK_WARNING_3", 12889, "ALARM_CLOCK_WARNING_2", 12867, 8959 } },
-    { key = "boss",    label = "Boss whisper", kit = { "UI_RAID_BOSS_WHISPER_WARNING", 37666, 8959 } },
-    { key = "ready",   label = "Ready check",  kit = { "READY_CHECK", 8960 } },
-    { key = "pvp",     label = "PvP queue",    kit = { "PVP_THROUGH_QUEUE", 8459, 8960 } },
-    { key = "ping",    label = "Map ping",     kit = { "MAP_PING", 3175, 3081 } },
-    { key = "whisper", label = "Whisper",      kit = { "TELL_MESSAGE", 3081 } },
-    { key = "invite",  label = "Invite",       kit = { "IG_PLAYER_INVITE", 880 } },
-    { key = "coins",   label = "Coins",        kit = { "LOOT_WINDOW_COIN_SOUND", 120 } },
-    { key = "quest",   label = "Quest done",   kit = { "IG_QUEST_LIST_COMPLETE", 878 } },
+    { key = "off",       label = "Off" },
+    { head = "Alarms" },
+    { key = "raid",      label = "Raid warning",     kit = { "RAID_WARNING", 8959 } },
+    { key = "bossemote", label = "Boss warning",     kit = { "RAID_BOSS_EMOTE_WARNING" } },
+    { key = "boss",      label = "Boss whisper",     kit = { "UI_RAID_BOSS_WHISPER_WARNING", 37666 } },
+    { key = "alarm",     label = "Alarm clock",      kit = { "ALARM_CLOCK_WARNING_3", 12889 } },
+    { key = "alarm2",    label = "Alarm, short",     kit = { "ALARM_CLOCK_WARNING_2", 12867 } },
+    { key = "alarm1",    label = "Alarm, soft",      kit = { "ALARM_CLOCK_WARNING_1" } },
+    { key = "horn",      label = "War horn",         kit = { "UI_GARRISON_TOAST_INVASION_ALERT" } },
+    { key = "ready",     label = "Ready check",      kit = { "READY_CHECK", 8960 } },
+    { key = "pvp",       label = "PvP queue",        kit = { "PVP_THROUGH_QUEUE", 8459 } },
+    { key = "pvpenter",  label = "PvP join",         kit = { "PVP_ENTER_QUEUE" } },
+    { key = "count",     label = "Countdown tick",   kit = { "UI_BATTLEGROUND_COUNTDOWN_TIMER" } },
+    { key = "countend",  label = "Countdown end",    kit = { "UI_BATTLEGROUND_COUNTDOWN_FINISHED" } },
+    { head = "Soft" },
+    { key = "ping",      label = "Map ping",         kit = { "MAP_PING", 3175 } },
+    { key = "whisper",   label = "Whisper",          kit = { "TELL_MESSAGE", 3081 } },
+    { key = "toast",     label = "Friend online",    kit = { "UI_BNET_TOAST" } },
+    { key = "invite",    label = "Invite",           kit = { "IG_PLAYER_INVITE", 880 } },
+    { head = "Rewards" },
+    { key = "coins",     label = "Coins",            kit = { "LOOT_WINDOW_COIN_SOUND", 120 } },
+    { key = "quest",     label = "Quest done",       kit = { "IG_QUEST_LIST_COMPLETE", 878 } },
+    { key = "levelup",   label = "Level up",         kit = { "LEVELUPSOUND", "LEVEL_UP" } },
+    { key = "epic",      label = "Epic loot",        kit = { "UI_EPICLOOT_TOAST" } },
+    { key = "legendary", label = "Legendary loot",   kit = { "UI_LEGENDARY_LOOT_TOAST" } },
+    { key = "auction",   label = "Auction house",    kit = { "AUCTION_WINDOW_OPEN" } },
 }
+-- the ones this client has (a number always counts; a name only if the game knows it), headings kept when
+-- something is under them
+function ns.SoundList()
+    if ns.soundList then return ns.soundList end
+    local out, head = {}, nil
+    for _, c in ipairs(ns.SOUND_CHOICES) do
+        if c.head then head = c
+        else
+            local have = c.key == "off"
+            for _, k in ipairs(c.kit or {}) do
+                if type(k) == "number" or (SOUNDKIT and SOUNDKIT[k]) then have = true end
+            end
+            if have then
+                if head then out[#out + 1] = head; head = nil end
+                out[#out + 1] = c
+            end
+        end
+    end
+    ns.soundList = out
+    return out
+end
+function ns.SoundLabel(key)
+    for _, c in ipairs(ns.SOUND_CHOICES) do if c.key == key then return c.label end end
+    return key
+end
+-- The list to pick from, under the sound's button: click one to hear it and choose it (it stays open to try more;
+-- a click anywhere else or Esc closes it).
+function ns.ToggleSoundMenu(anchor, kind, onPick)
+    local m = ns.soundMenu
+    if not m then
+        m = CreateFrame("Frame", "WatchXSoundMenu", UIParent)
+        m:SetFrameStrata("FULLSCREEN_DIALOG")
+        m:SetClampedToScreen(true)
+        m:EnableMouse(true)
+        m:SetWidth(170)
+        Flat(m)
+        m.rows, m.heads = {}, {}
+        tinsert(UISpecialFrames, "WatchXSoundMenu")
+        ns.MenuAutoClose(m)
+        ns.soundMenu = m
+    end
+    if m:IsShown() and m.anchor == anchor then m:Hide() return end
+    m.anchor, m.kind, m.onPick = anchor, kind, onPick
+    local cur, y, nr, nh = ns.SoundChoice(kind), -6, 0, 0
+    for _, c in ipairs(ns.SoundList()) do
+        if c.head then
+            nh = nh + 1
+            local h = m.heads[nh]
+            if not h then
+                h = m:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+                h:SetTextColor(ACCENT[1], ACCENT[2], ACCENT[3])
+                m.heads[nh] = h
+            end
+            h:SetText(c.head:upper())
+            h:ClearAllPoints(); h:SetPoint("TOPLEFT", m, "TOPLEFT", 10, y - 4)
+            h:Show()
+            y = y - 18
+        else
+            nr = nr + 1
+            local r = m.rows[nr]
+            if not r then
+                r = MenuRow(m, 154, function(self)
+                    if type(db().sounds) ~= "table" then db().sounds = {} end
+                    db().sounds[m.kind] = self.key
+                    ns.TrySound(self.key)
+                    if m.onPick then m.onPick() end
+                    ns.ToggleSoundMenu(m.anchor, m.kind, m.onPick)   -- (closes:)
+                    ns.ToggleSoundMenu(m.anchor, m.kind, m.onPick)   -- (open again, marked)
+                end)
+                m.rows[nr] = r
+            end
+            r.key = c.key
+            r:SetText(c.key == cur and ("|cffffd100> " .. c.label .. "|r") or ("   " .. c.label))
+            r:ClearAllPoints(); r:SetPoint("TOPLEFT", m, "TOPLEFT", 8, y)
+            r:Show()
+            y = y - 18
+        end
+    end
+    for i = nr + 1, #m.rows do m.rows[i]:Hide() end
+    for i = nh + 1, #m.heads do m.heads[i]:Hide() end
+    m:SetHeight(-y + 6)
+    m:ClearAllPoints()
+    m:SetPoint("TOPLEFT", anchor, "BOTTOMLEFT", 0, -2)
+    m:Show()
+end
 ns.SOUND_KINDS = {   -- (in the settings in this order)
     { kind = "stealth", label = "Stealth",          def = "raid" },
     { kind = "kos",     label = "Kill on sight",    def = "alarm" },
