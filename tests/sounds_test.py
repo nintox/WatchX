@@ -24,7 +24,12 @@ ex('NS.db.sounds.enemy = "ping"; NS.AlertSound("enemy"); NS.AlertSound("enemy")'
 check(ev('played()') == "13", "new enemy: map ping, once in 5 s")
 ex('tick(6, 1); NS.AlertSound("enemy")'); check(ev('played()') == "13", "and again after 5 s")
 ex('NS.db.sounds.kos = "quest"; NS.AlertSound("kos")'); check(ev('played()') == "2", "a choice: quest done")
-ex('NS.db.sounds.kos = "pvp"; NS.AlertSound("kos")'); check(ev('played()') == "", "a sound the game lacks: tries the stand-ins (none here)")
+ex('NS.db.sounds.kos = "pvp"; NS.AlertSound("kos")'); check(ev('played()') == "8459", "its name missing on the client: its number is used")
+ex('local p = PlaySound; PlaySound = function(id) table.insert(PLAYED, id); return id ~= 12 end; NS.db.sounds.kos = "boss"; NS.AlertSound("kos"); PlaySound = p')
+check(ev('played()') == "12,37666", "the game says it won't play it: the next one is tried")
+ex('PlaySound = function(id) table.insert(PLAYED, id); return false end; OUTN = 0; local pr = NS.Print; NS.Print = function(m) OUTN = OUTN + 1 end; NS.TrySound("raid"); NS.Print = pr; PlaySound = function(id) table.insert(PLAYED, id) end')
+check(ev('OUTN') == 1, "nothing played when you test it: it says so")
+ex('played()')
 ex('NS.db.stealthSound = false; NS.AlertSound("stealth"); NS.AlertSound("bounty")'); check(ev('played()') == "", "Sounds off: none")
 ex('NS.db.stealthSound = true')
 # the settings page: a click picks the next sound and plays it, right-click goes back

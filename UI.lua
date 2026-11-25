@@ -1966,9 +1966,9 @@ function ns.BuildNearbySettings()
             if type(db().sounds) ~= "table" then db().sounds = {} end
             db().sounds[k.kind] = list[at].key
             b.Paint()
-            ns.PlayChoice(list[at].key)   -- hear it as you pick
+            ns.TrySound(list[at].key)   -- hear it as you pick
         end)
-        local play = FlatButton(o, ">", 22, 20, function() ns.PlayChoice(ns.SoundChoice(k.kind)) end)
+        local play = FlatButton(o, ">", 22, 20, function() ns.TrySound(ns.SoundChoice(k.kind)) end)
         play:SetPoint("LEFT", b, "RIGHT", 4, 0)
         if k.hint then
             local h = o:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
@@ -3812,18 +3812,20 @@ end
 -- ---------------------------------------------------------------- PvP sounds, one choice per kind
 -- The game's own sounds (SOUNDKIT names, with stand-ins if WoW Forever lacks one). db.sounds[kind] = a key
 -- below, or "off"; "Sounds" (db.stealthSound) switches them all off at once.
+-- Each: SOUNDKIT names and the game's sound kit numbers (what other addons on Forever use: the names may be
+-- missing there), tried in order until the game says it plays one.
 ns.SOUND_CHOICES = {
     { key = "off",     label = "Off" },
-    { key = "raid",    label = "Raid warning", kit = { "RAID_WARNING" } },
-    { key = "alarm",   label = "Alarm",        kit = { "ALARM_CLOCK_WARNING_3", "ALARM_CLOCK_WARNING_2", "RAID_WARNING" } },
-    { key = "boss",    label = "Boss whisper", kit = { "UI_RAID_BOSS_WHISPER_WARNING", "RAID_WARNING" } },
-    { key = "ready",   label = "Ready check",  kit = { "READY_CHECK", "RAID_WARNING" } },
-    { key = "pvp",     label = "PvP queue",    kit = { "PVP_THROUGH_QUEUE", "READY_CHECK" } },
-    { key = "ping",    label = "Map ping",     kit = { "MAP_PING", "TELL_MESSAGE" } },
-    { key = "whisper", label = "Whisper",      kit = { "TELL_MESSAGE" } },
-    { key = "invite",  label = "Invite",       kit = { "IG_PLAYER_INVITE", "TELL_MESSAGE" } },
-    { key = "coins",   label = "Coins",        kit = { "LOOT_WINDOW_COIN_SOUND", "IG_BACKPACK_COIN_SELECT" } },
-    { key = "quest",   label = "Quest done",   kit = { "IG_QUEST_LIST_COMPLETE", "READY_CHECK" } },
+    { key = "raid",    label = "Raid warning", kit = { "RAID_WARNING", 8959 } },
+    { key = "alarm",   label = "Alarm",        kit = { "ALARM_CLOCK_WARNING_3", 12889, "ALARM_CLOCK_WARNING_2", 12867, 8959 } },
+    { key = "boss",    label = "Boss whisper", kit = { "UI_RAID_BOSS_WHISPER_WARNING", 37666, 8959 } },
+    { key = "ready",   label = "Ready check",  kit = { "READY_CHECK", 8960 } },
+    { key = "pvp",     label = "PvP queue",    kit = { "PVP_THROUGH_QUEUE", 8459, 8960 } },
+    { key = "ping",    label = "Map ping",     kit = { "MAP_PING", 3175, 3081 } },
+    { key = "whisper", label = "Whisper",      kit = { "TELL_MESSAGE", 3081 } },
+    { key = "invite",  label = "Invite",       kit = { "IG_PLAYER_INVITE", 880 } },
+    { key = "coins",   label = "Coins",        kit = { "LOOT_WINDOW_COIN_SOUND", 120 } },
+    { key = "quest",   label = "Quest done",   kit = { "IG_QUEST_LIST_COMPLETE", 878 } },
 }
 ns.SOUND_KINDS = {   -- (in the settings in this order)
     { kind = "stealth", label = "Stealth",          def = "raid" },
@@ -3838,15 +3840,29 @@ function ns.SoundChoice(kind)
     for _, k in ipairs(ns.SOUND_KINDS) do if k.kind == kind then return k.def end end
     return "off"
 end
+-- true when the game said it plays it. PlaySound answers "will it play" first; a false or an error: the next one.
 function ns.PlayChoice(key)
+    if not PlaySound then return false end
     for _, c in ipairs(ns.SOUND_CHOICES) do
-        if c.key == key and c.kit and SOUNDKIT and PlaySound then
-            for _, name in ipairs(c.kit) do
-                if SOUNDKIT[name] and pcall(PlaySound, SOUNDKIT[name], "Master") then return true end
+        if c.key == key and c.kit then
+            for _, k in ipairs(c.kit) do
+                local id = type(k) == "number" and k or (SOUNDKIT and SOUNDKIT[k])
+                if id then
+                    local ok, will = pcall(PlaySound, id, "Master")
+                    if ok and will ~= false then return true end
+                end
             end
         end
     end
     return false
+end
+-- From the settings (a pick or the > button): say so when nothing could be heard.
+function ns.TrySound(key)
+    if key == "off" then return end
+    if not ns.PlayChoice(key) then
+        ns.Print("|cffff8040No sound played|r – the game wouldn't play it. Is |cffffd100Sound Effects|r on "
+            .. "(System > Audio), and the Master volume up?")
+    end
 end
 function ns.AlertSound(kind)
     if db().stealthSound == false then return end   -- "Sounds" off: none of them
