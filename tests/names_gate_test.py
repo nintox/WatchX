@@ -9,9 +9,9 @@ def check(cond, what):
     if not cond: fails.append(what)
 
 def problem(n): return ev('NS.NameProblem(%r)' % n)
-for good in ["Ola-Nordmann", "Bob", "Ørjan-Åsheim", "Élise-Dubois", "Anna-Lee"]:
+for good in ["Ola-Nordmann", "Bob", "Ørjan-Åsheim", "Élise-Dubois", "Anna-Lee", "Иван-Петров"]:
     check(problem(good) is None, "fine: " + good)
-for bad, why in [("Sug-Kuk", "rude"), ("Kurwa-Mac", "Polish"), ("Merde-Bob", "French"), ("Hurensohnx-Ab", "German inside"), ("Kuk", "rude"), ("Fuckface-Bob", "rude inside"), ("Aaa-Bob", "three in a row"),
+for bad, why in [("Sug-Kuk", "rude"), ("Kurwa-Mac", "Polish"), ("Сука-Иван", "Russian, capital"), ("Пиздец", "Russian inside"), ("Merde-Bob", "French"), ("Hurensohnx-Ab", "German inside"), ("Kuk", "rude"), ("Fuckface-Bob", "rude inside"), ("Aaa-Bob", "three in a row"),
                  ("B-Smith", "too short"), ("Abcdefghijklm-Smith", "too long"), ("Bob1-Smith", "digits"), ("A-B-C", "three parts")]:
     check(problem(bad) is not None, "refused (%s): %s – %s" % (why, bad, problem(bad)))
 ex('NS.SetWanted(NS.KeyFromName("sug kuk"), "sug kuk", 10000, "x")')

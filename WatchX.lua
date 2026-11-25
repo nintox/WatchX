@@ -2768,7 +2768,15 @@ end
         hora = 1, javla = 1, knulla = 1, kneppe = 1, pik = 1, fisse = 1, luder = 1, kut = 1, lul = 1, hoer = 1,
         kanker = 1, tering = 1, kurwa = 1, chuj = 1, pizda = 1, jebac = 1 }
     local RUDE_IN = { "fuck", "cunt", "nigg", "fitte", "faggot", "whore", "hitler", "kuken", "kurwa", "fotze",
-        "wichser", "hurensohn", "arschloch", "putain", "vaffanculo", "puttana", "klootzak", "hijodeputa", "jebac" }   -- even inside a name
+        "wichser", "hurensohn", "arschloch", "putain", "vaffanculo", "puttana", "klootzak", "hijodeputa", "jebac",
+        "хуй", "хуе", "пизд", "бляд", "ебат", "ёб", "сука", "мудак", "пидор" }   -- even inside a name (Cyrillic too)
+    -- small letters for the comparison: A–Z, and Cyrillic А–Я / Ё (two bytes each in UTF-8)
+    local function Low(s)
+        s = s:gsub("[A-Z]", function(c) return string.char(c:byte() + 32) end)   -- (not :lower(): a locale may touch UTF-8 bytes)
+        s = s:gsub("\208([\144-\159])", function(c) return "\208" .. string.char(c:byte() + 32) end)   -- А–П
+        s = s:gsub("\208([\160-\175])", function(c) return "\209" .. string.char(c:byte() - 32) end)   -- Р–Я
+        return (s:gsub("\208\129", "\209\145"))                                                        -- Ё
+    end
     function ns.NameProblem(name)
         if type(name) ~= "string" then return "That isn't a name." end
         local parts = {}
@@ -2779,7 +2787,7 @@ end
             if not part:find("^[%a\128-\255]+$") then return "Names are letters only: " .. part end
             local letters = select(2, part:gsub("[^\128-\191]", ""))   -- (letters, not bytes: æ ø å are two bytes)
             if letters < 2 or letters > 12 then return "Each name is 2 to 12 letters: " .. part end
-            local low = part:lower()
+            local low = Low(part)
             if low:find("(%a)%1%1") then return "WoW doesn't allow three of the same letter in a row: " .. part end
             if RUDE_PART[low] then return "That isn't a name WoW would allow." end
             for _, w in ipairs(RUDE_IN) do if low:find(w, 1, true) then return "That isn't a name WoW would allow." end end
