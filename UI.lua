@@ -324,6 +324,7 @@ local function BuildProfileMenu()
         m:Hide()
         StaticPopup_Show("WATCHX_NEWPROFILE")
     end)
+    m.exp = FlatButton(m, "Export / import...", 170, 20, function() m:Hide(); ns.ShowExport() end)
     m.del = FlatButton(m, "Delete", 170, 20, function()
         m:Hide()
         local cur = db().profile
@@ -363,6 +364,8 @@ function ns.ToggleProfileMenu(anchor)
     m.del:SetShown(#names > 1)
     m.del:ClearAllPoints(); m.del:SetPoint("TOPLEFT", m, "TOPLEFT", 10, y)
     if #names > 1 then y = y - 23 end
+    m.exp:ClearAllPoints(); m.exp:SetPoint("TOPLEFT", m, "TOPLEFT", 10, y)
+    y = y - 23
     m:SetHeight(-y + 8)
     m:ClearAllPoints()
     m:SetPoint("TOPRIGHT", anchor, "BOTTOMRIGHT", 0, -2)
@@ -7616,6 +7619,272 @@ do (function()
         elseif InterfaceOptions_AddCategory then
             InterfaceOptions_AddCategory(page)
         end
+    end
+end)() end
+
+-- ---------------------------------------------------------------- export / import (/wx export)
+-- Everything WatchX keeps is for the whole account (all your characters): settings and profiles (and which profile
+-- each character uses), and – if ticked – the Enemies history (KOS, avoid, notes), KOS guilds and bounties, and your
+-- phone links (private: off unless ticked). One line of text to copy and keep; pasting it back shows what's in it
+-- first. It's read by a small parser of our own, never run as code: a pasted text can only set saved values.
+do (function()
+    -- what goes where. Caches the addon fills by itself, and the logs, are never exported.
+    local NEVER = { roles = true, log = true, previousLog = true, recipes = true, xpFoods = true, methodFailed = true,
+        mobs = true, exitAt = true, exitWhy = true, chatlogOn = true }
+    local ENEMIES = { enemies = true, kosGuilds = true, wanted = true }
+    local SECRET = { discordWebhook = true, ntfyUrl = true, discordMention = true, bridgeKey = true }
+
+    -- ---- the text: s<len>:<bytes> | n<number>; | t | f | { key value … }
+    local function Ser(v, out, depth)
+        local t = type(v)
+        if t == "string" then out[#out + 1] = "s" .. #v .. ":" .. v
+        elseif t == "number" then out[#out + 1] = "n" .. string.format("%.17g", v) .. ";"
+        elseif t == "boolean" then out[#out + 1] = v and "t" or "f"
+        elseif t == "table" and depth < 24 then
+            out[#out + 1] = "{"
+            for k, x in pairs(v) do
+                local kt, xt = type(k), type(x)
+                if (kt == "string" or kt == "number") and (xt == "string" or xt == "number" or xt == "boolean" or xt == "table") then
+                    Ser(k, out, depth + 1); Ser(x, out, depth + 1)
+                end
+            end
+            out[#out + 1] = "}"
+        else
+            out[#out + 1] = "f"
+        end
+    end
+    local function Parse(s, i, depth)   -- value, next position (nil when it isn't ours)
+        local c = s:sub(i, i)
+        if c == "s" then
+            local len, rest = s:match("^(%d+):()", i + 1)
+            len = tonumber(len)
+            if not len or rest + len - 1 > #s then return nil end
+            return s:sub(rest, rest + len - 1), rest + len
+        elseif c == "n" then
+            local num, rest = s:match("^([%-%d%.eE+naif]+);()", i + 1)
+            num = tonumber(num)
+            if not num then return nil end
+            return num, rest
+        elseif c == "t" then return true, i + 1
+        elseif c == "f" then return false, i + 1
+        elseif c == "{" and depth < 24 then
+            local t = {}
+            i = i + 1
+            while s:sub(i, i) ~= "}" do
+                if i > #s then return nil end
+                local k, v
+                k, i = Parse(s, i, depth + 1)
+                if k == nil or (type(k) ~= "string" and type(k) ~= "number") then return nil end
+                v, i = Parse(s, i, depth + 1)
+                if v == nil then return nil end
+                t[k] = v
+            end
+            return t, i + 1
+        end
+        return nil
+    end
+    -- base64: the text has no "|" (the chat box reads those as codes) and no line breaks
+    local B = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+    local ENC, DEC = {}, {}
+    for i = 1, 64 do ENC[i - 1] = B:sub(i, i); DEC[B:byte(i)] = i - 1 end
+    local function Enc(s)
+        local out, n = {}, #s
+        for i = 1, n, 3 do
+            local a, b, c = s:byte(i, i + 2)
+            local v = a * 65536 + (b or 0) * 256 + (c or 0)
+            local d1, d2 = math.floor(v / 262144) % 64, math.floor(v / 4096) % 64
+            local d3, d4 = math.floor(v / 64) % 64, v % 64
+            out[#out + 1] = ENC[d1] .. ENC[d2] .. (b and ENC[d3] or "=") .. (c and ENC[d4] or "=")
+        end
+        return table.concat(out)
+    end
+    local function Dec(s)
+        s = s:gsub("[^%w%+/=]", "")
+        local out = {}
+        for i = 1, #s, 4 do
+            local c1, c2, c3, c4 = s:byte(i, i + 3)
+            local d1, d2, d3, d4 = DEC[c1], DEC[c2], DEC[c3 or 0], DEC[c4 or 0]
+            if d1 == nil or d2 == nil then break end
+            local v = d1 * 262144 + d2 * 4096 + (d3 or 0) * 64 + (d4 or 0)
+            local a, b, c = math.floor(v / 65536) % 256, math.floor(v / 256) % 256, v % 256
+            out[#out + 1] = string.char(a) .. (d3 and string.char(b) or "") .. (d4 and string.char(c) or "")
+        end
+        return table.concat(out)
+    end
+    local function Sum(s)   -- a check that it came back whole
+        local h = 0
+        for i = 1, #s do h = (h * 31 + s:byte(i)) % 16777213 end
+        return h
+    end
+
+    function ns.MakeExport(opts)
+        local d = db()
+        if ns.SaveProfile then ns.SaveProfile() end   -- (the active profile as it is now)
+        local pick = {}
+        for k, v in pairs(d) do
+            local enemy = ENEMIES[k]
+            if not NEVER[k] and ((enemy and opts.enemies) or (SECRET[k] and opts.secrets)
+                    or (not enemy and not SECRET[k] and opts.settings)) then
+                pick[k] = v
+            end
+        end
+        local out = {}
+        Ser({ v = 1, what = { settings = opts.settings or nil, enemies = opts.enemies or nil, secrets = opts.secrets or nil },
+              at = time(), data = pick }, out, 0)
+        local body = table.concat(out)
+        return "WATCHX1:" .. #body .. ":" .. Sum(body) .. ":" .. Enc(body)
+    end
+    function ns.ReadExport(text)   -- the export table, or nil + why
+        text = tostring(text or ""):gsub("%s", "")
+        local len, sum, data = text:match("^WATCHX1:(%d+):(%d+):(.+)$")
+        if not len then return nil, "That isn't a WatchX export (it starts with WATCHX1:)." end
+        local body = Dec(data)
+        if #body ~= tonumber(len) or Sum(body) ~= tonumber(sum) then
+            return nil, "The text is cut or changed – copy all of it (Ctrl+A, Ctrl+C) and try again."
+        end
+        local t = Parse(body, 1, 0)
+        if type(t) ~= "table" or type(t.data) ~= "table" then return nil, "The text couldn't be read." end
+        return t
+    end
+    -- settings: replaced (yours are lost – an export first is a good idea); enemies, KOS guilds, bounties: merged
+    function ns.ApplyExport(t)
+        local d = db()
+        local n = { settings = 0, enemies = 0 }
+        for k, v in pairs(t.data) do
+            if k == "enemies" and type(v) == "table" then
+                d.enemies = d.enemies or {}
+                for key, r in pairs(v) do
+                    if type(r) == "table" then
+                        local mine = d.enemies[key]
+                        if not mine then d.enemies[key] = r; n.enemies = n.enemies + 1
+                        else
+                            mine.kos = mine.kos or r.kos
+                            mine.avoid = mine.avoid or r.avoid
+                            mine.note = mine.note or r.note
+                            mine.kills = math.max(tonumber(mine.kills) or 0, tonumber(r.kills) or 0)
+                            mine.deaths = math.max(tonumber(mine.deaths) or 0, tonumber(r.deaths) or 0)
+                        end
+                    end
+                end
+            elseif (k == "kosGuilds" or k == "wanted") and type(v) == "table" then
+                d[k] = type(d[k]) == "table" and d[k] or {}
+                for key, x in pairs(v) do if d[k][key] == nil then d[k][key] = x end end
+            elseif not NEVER[k] then
+                d[k] = v
+                n.settings = n.settings + 1
+            end
+        end
+        return n
+    end
+
+    -- ---- the window
+    local win
+    local function Build()
+        win = CreateFrame("Frame", "WatchXExport", UIParent)
+        win:SetFrameStrata("DIALOG")
+        win:SetSize(520, 390)
+        win:SetPoint("CENTER")
+        win:SetClampedToScreen(true)
+        win:EnableMouse(true)
+        win:SetMovable(true)
+        win:RegisterForDrag("LeftButton")
+        win:SetScript("OnDragStart", win.StartMoving)
+        win:SetScript("OnDragStop", win.StopMovingOrSizing)
+        Flat(win)
+        tinsert(UISpecialFrames, "WatchXExport")
+        local title = win:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+        title:SetPoint("TOPLEFT", 14, -12)
+        title:SetText("Export / import")
+        local sub = win:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+        sub:SetPoint("LEFT", title, "RIGHT", 10, -1)
+        sub:SetText("all your characters – keep it in a text file, or move it to another PC")
+        local x = Button(win, "x", 22, 22, function() win:Hide() end)
+        x:SetPoint("TOPRIGHT", -8, -8)
+        win.opts = { settings = true, enemies = true, secrets = false }
+        local y = -40
+        local function check(key, label, hint)
+            local cb = CreateFrame("CheckButton", nil, win, "UICheckButtonTemplate")
+            cb:SetSize(24, 24)
+            cb:SetPoint("TOPLEFT", 10, y)
+            local t = win:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+            t:SetPoint("LEFT", cb, "RIGHT", 2, 1)
+            t:SetText(label .. (hint and ("  |cff808080" .. hint .. "|r") or ""))
+            cb:SetChecked(win.opts[key])
+            cb:SetScript("OnClick", function(self) win.opts[key] = self:GetChecked() and true or false end)
+            y = y - 24
+        end
+        check("settings", "Settings & profiles", "and which profile each character uses")
+        check("enemies", "Enemies, KOS, notes & bounties", "the players you've met")
+        check("secrets", "Phone links", "|cffff8040private – your Discord / ntfy links: only for yourself|r")
+        local mk = Button(win, "Export", 100, 22, function()
+            local ok, text = pcall(ns.MakeExport, win.opts)
+            win.box:SetText(ok and text or "")
+            win.box:SetFocus()
+            win.box:HighlightText()
+            win.status:SetText(ok and ("|cff40ff40Ready|r – Ctrl+C to copy (" .. math.floor(#text / 1024 + 0.5) .. " kB of text).")
+                or ("|cffff6060Couldn't make it:|r " .. tostring(text)))
+            win.pending = nil
+            win.imp:SetText("Import")
+        end)
+        mk:SetPoint("TOPLEFT", 14, y - 4)
+        win.imp = Button(win, "Import", 100, 22, function()
+            if win.pending then   -- the second click: do it
+                local n = ns.ApplyExport(win.pending)
+                win.pending = nil
+                win.imp:SetText("Import")
+                win.status:SetText("|cff40ff40Imported|r: " .. n.settings .. " settings, " .. n.enemies
+                    .. " new players. |cffffd100Reload to use it all.|r")
+                win.reload:Show()
+                return
+            end
+            local t, why = ns.ReadExport(win.box:GetText())
+            if not t then win.status:SetText("|cffff6060" .. why .. "|r") return end
+            local w, parts = t.what or {}, {}
+            if w.settings then parts[#parts + 1] = "settings & profiles (yours are replaced)" end
+            if w.enemies then parts[#parts + 1] = "enemies, KOS & bounties (added to yours)" end
+            if w.secrets then parts[#parts + 1] = "|cffff8040phone links|r" end
+            win.pending = t
+            win.imp:SetText("|cffffd100Yes, import|r")
+            win.status:SetText("From " .. (t.at and date("%d %b %Y %H:%M", t.at) or "?") .. ": " .. table.concat(parts, ", ")
+                .. ". Click again to import.")
+        end)
+        win.imp:SetPoint("LEFT", mk, "RIGHT", 8, 0)
+        win.reload = Button(win, "Reload now", 100, 22, function() ReloadUI() end)
+        win.reload:SetPoint("LEFT", win.imp, "RIGHT", 8, 0)
+        win.reload:Hide()
+        win.status = win:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        win.status:SetPoint("TOPLEFT", 14, y - 32)
+        win.status:SetWidth(490)
+        win.status:SetJustifyH("LEFT")
+        -- the text: a scrolling box (paste an export here to import it)
+        local sf = CreateFrame("ScrollFrame", nil, win, "UIPanelScrollFrameTemplate")
+        sf:SetPoint("TOPLEFT", 14, y - 52)
+        sf:SetPoint("BOTTOMRIGHT", -32, 14)
+        local bg = win:CreateTexture(nil, "BACKGROUND", nil, 1)
+        bg:SetPoint("TOPLEFT", sf, -4, 4); bg:SetPoint("BOTTOMRIGHT", sf, 4, -4)
+        bg:SetColorTexture(0, 0, 0, 0.5)
+        local box = CreateFrame("EditBox", nil, sf)
+        box:SetMultiLine(true)
+        box:SetAutoFocus(false)
+        box:SetFontObject("GameFontHighlightSmall")
+        box:SetWidth(460)
+        if box.SetMaxLetters then box:SetMaxLetters(0) end
+        box:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+        box:SetScript("OnTextChanged", function(_, user) if user then win.pending = nil; win.imp:SetText("Import") end end)
+        sf:SetScrollChild(box)
+        win.box = box
+        win:Hide()
+    end
+    function ns.ShowExport(import)
+        if not win then Build() end
+        win.pending = nil
+        win.imp:SetText("Import")
+        win.reload:Hide()
+        win.box:SetText("")
+        win.status:SetText(import and "Paste an export below (Ctrl+V), then click Import."
+            or "Tick what to take with you, then click Export – or paste one below and click Import.")
+        win:Show()
+        if import then win.box:SetFocus() end
     end
 end)() end
 

@@ -3966,6 +3966,24 @@ function ns.InitProfiles()
         db.profile = "Camping"
     end
     if not db.profiles[db.profile or ""] then db.profile = ns.ProfileNames()[1] end
+    -- each character keeps the profile it had last time (set when you switch on it)
+    local want = type(db.charProfile) == "table" and db.charProfile[ns.CharKey()] or nil
+    if want and want ~= db.profile and db.profiles[want] then
+        db.profiles[db.profile] = Snapshot()
+        ApplySnapshot(db.profiles[want])
+        db.profile = want
+    end
+end
+
+-- "Name-Realm": which character this is (its own profile, its /played …)
+function ns.CharKey()
+    local n = UnitName and UnitName("player")
+    if issecretvalue and n ~= nil and issecretvalue(n) then n = nil end
+    return tostring(n or "?") .. "-" .. tostring((GetRealmName and GetRealmName()) or "")
+end
+function ns.RememberProfile(name)
+    if type(db.charProfile) ~= "table" then db.charProfile = {} end
+    db.charProfile[ns.CharKey()] = name
 end
 
 function ns.ProfileNames()
@@ -3987,7 +4005,8 @@ function ns.SwitchProfile(name)
     if db.profile then db.profiles[db.profile] = Snapshot() end
     ApplySnapshot(db.profiles[name])
     db.profile = name
-    Print("Profile: |cff38ccad" .. name .. "|r")
+    ns.RememberProfile(name)
+    Print("Profile: |cff38ccad" .. name .. "|r |cffaaaaaa(this character)|r")
     AfterProfileChange()
 end
 
@@ -4002,6 +4021,7 @@ function ns.NewProfile(name)
     if db.profile then db.profiles[db.profile] = Snapshot() end
     db.profiles[name] = Snapshot()
     db.profile = name
+    ns.RememberProfile(name)
     Print("New profile |cff38ccad" .. name .. "|r – a copy of your current settings. Change what you like.")
     Refresh()
     return true
@@ -4011,6 +4031,7 @@ function ns.DeleteProfile(name)
     if not db.profiles[name] then return false end
     if #ns.ProfileNames() <= 1 then Print("You need at least one profile.") return false end
     db.profiles[name] = nil
+    for k, v in pairs(type(db.charProfile) == "table" and db.charProfile or {}) do if v == name then db.charProfile[k] = nil end end
     Print("Deleted the profile '" .. name .. "'.")
     if db.profile == name then
         db.profile = ns.ProfileNames()[1]
@@ -4454,6 +4475,8 @@ local function OnSlash(input)
         name = name or rest
         if Trim(name) ~= "" then ns.SetAvoid(name, true, note)
         elseif ns.ShowHistory then ns.ShowHistory("avoid") end
+    elseif cmd == "export" or cmd == "import" or cmd == "backup" then
+        if ns.ShowExport then ns.ShowExport(cmd == "import") end
     elseif cmd == "rebuff" then
         if rest ~= "" and ns.AddRebuff then ns.AddRebuff(rest)
         elseif ns.OpenRebuffSettings then ns.OpenRebuffSettings() end
