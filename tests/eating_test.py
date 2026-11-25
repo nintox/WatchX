@@ -66,6 +66,11 @@ check("+45" in str(ev('WatchXEating.rows[1].tick.__text')), "food over 30 s: +45
 
 ex('AURAS = {}; fire("UNIT_AURA", "player"); tick(0.5)')
 check(not ev('WatchXEating:IsShown()'), "done eating: gone")
+# unlock and lock with nothing to eat: the "drag to move" label goes away too
+ex('AURAS = {}; NS.StartMove(); tick(1, 0.25)')
+check(ev('WatchXEatingLabel and WatchXEatingLabel:IsShown()'), "unlocked: the label shows")
+ex('NS.StopMove(); tick(1, 0.25)')
+check(not ev('WatchXEatingLabel:IsShown()'), "locked: the label is gone")
 errs = errors(ev)
 check(len(errs) == 0, "no Lua errors " + (str(errs[0])[:300] if errs else ""))
 print("eating:", "ALL PASSED" if not fails else "%d FAILED" % len(fails))

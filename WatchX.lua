@@ -1907,16 +1907,20 @@ local function CheckBoosts(now)
     if not was or db.levelWarn == false then return end
     if Plain(UnitIsDeadOrGhost("player")) == true then return end
     local function gone(k) return was[k] and not now[k] end
-    -- done: you can stop eating / get up / the tent has worked (shown at once, in town too: you just did it)
-    if now.fed and not was.fed and not fedGone then
+    -- done: you can stop eating / get up / the tent has worked (shown at once, in town too: you just did it).
+    -- Only for what you just did: after a loading screen (a portal) the buffs can read missing for a moment and
+    -- come back – that's not news. Well Fed comes from eating; the bag's stacks build one at a time (0 -> 3 is
+    -- a bad read); a new Boosted Rest has almost its full hour left.
+    local ate = now.eating or was.eating or ns.eatWatch
+    if now.fed and not was.fed and ate and not fedGone then
         ns.Done("Well Fed – +5% XP from kills for 15 min. You can stop eating.")
-    elseif now.fed and not was.fed and fedGone then
+    elseif now.fed and not was.fed and ate and fedGone then
         ns.Done("Well Fed again – topped up for 15 min.")
     end
-    if (now.restedStacks or 0) >= 3 and (was.restedStacks or 0) < 3 then
+    if (now.restedStacks or 0) >= 3 and (was.restedStacks or 0) >= 1 and (was.restedStacks or 0) < 3 then
         ns.Done("Well-Rested 3/3 – the full +3% XP. You can get up.")
     end
-    if now.boost and not was.boost then
+    if now.boost and not was.boost and (now.boostLeft or 0) > 3300 then
         ns.Done("Boosted Rest – the tent is done" .. (now.restedPct and (": rested " .. now.restedPct .. "%") or "") .. ".")
     end
     -- Well Fed gone: eating a new dish takes the old one away and gives the new one 10 seconds later, so wait 20
@@ -2360,6 +2364,7 @@ ComputeLevelStatus = function()
     local boost = aura(BOOSTED_REST)
     local tents = ItemCount(CAMP_TENT)
     seen.boost = boost and true or nil
+    seen.boostLeft = boost and boost.left or nil
     name, icon, slot = "Camp Tent", ItemIcon(CAMP_TENT) or SpellIcon(BOOSTED_REST) or "Interface\\Icons\\Spell_Fire_Fire", "tent"
     -- what you carry: campfires, and the camp features (the tent first) – one feature per player per hour
     local fires, feats = {}, {}

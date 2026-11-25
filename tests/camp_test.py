@@ -40,6 +40,13 @@ check(b and b.state == "wait" and "2 hours" in str(b.text), "3/3, bag ready: lie
 ex('AURAS = { A("Well-Rested", 429959, 7100, 3) }')
 b = ev('row("bag")')
 check(b and b.state == "ok", "3/3 and just renewed: green")
+# a portal: the buffs read missing for a moment and come back – no "3/3, you can get up" again
+ex('DONE = {}; local d = NS.Done; NS.Done = function(m) table.insert(DONE, m); d(m) end')
+ex('AURAS = { A("Well-Rested", 429959, 3000, 3), A("Well Fed", 1243969, 800) }; look(3)')
+ex('DONE = {}; AURAS = {}; look(2); AURAS = { A("Well-Rested", 429959, 2990, 3), A("Well Fed", 1243969, 790) }; look(3)')
+check(ev('#DONE') == 0, "after a loading screen: no 'you can get up' / 'stop eating' " + str(ev('DONE[1]')))
+ex('AURAS = { A("Well-Rested", 429959, 7200, 2) }; look(3); DONE = {}; AURAS = { A("Well-Rested", 429959, 7200, 3) }; look(3)')
+check(ev('DONE[1]') and "3/3" in str(ev('DONE[1]')), "2 -> 3 on the bag: 'you can get up'")
 errs = errors(ev)
 check(len(errs) == 0, "no Lua errors " + (str(errs[0])[:300] if errs else ""))
 print("camp:", "ALL PASSED" if not fails else "%d FAILED" % len(fails))

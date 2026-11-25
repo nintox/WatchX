@@ -6209,12 +6209,14 @@ do (function()
         if not ns.db then return end
         if db().eatTimer == false and not moving then
             if f then f:Hide() end
+            if ft then ft:Hide() end   -- (the "drag to move" label goes with it when you lock)
             return
         end
         local list = Find()
         if #list == 0 and not moving then
             wipe(seen)
             if f then f:Hide() end
+            if ft then ft:Hide() end
             return
         end
         if not f then Build() end
