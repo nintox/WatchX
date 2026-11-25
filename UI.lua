@@ -7054,7 +7054,7 @@ end
 -- The icons are secure buttons (they cast): they're laid out out of combat only – your buffs can't be read in a
 -- fight on Forever anyway, so in a fight they stay as they were. Read again only when your buffs change.
 do (function()
-    local ICON, GAP, PAD = 32, 5, 4
+    local ICON, GAP, PAD, TIME_H = 32, 8, 6, 13   -- (TIME_H: the time under each icon, like the game's buffs)
     local f, label
     local function ClassKey() local _, c = UnitClass("player"); return type(c) == "string" and c or "ANY" end
     function ns.RebuffList()
@@ -7114,12 +7114,13 @@ do (function()
     end
     local function WeaponEnchanted(slot)   -- true / false / nil (can't tell), and the seconds left
         if not GetWeaponEnchantInfo then return nil end
-        local ok, mh, mhMs, _, _, oh, ohMs = pcall(GetWeaponEnchantInfo)
+        local ok, mh, mhMs, mhCh, _, oh, ohMs, ohCh = pcall(GetWeaponEnchantInfo)
         if not ok then return nil end
         local v = Plain0(slot == 16 and mh or oh)
         if v == nil then return nil end
         local ms = tonumber(Plain0(slot == 16 and mhMs or ohMs))
-        return v and true or false, ms and ms / 1000 or nil
+        local ch = tonumber(Plain0(slot == 16 and mhCh or ohCh))
+        return v and true or false, ms and ms / 1000 or nil, (ch and ch > 0) and ch or nil
     end
     -- what's on the weapon: its tooltip has a green line "Instant Poison (29 min)" – the name before the brackets
     local function EnchantName(slot)
@@ -7324,9 +7325,17 @@ do (function()
         b:SetAttribute("type1", "spell")   -- (a weapon line: "macro", set when it's laid out)
         b:SetAttribute("unit", "player")
         b:SetSize(ICON, ICON)
-        b.border = b:CreateTexture(nil, "BACKGROUND")
-        b.border:SetPoint("TOPLEFT", -2, 2); b.border:SetPoint("BOTTOMRIGHT", 2, -2)
-        b.border:SetColorTexture(1, 0.2, 0.2, 1)
+        -- the look of WoW Forever's own frames (the eating tiles too): a black back and a gold edge a little outside
+        b.back = b:CreateTexture(nil, "BACKGROUND")
+        b.back:SetAllPoints()
+        b.back:SetColorTexture(0, 0, 0, 1)
+        b.frame = CreateFrame("Frame", nil, b)
+        b.frame:SetPoint("TOPLEFT", -4, 4); b.frame:SetPoint("BOTTOMRIGHT", 4, -4)
+        b.frame:SetFrameLevel(b:GetFrameLevel() + 1)
+        if not Backdrop(b.frame, { edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", edgeSize = 12, bgFile = nil }) then
+            b.frame.SetBackdropBorderColor = function() end
+        end
+        b.frame:SetBackdropBorderColor(EDGE[1], EDGE[2], EDGE[3], 1)
         b.icon = b:CreateTexture(nil, "ARTWORK")
         b.icon:SetAllPoints()
         b.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
@@ -7334,16 +7343,18 @@ do (function()
         b.flash:SetAllPoints()
         b.flash:SetColorTexture(1, 0.15, 0.15, 1)
         b.flash:SetAlpha(0)
-        local function Txt(size, point, x, y)
-            local t = b:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        local function Txt(size, point, rel, relPoint, x, y, font)
+            local t = b.frame:CreateFontString(nil, "OVERLAY", font or "GameFontHighlightSmall")
             local fnt = t:GetFont()
             if fnt then t:SetFont(fnt, size, "OUTLINE") end
             t:SetShadowOffset(0, 0)
-            t:SetPoint(point, b, point, x, y)
+            t:SetPoint(point, rel, relPoint, x, y)
             return t
         end
-        b.hand = Txt(10, "TOPLEFT", 1, -1)          -- MH / OH
-        b.left = Txt(10, "BOTTOMRIGHT", -1, 2)      -- minutes left on a weapon
+        b.hand = Txt(10, "TOPLEFT", b, "TOPLEFT", 2, -2)                          -- MH / OH
+        b.charges = Txt(13, "BOTTOMRIGHT", b, "BOTTOMRIGHT", -1, 2)               -- an Instant Poison's charges: 60
+        b.left = Txt(11, "TOP", b, "BOTTOM", 0, -4, "GameFontNormalSmall")        -- the time under it, in the game's gold
+        b.left:SetTextColor(1, 0.82, 0)
         local hl = b:CreateTexture(nil, "HIGHLIGHT")
         hl:SetAllPoints()
         hl:SetColorTexture(1, 1, 1, 0.15)
@@ -7406,7 +7417,7 @@ do (function()
             for _, line in ipairs(ns.RebuffList()) do
                 local slot, what = WeaponLine(line)
                 if slot then
-                    local on, left = WeaponEnchanted(slot)
+                    local on, left, charges = WeaponEnchanted(slot)
                     if on ~= nil and HasWeapon(slot) then
                         local opts, use = WeaponOptions(line)
                         if not on or d.rebuffAll == true or d.rebuffWeaponAlways ~= false then
@@ -7414,7 +7425,8 @@ do (function()
                             local onName = on and EnchantName(slot) or nil
                             local onItem = onName and ns.weaponItemByName and ns.weaponItemByName[onName:lower()] or nil
                             rows[#rows + 1] = { line = line, cast = use and use.cast, item = use and use.item, itemName = use and use.name,
-                                slot = slot, have = on, opts = opts, onName = onName, onItem = onItem, left = on and left or nil }
+                                slot = slot, have = on, opts = opts, onName = onName, onItem = onItem, left = on and left or nil,
+                                charges = on and charges or nil }
                         end
                     end
                 else
@@ -7445,7 +7457,8 @@ do (function()
             b.opts, b.slot, b.useName, b.onName = r.opts, r.slot, r.itemName or r.cast, r.onName
             -- weapons: MH / OH on the icon, and the minutes left while it has one
             b.hand:SetText(r.slot == 16 and "MH" or r.slot == 17 and "OH" or "")
-            b.left:SetText((r.left and r.left > 0) and (r.left >= 60 and (math.floor(r.left / 60) .. "m") or (math.floor(r.left) .. "s")) or "")
+            b.left:SetText((r.left and r.left > 0) and (r.left >= 60 and (math.floor(r.left / 60) .. " m") or (math.floor(r.left) .. " s")) or "")
+            b.charges:SetText(r.charges and tostring(r.charges) or "")
             if r.item then   -- a poison / oil from your bags onto that weapon
                 b:SetAttribute("type1", "macro")
                 b:SetAttribute("macrotext1", "/use " .. r.itemName .. "\n/use " .. r.slot)
@@ -7458,22 +7471,25 @@ do (function()
             b.icon:SetTexture((r.have and r.onItem and ns.ItemIcon and ns.ItemIcon(r.onItem))
                 or (r.cast and SpellIcon(r.cast)) or (r.item and ns.ItemIcon and ns.ItemIcon(r.item))
                 or (r.slot and "Interface\\Icons\\Trade_BrewPoison") or "Interface\\Icons\\INV_Misc_QuestionMark")
+            -- up: faded, the gold edge; missing: full colour, a red edge, pulsing
             b.icon:SetDesaturated(r.have and not r.slot)   -- (a poison that's on keeps its colours, just faded)
-            b.icon:SetAlpha(r.have and (r.slot and 0.45 or 0.5) or 1)
-            if r.have then b.border:SetColorTexture(0.25, 0.9, 0.3, 1) else b.border:SetColorTexture(1, 0.2, 0.2, 1) end
+            b.icon:SetAlpha(1)
+            b:SetAlpha(r.have and 0.4 or 1)
+            if r.have then b.frame:SetBackdropBorderColor(EDGE[1], EDGE[2], EDGE[3], 1)
+            else b.frame:SetBackdropBorderColor(1, 0.25, 0.25, 1) end
             if b.pulse then
                 if not r.have and not moving then if not b.pulse:IsPlaying() then b.pulse:Play() end
                 elseif b.pulse:IsPlaying() then b.pulse:Stop(); b.flash:SetAlpha(0) end
             end
             b:ClearAllPoints()
-            local off = PAD + (i - 1) * (ICON + GAP)
+            local off = PAD + (i - 1) * (ICON + GAP + (vertical and TIME_H or 0))
             if vertical then b:SetPoint("TOPLEFT", f, "TOPLEFT", PAD, -off) else b:SetPoint("TOPLEFT", f, "TOPLEFT", off, -PAD) end
             b:EnableMouse(not moving)
             b:Show()
         end
         for i = #rows + 1, #f.icons do f.icons[i]:Hide() end
         local long = PAD * 2 + #rows * ICON + (#rows - 1) * GAP
-        if vertical then f:SetSize(ICON + PAD * 2, long) else f:SetSize(long, ICON + PAD * 2) end
+        if vertical then f:SetSize(ICON + PAD * 2, long + #rows * TIME_H) else f:SetSize(long, ICON + PAD * 2 + TIME_H) end
         f:EnableMouse(moving and true or false)
         f:EnableMouseWheel(moving and true or false)
         f.bg:SetShown(moving)

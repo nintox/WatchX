@@ -77,7 +77,7 @@ end
 C_Item.GetItemInfoInstant = function(id) return id, nil, nil, nil, 1, 2, 2 end   -- a weapon
 GetInventoryItemID = function(u, slot) if slot == 16 or slot == 17 then return 5000 + slot end end
 ENCH = { false, false }
-GetWeaponEnchantInfo = function() return ENCH[1], 1740000, 0, 0, ENCH[2], 900000, 0, 0 end
+GetWeaponEnchantInfo = function() return ENCH[1], 1740000, 60, 0, ENCH[2], 900000, 0, 0 end   -- (60 charges on the main hand)
 C_TooltipInfo.GetInventoryItem = function(u, slot) return { lines = { { leftText = "Some Dagger" }, { leftText = (slot == 16 and "Instant Poison II" or "Deadly Poison") .. " (29 min)" } } } end
 NS.db.rebuff.ROGUE = { "Main hand: Instant Poison / Deadly Poison / Crippling Poison", "Off hand: Deadly Poison / Instant Poison" }
 NS.RebuffBagsChanged(); NS.RefreshRebuff()
@@ -98,7 +98,9 @@ check(str(ev('WatchXRebuff.icons[1]:GetAttribute("macrotext1")')) == "/use Insta
 # on: still shown (faded), with the icon of what's on and its minutes
 ex('ENCH = { true, false }; NS.RefreshRebuff()')
 check(ev('shown()').startswith("Main hand"), "main hand on: still shown")
-check(ev('WatchXRebuff.icons[1].icon:GetAlpha()') < 0.6 and ev('WatchXRebuff.icons[1].left:GetText()') == "29m", "faded, with 29m left")
+check(ev('WatchXRebuff.icons[1]:GetAlpha()') < 0.6 and ev('WatchXRebuff.icons[1].left:GetText()') == "29 m", "faded, with 29 m under it")
+check(ev('WatchXRebuff.icons[1].charges:GetText()') == "60", "and its charges: 60")
+check(ev('WatchXRebuff.icons[2]:GetAlpha()') == 1 and ev('WatchXRebuff.icons[2].charges:GetText()') == "", "the missing one: full, no charges")
 check(ev('WatchXRebuff.icons[1].onName') == "Instant Poison II", "it knows what's on: Instant Poison II")
 ex('NS.db.rebuffWeaponAlways = false; NS.RefreshRebuff()')
 check(ev('shown()') == "Off hand: Deadly Poison / Instant Poison", "'always show' off: only the missing one")
