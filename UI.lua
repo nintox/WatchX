@@ -455,8 +455,11 @@ function ns.EnemyMenu(anchor, key)
             or (live and live.stealth and time() - live.stealth < 60) and "stealth" or "enemy"
         ns.ShareSpot(e, kind, kind == "wanted" and r.wanted or (kind == "stealth" and live.stealthHow) or nil, where)
     end
-    if IsInGroup and IsInGroup() then items[#items + 1] = { "|cff80b8ffTell my party|r", function() Tell("party") end } end
-    if IsInGuild and IsInGuild() then items[#items + 1] = { "|cff40ff40Tell my guild|r", function() Tell("guild") end } end
+    items[#items + 1] = { "Announce in |cffffffffsay|r", function() Tell("say") end }
+    if IsInGroup and IsInGroup() then
+        items[#items + 1] = { "Announce in |cffaad4ff" .. ((IsInRaid and IsInRaid()) and "raid" or "party") .. "|r", function() Tell("party") end }
+    end
+    if IsInGuild and IsInGuild() then items[#items + 1] = { "Announce in |cff40ff40guild|r", function() Tell("guild") end } end
     if r.guild then
         local gk = ns.db.kosGuilds[r.guild:lower()]
         items[#items + 1] = { (gk and "Guild off KOS: " or "KOS the guild: ") .. r.guild, function() ns.SetGuildKOS(r.guild, not gk) end }
@@ -2294,7 +2297,7 @@ function ns.BuildNearbySettings()
         "|cffaaaaaa•|r  |cffd8a0ffSTEALTH|r = went into Stealth, Vanish, Prowl or Shadowmeld – and the warning pops up.",
         "|cffaaaaaa•|r  The warnings sit on top of the list: |cffd8a0ffStealthed player|r and |cffff5959Enemy player detected|r.",
         "|cffaaaaaa•|r  Needs |cffffd100enemy nameplates|r (key V). In dungeons and raids it's faded (or hidden, if ticked).",
-        "|cffaaaaaa•|r  |cffffd100Right-click a row|r: KOS, avoid, KOS the guild, tell your party / guild, a note. |cffff3030KOS|r players get a red card.",
+        "|cffaaaaaa•|r  |cffffd100Right-click a row|r: KOS, avoid, KOS the guild, announce them (say, party, guild), a note. |cffff3030KOS|r players get a red card.",
         "|cffaaaaaa•|r  |cffff8040Avoid|r = people you don't want to play with (any player): tooltip, group warning, [Avoid] in chat.",
         "|cffaaaaaa•|r  |cffffd100Nameplate icons|r: the class over each player, |cff40ff60+|r = proven healer, |cffff3030red ring + skull|r = KOS.",
         "|cffaaaaaa•|r  Friendly: their talents (inspected). Enemies: a healing-talent spell like Riptide or Wild Growth.",
@@ -4002,7 +4005,8 @@ end
 -- battlegrounds or arenas.
 ns.spotSaid = {}   -- lower-case name .. ":" .. kind -> when it was said (by you or someone else)
 ns.SPOT_HEAD = { stealth = "Stealth", kos = "Kill on sight", wanted = "WANTED", enemy = "Enemy" }
--- force = "party" / "guild": you asked for it (the player's menu) – said there, whatever the ticks.
+-- force = "say" / "party" / "guild": you asked for it (the player's menu) – said there, whatever the ticks. (Say
+-- outdoors needs a click on this client: the menu is one.)
 function ns.ShareSpot(e, kind, extra, force)
     local d = db()
     if not (d and e and type(e.name) == "string") then return end
@@ -4043,6 +4047,7 @@ function ns.ShareSpot(e, kind, extra, force)
     local msg = "WatchX: " .. ns.SPOT_HEAD[kind] .. " – [" .. e.name .. "]" .. info
         .. (e.guild and (" <" .. e.guild .. ">") or "") .. more .. (where and where ~= "" and (" · " .. where) or "")
     local sent = false
+    if force == "say" then sent = (ns.SendChat and ns.SendChat(msg:sub(1, 255), "SAY")) or sent end
     local toParty = (force == "party") or (not force and d.shareParty)
     local toGuild = (force == "guild") or (not force and d.shareGuild)
     if toParty and IsInGroup and IsInGroup() then
