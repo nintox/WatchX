@@ -10,7 +10,7 @@
 
 ## PvP
 
-- **Nearby** – the enemy players around you, newest first: who has you targeted, who went into Stealth or
+- **Enemies** – the enemy players around you, newest first: who has you targeted, who went into Stealth or
   Vanish (with a warning card), level, class, guild. Click a row to target.
 - **Kill on sight** – players and whole guilds; they get a red card and a skull on their nameplate.
 - **WANTED bounties** – put gold on a player's head, shared with your guild and friends who run WatchX. A

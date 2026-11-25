@@ -8,7 +8,7 @@ NOTE: WatchX is in active development. Not everything has been fully tested in g
 https://github.com/nintox/WatchX/issues
 
 PVP
-- Nearby: the enemy players around you – who has you targeted, who went into Stealth
+- Enemies: the enemy players around you – who has you targeted, who went into Stealth
   (with a warning card). Click a row to target.
 - Kill on sight (players and guilds), class / healer / KOS icons on nameplates.
 - WANTED bounties shared with your guild and friends: a reward for one kill or per kill,

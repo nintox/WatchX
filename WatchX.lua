@@ -3696,7 +3696,7 @@ function ns.NearbyTest()
     local rogue = ns.nearby["Example-Rogue"]
     rogue.stealth, rogue.stealthHow = now, "Stealth"
     ns.roles["Example-Druid"] = { role = "healer", how = "Wild Growth", at = now }   -- this session only
-    Print("Example Nearby list and stealth card shown (made-up names – gone in a minute).")
+    Print("Example Enemies list and stealth card shown (made-up names – gone in a minute).")
     if ns.ShowStealthToast then ns.ShowStealthToast(rogue) end
     Refresh()
     if C_Timer then C_Timer.After(61, function() ns.roles["Example-Druid"] = nil; Refresh() end) end
@@ -3704,7 +3704,7 @@ end
 
 function ns.SetNearby(on)
     db.nearby = on and true or false
-    Print("Nearby enemies: " .. (db.nearby and "|cff40ff40on|r" or "off"))
+    Print("Enemies list: " .. (db.nearby and "|cff40ff40on|r" or "off"))
     if not db.nearby then wipe(ns.nearby) end
     Refresh()
 end
@@ -4412,7 +4412,7 @@ local function OnSlash(input)
         if rest == "test" then ns.BuffTest()
         elseif rest ~= "" then ns.AddBuffWatch(rest)
         elseif ns.OpenBuffSettings then ns.OpenBuffSettings() end
-    elseif cmd == "nearby" or cmd == "spy" then
+    elseif cmd == "nearby" or cmd == "enemies" or cmd == "spy" then
         if rest == "test" then ns.NearbyTest()
         elseif rest == "on" or rest == "off" then ns.SetNearby(rest == "on")
         elseif ns.OpenNearbySettings then ns.OpenNearbySettings() end

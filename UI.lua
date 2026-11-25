@@ -859,7 +859,7 @@ local function BuildSettings()
     local function openAlerts() ns.OpenAlertSettings() end
 
     section("PVP")
-    module("Nearby enemies", "the players around you, KOS, avoid list, stealth warnings",
+    module("Enemies", "the enemy players around you, KOS, avoid list, stealth warnings",
         function() return db().nearby end, function(v) ns.SetNearby(v) end, function() ns.OpenNearbySettings() end)
     module("Class icons on nameplates", "class, healers and KOS over enemy players",
         function() return db().plateIcons == true end, function(v) db().plateIcons = v; ns.UpdatePlates() end,
@@ -1905,7 +1905,7 @@ function ns.BuildNearbySettings()
     title:SetText("PvP")
     local sub = o:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
     sub:SetPoint("LEFT", title, "RIGHT", 10, -1)
-    sub:SetText("the Nearby list, KOS, avoid list and nameplate icons")
+    sub:SetText("the Enemies list, KOS, avoid list and nameplate icons")
 
     local y = -50
     local checks = {}
@@ -1925,7 +1925,7 @@ function ns.BuildNearbySettings()
         checks[#checks + 1] = cb
         y = y - 28
     end
-    check("Show the Nearby list", "the enemy players around you",
+    check("Show the Enemies list", "the enemy players around you",
         function() return db().nearby end, function(v) ns.SetNearby(v) end)
     check("Stealth warning", "a card mid-screen when a player goes into stealth",
         function() return db().stealthWarn ~= false end, function(v) db().stealthWarn = v end)
@@ -2161,7 +2161,7 @@ function ns.BuildNearbySettings()
     local CHIP_MAX = 18
     local kosEmpty = o:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
     kosEmpty:SetPoint("TOPLEFT", o, "TOPLEFT", L + 2, chipTop - 4)
-    kosEmpty:SetText("No KOS yet – right-click a player in the Nearby list, or add one above.")
+    kosEmpty:SetText("No KOS yet – right-click a player in the Enemies list, or add one above.")
     local function RefreshKOS()
         local items = {}
         local guilds = {}
@@ -2263,7 +2263,7 @@ function ns.BuildNearbySettings()
     ns.RefreshAvoidCount = function()
         local n = 0
         for _, r in pairs(db().enemies) do if r.avoid then n = n + 1 end end
-        avoidCount:SetText(n == 0 and "Nobody yet – right-click a player in the Nearby list, or add one above."
+        avoidCount:SetText(n == 0 and "Nobody yet – right-click a player in the Enemies list, or add one above."
             or (n .. (n == 1 and " player" or " players") .. " on your avoid list. Their notes are the same notes as in History."))
     end
     y = y - 34
@@ -2289,7 +2289,7 @@ function ns.BuildNearbySettings()
         "|cffaaaaaa•|r  |cffffd100History|r: everyone you've seen, with kills, deaths, last seen and notes.",
         "|cffaaaaaa•|r  Nothing goes to your phone – that's the WatchX page (Any enemy player).",
         "",
-        "|cff808080/wx nearby on · off · test|r",
+        "|cff808080/wx enemies on · off · test|r",
     }, "\n"))
 
     page:SetScript("OnShow", function()
@@ -2402,7 +2402,7 @@ local function BuildPanel()
             Tip(self, (hit.mob and hit.mob.preset or hit.enemy or hit.friend or hit.near) and "Switch off" or "Remove",
                 hit.enemy and "Stop alerting on enemy players."
                     or hit.friend and "Stop alerting on friendly players."
-                    or hit.near and "Hide the Nearby list." or hit.mob and hit.mob.preset
+                    or hit.near and "Hide the Enemies list." or hit.mob and hit.mob.preset
                     and ("Stop watching " .. hit.mob.name .. " (built in – click the row to switch it on again).")
                     or hit.mob and ("Remove " .. hit.mob.name .. " from the list.") or nil)
         end)
@@ -2426,9 +2426,9 @@ local function BuildPanel()
         end)
         hit:SetScript("OnEnter", function(self)
             if self.near then
-                Tip(self, "Nearby enemies", "A list of the enemy players around you, like Spy – click one to "
+                Tip(self, "Enemies", "A list of the enemy players around you, like Spy – click one to "
                     .. "target it. A player going into stealth pops up a warning. In game only.",
-                    " ", "|cffffd100Click:|r on/off", "|cffffd100See an example:|r /wx nearby test")
+                    " ", "|cffffd100Click:|r on/off", "|cffffd100See an example:|r /wx enemies test")
                 return
             end
             if self.friend then
@@ -3326,7 +3326,7 @@ local function BuildNearby()
     Flat(f)
     f.title = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     f.title:SetPoint("TOPLEFT", f, "TOPLEFT", 8, -6)
-    f.title:SetText("Nearby")
+    f.title:SetText("Enemies")
     -- Bounty news (a new bounty, a claim, a debt, paid): a coin with a count, on the title's line where you can't
     -- miss it. Click: the Wanted list; right-click: seen. Hover: what happened. (A plain button: fine in a fight.)
     f.news = CreateFrame("Button", nil, f)
@@ -3435,7 +3435,7 @@ local function BuildNearby()
     end)
     f:SetScript("OnEnter", function(self)
         if moving then return end
-        Tip(self, "Nearby", "Enemy players around you. Click a row to target.",
+        Tip(self, "Enemies", "Enemy players around you. Click a row to target.",
             "|cffffd100Click here:|r everyone you've met (History)  ·  |cffffd100Right-click:|r settings")
     end)
     f:SetScript("OnLeave", GameTooltip_Hide)
@@ -3945,7 +3945,7 @@ function ns.NearbyLabel()
     if nb.attached then
         nbLabel:Hide()   -- it moves and grows with the mini bar: the mini bar's label says how
     else
-        nbLabel:Set(top, "|cffffd100Nearby|r · drag to move · right edge: width · bottom edge: text size (" .. Pct(nb:GetScale() or 1) .. ")")
+        nbLabel:Set(top, "|cffffd100Enemies|r · drag to move · right edge: width · bottom edge: text size (" .. Pct(nb:GetScale() or 1) .. ")")
     end
 end
 
@@ -4340,7 +4340,7 @@ local HELP = {
     { "EXTRAS  ·  in Settings", {
         Bullet(Y .. "Attacked|r – an alert when something attacks you while you stand idle or AFK."),
         Bullet(Y .. "AFK logout warning|r – 5 minutes before the game logs you out."),
-        Bullet(Y .. "Nearby|r – its own page under WatchX: a list of enemy players around you (like Spy)."),
+        Bullet(Y .. "Enemies|r – its own page under WatchX (PvP): a list of enemy players around you (like Spy)."),
         "     Click one to target it. A player going into stealth pops up a warning.",
         Bullet(Y .. "Profiles|r – switch between sets of choices, e.g. Camping, Leveling, PvP."),
     } },
@@ -6334,7 +6334,7 @@ function ns.BuildLevelSettings()
         function() return db().warnInCity == true end, function(v) db().warnInCity = v end)
     check("XP bar", "under the icons: XP, rested, quests, time this level, when you'll level",
         function() return db().xpBar ~= false end, function(v) db().xpBar = v; ns.RefreshXPBar() end)
-    check("XP bar between the mini bar and Nearby", "just level and %, same width – the rest when you hover it",
+    check("XP bar between the mini bar and the Enemies list", "just level and %, same width – the rest when you hover it",
         function() return db().xpBarAttach ~= false end,
         function(v) db().xpBarAttach = v; ns.RefreshXPBar(); if ns.AttachNearby then ns.AttachNearby() end end)
     check("Hide in combat", "the icons (the XP bar stays)",

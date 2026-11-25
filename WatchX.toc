@@ -1,6 +1,6 @@
 ## Interface: 16001
 ## Title: WatchX
-## Notes: PvP for WoW Forever: a Nearby enemies list with stealth warnings, Kill on sight, WANTED bounties shared with your guild and friends, class and healer icons on nameplates, and instant phone alerts (ntfy / Discord). Also a rare scan like unitscan, XP boosts, buff warnings and an eating & drinking timer. Made by Rikerud. /wx
+## Notes: PvP for WoW Forever: an Enemies list with stealth warnings, Kill on sight, WANTED bounties shared with your guild and friends, class and healer icons on nameplates, and instant phone alerts (ntfy / Discord). Also a rare scan like unitscan, XP boosts, buff warnings and an eating & drinking timer. Made by Rikerud. /wx
 ## Author: Rikerud
 ## Version: 2.24.0
 ## X-Website: https://github.com/nintox/WatchX
