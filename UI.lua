@@ -3859,6 +3859,12 @@ end
 -- From the settings (a pick or the > button): say so when nothing could be heard.
 function ns.TrySound(key)
     if key == "off" then return end
+    -- the game's sound switched off (or the Master volume at 0): the game says "it plays", but nothing is heard
+    local on, vol = GetCVar and GetCVar("Sound_EnableAllSound"), GetCVar and tonumber(GetCVar("Sound_MasterVolume"))
+    if on == "0" or vol == 0 then
+        ns.Print("|cffff8040Your game sound is off|r" .. (on == "0" and "" or " (Master volume 0)")
+            .. " – turn it on in |cffffd100System > Audio|r to hear WatchX's sounds.")
+    end
     if not ns.PlayChoice(key) then
         ns.Print("|cffff8040No sound played|r – the game wouldn't play it. Is |cffffd100Sound Effects|r on "
             .. "(System > Audio), and the Master volume up?")

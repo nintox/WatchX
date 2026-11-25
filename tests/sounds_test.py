@@ -30,6 +30,8 @@ check(ev('played()') == "12,37666", "the game says it won't play it: the next on
 ex('PlaySound = function(id) table.insert(PLAYED, id); return false end; OUTN = 0; local pr = NS.Print; NS.Print = function(m) OUTN = OUTN + 1 end; NS.TrySound("raid"); NS.Print = pr; PlaySound = function(id) table.insert(PLAYED, id) end')
 check(ev('OUTN') == 1, "nothing played when you test it: it says so")
 ex('played()')
+ex('local g = GetCVar; GetCVar = function(k) if k == "Sound_EnableAllSound" then return "0" end return g(k) end; OUTS = ""; local pr = NS.Print; NS.Print = function(m) OUTS = OUTS .. m end; NS.TrySound("raid"); NS.Print = pr; GetCVar = g; played()')
+check("sound is off" in str(ev('OUTS')), "game sound off: testing a sound says so")
 ex('NS.db.stealthSound = false; NS.AlertSound("stealth"); NS.AlertSound("bounty")'); check(ev('played()') == "", "Sounds off: none")
 ex('NS.db.stealthSound = true')
 # the settings page: a click picks the next sound and plays it, right-click goes back
