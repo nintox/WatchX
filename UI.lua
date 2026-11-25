@@ -5717,11 +5717,12 @@ end
         GameTooltip:AddDoubleLine(Key(0.55, 0.47, 0.2) .. "Quests in progress", quests.todo > 0 and Num(quests.todo) or "none", 0.8, 0.7, 0.4, 1, 1, 1)
         GameTooltip:AddLine(" ")
         GameTooltip:AddDoubleLine("Time this level", played.level and Dur(played.level + time() - played.at) or "–", 0.7, 0.7, 0.7, 1, 1, 1)
-        GameTooltip:AddDoubleLine("This session", "+" .. Num(session.xp) .. " XP  |cffaaaaaain " .. Dur(time() - session.start) .. "|r", 0.7, 0.7, 0.7, 1, 1, 1)
+        GameTooltip:AddDoubleLine(session.reset and "Since you reset" or "This session", "+" .. Num(session.xp) .. " XP  |cffaaaaaain " .. Dur(time() - session.start) .. "|r", 0.7, 0.7, 0.7, 1, 1, 1)
         GameTooltip:AddDoubleLine("XP an hour", d.rate and Num(d.rate) or "–", 0.7, 0.7, 0.7, 1, 1, 1)
         GameTooltip:AddDoubleLine("Next level in", d.rate and ("|cff40ff40" .. Dur((d.max - d.cur) / d.rate * 3600) .. "|r") or "|cffaaaaaa– after your first kill|r", 0.7, 0.7, 0.7, 1, 1, 1)
         if settingsLine then
             GameTooltip:AddLine(" ")
+            GameTooltip:AddLine("|cffffd100Shift-click:|r count XP an hour again from now (farming)", 0.8, 0.8, 0.8)
             GameTooltip:AddLine("|cffffd100Right-click:|r settings", 0.8, 0.8, 0.8)
         end
         GameTooltip:Show()
@@ -5785,7 +5786,12 @@ end
             SavePoint(self, "xpBarPoint")
             ns.RefreshXPBar()
         end)
-        f:SetScript("OnMouseUp", function(_, button)
+        f:SetScript("OnMouseUp", function(self, button)
+            if button == "LeftButton" and IsShiftKeyDown() and not moving then   -- farming: count from now
+                ns.ResetXPSession()
+                if self:IsMouseOver() then ShowXPTip(self, self.data, true) end
+                return
+            end
             if button ~= "RightButton" then return end
             if moving then ns.ResetXPBar() elseif ns.OpenLevelSettings then ns.OpenLevelSettings() end
         end)
@@ -5897,7 +5903,9 @@ end
         xb.data = data
         xb.lvl:SetText(compact and ("Lvl " .. level) or ("Level " .. level))
         xb.mid:SetText(Num(cur) .. " / " .. Num(max) .. "  |cffffd100(" .. Num(max - cur) .. ")|r")
-        xb.pct:SetText(("%.1f%%"):format(cur / max * 100)
+        -- XP an hour first, when ticked (on unless switched off) and there's been a kill or a quest to measure
+        local perHour = (rate and d.xpRateOnBar ~= false) and ("|cffaaaaaa" .. Num(rate) .. "/h|r  ") or ""
+        xb.pct:SetText(perHour .. ("%.1f%%"):format(cur / max * 100)
             .. ((quests.done > 0 and not compact) and ("  |cffffa020(%.1f%%)|r"):format(math.min(100, (cur + quests.done) / max * 100)) or ""))
         xb.top1:SetText("This level: |cffffd100" .. (played.level and Dur(played.level + now - played.at) or "–") .. "|r")
         xb.top2:SetText("Session: |cffffd100" .. Dur(spent) .. "|r  ·  +" .. Num(session.xp) .. " XP"
@@ -5914,6 +5922,13 @@ end
         elseif xbLabel then
             xbLabel:Hide()
         end
+    end
+
+    -- Shift-click the bar (or /wx xp reset): XP an hour counts again from now – to see what a farming spot gives
+    function ns.ResetXPSession()
+        session.start, session.xp, session.reset = time(), 0, true
+        ns.Print("XP an hour: counting again from now.")
+        ns.RefreshXPBar()
     end
 
     -- the mini bar or the red bar changed: the compact one moves with them at once (not on its next tick)
@@ -6652,6 +6667,8 @@ function ns.BuildLevelSettings()
     check("XP bar between the mini bar and the Enemies list", "just level and %, same width – the rest when you hover it",
         function() return db().xpBarAttach ~= false end,
         function(v) db().xpBarAttach = v; ns.RefreshXPBar(); if ns.AttachNearby then ns.AttachNearby() end end)
+    check("XP an hour on the XP bar", "Shift-click the bar: count again from now (to see what a farming spot gives)",
+        function() return db().xpRateOnBar ~= false end, function(v) db().xpRateOnBar = v; ns.RefreshXPBar() end)
     check("Hide in combat", "the icons (the XP bar stays)",
         function() return db().levelHideCombat ~= false end, function(v) db().levelHideCombat = v end)
     check("Hide in dungeons and raids", nil,

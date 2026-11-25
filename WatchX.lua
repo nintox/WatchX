@@ -3926,7 +3926,7 @@ local PROFILE_KEYS = { "enemyPlayers", "friendlyPlayers", "attackAlert", "whispe
     "plateIcons", "plateFriendly", "plateHealer", "plateSize", "plateKOS",
     "levelHelper", "levelMissing", "levelFlash", "levelWarn", "levelHideCombat", "levelHideInstance", "levelPoint", "levelScale", "levelWidth",
     "buffWarn", "buffSoon", "buffGone", "buffGroups", "avoidGroup", "avoidChat", "scanOn", "wantedOn", "wantedGuild", "wantedFriends", "wantedAlert", "wantedAnnounce", "sounds",
-    "shareParty", "shareGuild", "shareStealth", "shareKOS", "shareWanted", "shareAll" }
+    "shareParty", "shareGuild", "shareStealth", "shareKOS", "shareWanted", "shareAll", "xpRateOnBar" }
 local PROFILE_MAX_NAME = 16
 
 local function Copy(v)
@@ -4362,6 +4362,8 @@ local function OnSlash(input)
             Print("Profiles: " .. table.concat(ns.ProfileNames(), ", ") .. " · active: " .. tostring(db.profile)
                 .. " · /wx profile <name> to switch")
         end
+    elseif cmd == "xp" and rest == "reset" then
+        if ns.ResetXPSession then ns.ResetXPSession() end
     elseif cmd == "xp" or cmd == "boosts" then
         db.levelHelper = db.levelHelper == false
         Print("XP boosts list: " .. (db.levelHelper and "|cff40ff40on|r" or "off")
