@@ -1980,6 +1980,17 @@ function ns.BuildNearbySettings()
         y = y - 26
     end
     y = y - 4
+    -- tell your party / guild what you spot
+    check("Tell my party / raid", "a line in party chat when you spot one of the ticked below",
+        function() return db().shareParty == true end, function(v) db().shareParty = v end)
+    check("Tell my guild", "the same in guild chat",
+        function() return db().shareGuild == true end, function(v) db().shareGuild = v end)
+    L = L + 24   -- (what to tell: indented under them)
+    check("Stealth", nil, function() return db().shareStealth ~= false end, function(v) db().shareStealth = v end)
+    check("Kill on sight", nil, function() return db().shareKOS ~= false end, function(v) db().shareKOS = v end)
+    check("WANTED", "with the reward", function() return db().shareWanted ~= false end, function(v) db().shareWanted = v end)
+    check("Every new enemy", "at most one line every 10 s", function() return db().shareAll == true end, function(v) db().shareAll = v end)
+    L = L - 24
     check("Hide in dungeons", "off: faded",
         function() return db().nearbyHideDungeon == true end, function(v) db().nearbyHideDungeon = v end)
     check("Hide in raids", "off: faded",
@@ -3879,6 +3890,81 @@ function ns.AlertSound(kind)
         ns.lastEnemySound = GetTime()
     end
     ns.PlayChoice(choice)
+end
+
+-- ---------------------------------------------------------------- telling your party / guild what you spot
+-- When ticked: a line in party (raid) and / or guild chat for stealth, KOS, WANTED – or every new enemy. Plain words
+-- (chat takes no colours), the name in [ ] so other WatchX can read it back. Once a minute per player and kind, a line
+-- at most every 3 s (10 s for "every enemy"); what another WatchX here just said isn't said again. Not in
+-- battlegrounds or arenas.
+ns.spotSaid = {}   -- lower-case name .. ":" .. kind -> when it was said (by you or someone else)
+ns.SPOT_HEAD = { stealth = "Stealth", kos = "Kill on sight", wanted = "WANTED", enemy = "Enemy" }
+function ns.ShareSpot(e, kind, extra)
+    local d = db()
+    if not (d and (d.shareParty or d.shareGuild) and e and type(e.name) == "string") then return end
+    local want = (kind == "stealth" and d.shareStealth ~= false) or (kind == "kos" and d.shareKOS ~= false)
+        or (kind == "wanted" and d.shareWanted ~= false) or (kind == "enemy" and d.shareAll == true)
+    if not want then return end
+    if IsInInstance then
+        local _, it = IsInInstance()
+        if it == "pvp" or it == "arena" then return end
+    end
+    local now = GetTime()
+    local k = e.name:lower() .. ":" .. kind
+    if ns.spotSaid[k] and now - ns.spotSaid[k] < 60 then return end
+    if now - (ns.spotLast or -99) < (kind == "enemy" and 10 or 3) then return end
+    -- who, what, where
+    local info = ((e.level and e.level > 0) and (" " .. e.level) or (e.level == -1 and " ??" or ""))
+        .. (e.class and (" " .. e.class:sub(1, 1) .. e.class:sub(2):lower()) or "")
+    local more = ""
+    if kind == "stealth" and type(extra) == "string" and extra ~= "" then more = " (" .. extra .. ")" end
+    if kind == "wanted" and type(extra) == "table" then
+        local c = math.floor(tonumber(extra.copper) or 0)
+        if c > 0 then
+            local g, sv = math.floor(c / 10000), math.floor(c / 100) % 100
+            more = " – " .. (g > 0 and (g .. "g") or "") .. (sv > 0 and ((g > 0 and " " or "") .. sv .. "s") or "")
+                .. ((tonumber(extra.kills) or 1) > 1 and " a kill" or "")
+        end
+    end
+    local function P(v) if issecretvalue and v ~= nil and issecretvalue(v) then return nil end return v end
+    local where = GetZoneText and P(GetZoneText()) or nil
+    local map, x, y
+    if ns.PlayerPos then map, x, y = ns.PlayerPos() end   -- (not "a and f()": that keeps only the first value)
+    if map and x then where = (where or "") .. (" %d,%d"):format(math.floor(x * 100 + 0.5), math.floor(y * 100 + 0.5)) end
+    local msg = "WatchX: " .. ns.SPOT_HEAD[kind] .. " – [" .. e.name .. "]" .. info
+        .. (e.guild and (" <" .. e.guild .. ">") or "") .. more .. (where and where ~= "" and (" · " .. where) or "")
+    local sent = false
+    if d.shareParty and IsInGroup and IsInGroup() then
+        local chan = (IsInRaid and IsInRaid()) and "RAID" or "PARTY"
+        if LE_PARTY_CATEGORY_INSTANCE and IsInGroup(LE_PARTY_CATEGORY_INSTANCE) and not IsInGroup(LE_PARTY_CATEGORY_HOME) then chan = "INSTANCE_CHAT" end
+        sent = (ns.SendChat and ns.SendChat(msg:sub(1, 255), chan)) or sent
+    end
+    if d.shareGuild and IsInGuild and IsInGuild() then
+        sent = (ns.SendChat and ns.SendChat(msg:sub(1, 255), "GUILD")) or sent
+    end
+    if sent then
+        ns.spotSaid[k], ns.spotLast = now, now
+        ns.spotCount = (ns.spotCount or 0) + 1
+        if ns.spotCount > 300 then   -- (an old list is cleared now and then)
+            for key, t in pairs(ns.spotSaid) do if now - t >= 60 then ns.spotSaid[key] = nil end end
+            ns.spotCount = 0
+        end
+    end
+end
+-- Someone's WatchX said it already (party, raid or guild): yours keeps quiet about that player for a minute.
+do
+    local hear = CreateFrame("Frame")
+    for _, ev in ipairs({ "CHAT_MSG_PARTY", "CHAT_MSG_PARTY_LEADER", "CHAT_MSG_RAID", "CHAT_MSG_RAID_LEADER", "CHAT_MSG_GUILD",
+                          "CHAT_MSG_INSTANCE_CHAT", "CHAT_MSG_INSTANCE_CHAT_LEADER" }) do pcall(hear.RegisterEvent, hear, ev) end
+    hear:SetScript("OnEvent", function(_, _, msg)
+        if issecretvalue and msg ~= nil and issecretvalue(msg) then return end   -- (a hidden chat line: can't be read)
+        if type(msg) ~= "string" or msg:sub(1, 8) ~= "WatchX: " then return end
+        local head, name = msg:match("^WatchX: (.-) – %[(.-)%]")
+        if not (head and name) then return end
+        for kind, h in pairs(ns.SPOT_HEAD) do
+            if h == head then ns.spotSaid[name:lower() .. ":" .. kind] = GetTime() end
+        end
+    end)
 end
 
 -- A KOS player showed up: the KOS card always wins, with a sound.

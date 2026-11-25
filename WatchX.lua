@@ -67,6 +67,12 @@ local defaults = {
     nearbyHideDungeon = false, -- Nearby: hidden in dungeons (else faded)
     nearbyHideRaid = false,    -- Nearby: hidden in raids (else faded)
     kosAlert = true,      -- Nearby: a "Kill on sight!" card + sound when a KOS player shows up
+    shareParty = false,   -- Enemies: say what you spot in party / raid chat
+    shareGuild = false,   -- ... and / or in guild chat
+    shareStealth = true,  -- ... which: stealth, KOS, WANTED (and every new enemy, at most one every 10 s)
+    shareKOS = true,
+    shareWanted = true,
+    shareAll = false,
     enemies = {},         -- Nearby history: key -> { name, class, level, guild, firstSeen, lastSeen, zone, seen, kills, deaths, kos, avoid, note }
     kosGuilds = {},       -- lower-case guild name -> guild name, KOS
     avoidGroup = true,    -- ... a warning when one of them invites you or is in your group
@@ -479,6 +485,8 @@ local function SendChat(msg, chatType, target)
     return ok and (result == nil or result == true or result == 0 or (enum and result == enum.Success)) or false,
         false, ok and result or "error"
 end
+
+ns.SendChat = SendChat   -- (the Enemies list tells your party / guild with it)
 
 local function IsBusy()
     return UnitIsDND and Plain(UnitIsDND("player")) == true
@@ -972,6 +980,9 @@ local function NoteNearby(unit)
     e.kos = ns.IsKOS(key, first, e.guild)
     if isNew then
         local w = ns.Wanted and ns.Wanted(key)
+        if ns.ShareSpot then   -- your party / guild, when ticked
+            if e.kos then ns.ShareSpot(e, "kos") elseif w then ns.ShareSpot(e, "wanted", w) else ns.ShareSpot(e, "enemy") end
+        end
         if e.kos and db.kosAlert ~= false and ns.OnKOS then ns.OnKOS(e)
         elseif w and db.wantedAlert ~= false and ns.OnWantedSeen then ns.OnWantedSeen(e, w)
         elseif ns.OnNewEnemy then ns.OnNewEnemy(e) end
@@ -1194,6 +1205,7 @@ local function OnStealthCast(unit, spellID)
     local info = ((e.level and e.level > 0) and (e.level .. " ") or "") .. (e.class and (e.class:sub(1, 1) .. e.class:sub(2):lower()) or "")
     Print("|cffc080ffStealthed player detected:|r " .. e.name .. (info ~= "" and (" (" .. info .. ")") or "")
         .. " – " .. what)
+    if ns.ShareSpot then ns.ShareSpot(e, "stealth", what) end
     if db.stealthWarn == false then Refresh() return end
     if ns.AlertSound then ns.AlertSound("stealth") end
     if ns.ShowStealthToast then ns.ShowStealthToast(e) end
@@ -2273,6 +2285,8 @@ local function PlayerPos()
     if type(x) ~= "number" or type(y) ~= "number" then return end
     return map, x, y
 end
+
+ns.PlayerPos = PlayerPos
 
 function ns.CampFireNear()
     if auraCache.found and auraCache.found.campfire then return true end
@@ -3911,7 +3925,8 @@ local PROFILE_KEYS = { "enemyPlayers", "friendlyPlayers", "attackAlert", "whispe
     "stealthWarn", "stealthSound", "nearbyShowEmpty", "nearbyKeep", "newEnemyCard", "warnDock", "nearbyAttach", "nearbyMax", "nearbyNoBG", "nearbyHideDungeon", "nearbyHideRaid",
     "plateIcons", "plateFriendly", "plateHealer", "plateSize", "plateKOS",
     "levelHelper", "levelMissing", "levelFlash", "levelWarn", "levelHideCombat", "levelHideInstance", "levelPoint", "levelScale", "levelWidth",
-    "buffWarn", "buffSoon", "buffGone", "buffGroups", "avoidGroup", "avoidChat", "scanOn", "wantedOn", "wantedGuild", "wantedFriends", "wantedAlert", "wantedAnnounce", "sounds" }
+    "buffWarn", "buffSoon", "buffGone", "buffGroups", "avoidGroup", "avoidChat", "scanOn", "wantedOn", "wantedGuild", "wantedFriends", "wantedAlert", "wantedAnnounce", "sounds",
+    "shareParty", "shareGuild", "shareStealth", "shareKOS", "shareWanted", "shareAll" }
 local PROFILE_MAX_NAME = 16
 
 local function Copy(v)
