@@ -88,13 +88,22 @@ check(str(ev('WatchXRebuff.icons[1]:GetAttribute("macrotext1")')) == "/use Cripp
 ex('if not WatchXRebuffOptions then NS.BuildRebuffSettings() end; NS.RebuffList()[1] = nil; NS.RebuffList()[2] = nil; WatchXRebuffOptions:GetScript("OnShow")(WatchXRebuffOptions)')
 sug = ev('(function() local t = {} for _, c in ipairs(WatchXRebuffOptions.sugs) do if c:IsShown() then t[#t + 1] = c.line:sub(1, 9) end end return table.concat(t, ",") end)()')
 check(sug == "Main hand,Off hand:", "a rogue's quick add: main hand and off hand poison " + str(sug))
-# a poison typed as a buff: made a weapon line (any rank), main hand then off hand; old lines fixed too
-ex('NS.db.rebuff.ROGUE = nil; NS.AddRebuff("Instant Poison IV"); NS.AddRebuff("Deadly Poison V")')
-check(ev('NS.RebuffList()[1]') == "Main hand: Instant Poison" and ev('NS.RebuffList()[2]') == "Off hand: Deadly Poison",
-      "typed poisons: Main hand: Instant Poison, Off hand: Deadly Poison")
+# a poison typed as a buff: a weapon line with every poison, the one you typed picked; main hand, then off hand
+ex('NS.db.rebuff.ROGUE = nil; NS.db.rebuffPick = nil; NS.AddRebuff("Instant Poison IV"); NS.AddRebuff("Deadly Poison V")')
+l1, l2 = str(ev('NS.RebuffList()[1]')), str(ev('NS.RebuffList()[2]'))
+print("    ", l1, "|", l2)
+check(l1.startswith("Main hand: Instant Poison / Deadly Poison") and "Crippling Poison" in l1, "main hand: all the poisons, Instant first")
+check(l2.startswith("Off hand: Deadly Poison / Instant Poison"), "off hand: Deadly first")
+check(ev('(NS.RebuffPicked(NS.RebuffList()[1]))') == "Instant Poison" and ev('(NS.RebuffPicked(NS.RebuffList()[2]))') == "Deadly Poison", "the typed ones are picked")
 ex('NS.db.rebuff.ROGUE = { "Instant Poison IV", "Instant Poison III" }')
-check(ev('NS.RebuffList()[1]') == "Main hand: Instant Poison" and ev('NS.RebuffList()[2]') == "Off hand: Instant Poison",
+check(str(ev('NS.RebuffList()[1]')).startswith("Main hand: Instant Poison /") and str(ev('NS.RebuffList()[2]')).startswith("Off hand: Instant Poison /"),
       "lines added before: fixed the same way")
+# pick another in the settings: the icon uses it
+ex('ENCH = { false, false }; NS.RebuffPick(NS.RebuffList()[1], "Crippling Poison"); NS.RefreshRebuff()')
+check(str(ev('WatchXRebuff.icons[1]:GetAttribute("macrotext1")')) == "/use Crippling Poison\n/use 16", "picked in the settings: the icon puts Crippling on")
+ex('NS.RebuffPick(NS.RebuffList()[1], "Wound Poison"); NS.RefreshRebuff()')
+check(str(ev('WatchXRebuff.icons[1]:GetAttribute("macrotext1")')) == "/use Instant Poison VI\n/use 16", "picked one not in your bags: the first one you have")
+ex('WatchXRebuffOptions:GetScript("OnShow")(WatchXRebuffOptions)')
 errs = errors(ev)
 check(len(errs) == 0, "no Lua errors " + (str(errs[0])[:300] if errs else ""))
 print("rebuff:", "ALL PASSED" if not fails else "%d FAILED" % len(fails))

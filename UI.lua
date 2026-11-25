@@ -7132,6 +7132,9 @@ do (function()
         return false
     end
     local function NoRank(text) return (tostring(text):gsub("%s+[IVX]+%s*$", "")) end
+    -- every rogue poison: a weapon line holds them all, and you pick the one it uses (settings, or hover the icon)
+    local POISONS = { "Instant Poison", "Deadly Poison", "Wound Poison", "Crippling Poison", "Mind-numbing Poison" }
+    -- returns the line and the one you typed (to pick it)
     function ns.WeaponLineFor(list, text)
         if WeaponLine(text) or not WeaponItemName(text) or Known(text) then return nil end
         local mh, oh = false, false
@@ -7139,12 +7142,31 @@ do (function()
             local slot = WeaponLine(l)
             if slot == 16 then mh = true elseif slot == 17 then oh = true end
         end
-        return ((mh and not oh) and "Off hand: " or "Main hand: ") .. NoRank(text)
+        local base = NoRank(text)
+        local names = { base }
+        if base:lower():find("poison", 1, true) then
+            for _, p in ipairs(POISONS) do if p:lower() ~= base:lower() then names[#names + 1] = p end end
+        end
+        return ((mh and not oh) and "Off hand: " or "Main hand: ") .. table.concat(names, " / "), base
+    end
+    function ns.RebuffPick(line, base)
+        local d = db()
+        if type(d.rebuffPick) ~= "table" then d.rebuffPick = {} end
+        d.rebuffPick[line] = base
+    end
+    -- the one a weapon line uses: what you picked, else the first
+    function ns.RebuffPicked(line)
+        local _, what = WeaponLine(line)
+        local names = Names(what or line)
+        local p = type(db().rebuffPick) == "table" and db().rebuffPick[line]
+        for _, n in ipairs(names) do if n == p then return n, names end end
+        return names[1], names
     end
     function ns.FixRebuffLines(list)
         local i = 1
         while list[i] do
-            local w = ns.WeaponLineFor(list, list[i])
+            local w, base = ns.WeaponLineFor(list, list[i])
+            if w then ns.RebuffPick(w, base) end
             local dup = false
             if w then for _, l in ipairs(list) do if l:lower() == w:lower() then dup = true end end end
             if w and dup then table.remove(list, i)
@@ -7455,9 +7477,11 @@ do (function()
         text = tostring(text or ""):match("^%s*(.-)%s*$")
         if text == "" then return false end
         local list = ns.RebuffList()
-        local w = ns.WeaponLineFor(list, text)
+        local w, base = ns.WeaponLineFor(list, text)
         if w then
-            ns.Print("|cffffd100" .. text .. "|r goes on a weapon – added as |cffffd100" .. w .. "|r (any rank you have).")
+            ns.Print("|cffffd100" .. text .. "|r goes on a weapon – added for your |cffffd100" .. (w:find("^Off") and "off hand" or "main hand")
+                .. "|r with " .. base .. " picked (any rank you have; pick another in the list).")
+            ns.RebuffPick(w, base)
             text = w
         end
         for _, l in ipairs(list) do if l:lower() == text:lower() then return false end end
@@ -7583,7 +7607,7 @@ do (function()
         local rows = {}
         for i = 1, ROWS do
             local r = CreateFrame("Frame", nil, page)
-            r:SetSize(300, 20)
+            r:SetSize(430, 20)
             r:SetPoint("TOPLEFT", page, "TOPLEFT", L, y - (i - 1) * 22)
             r.icon = r:CreateTexture(nil, "ARTWORK")
             r.icon:SetSize(18, 18)
@@ -7597,7 +7621,20 @@ do (function()
                 ns.Safe("rebuff icons", ns.RefreshRebuff)
                 Refresh()
             end)
-            r.del:SetPoint("LEFT", r, "LEFT", 270, 0)
+            r.del:SetPoint("LEFT", r, "LEFT", 400, 0)
+            r.pick = FlatButton(r, "v", 20, 18, function(self)
+                local line = r.line
+                local cur, names = ns.RebuffPicked(line)
+                local items = {}
+                for _, n in ipairs(names) do
+                    items[#items + 1] = { (n == cur and "|cffffd100> " .. n .. "|r") or ("   " .. n), function()
+                        ns.RebuffPick(line, n); Refresh(); ns.Safe("rebuff icons", ns.RefreshRebuff)
+                    end }
+                end
+                ns.ShowMenu(self, "Use on your " .. (line:find("^%s*[Oo]ff") and "off hand" or "main hand"), items)
+            end)
+            r.pick:SetPoint("RIGHT", r.del, "LEFT", -4, 0)
+            r.pick:Hide()
             r:Hide()
             rows[i] = r
         end
@@ -7626,7 +7663,15 @@ do (function()
                     local wslot, wwhat = WeaponLine(line)
                     for _, n in ipairs(Names(wwhat or line)) do if not cast and Known(n) then cast = n end end
                     r.icon:SetTexture((cast and SpellIcon(cast)) or (wslot and "Interface\\Icons\\Trade_BrewPoison") or "Interface\\Icons\\INV_Misc_QuestionMark")
-                    r.text:SetText(line .. ((cast or wslot) and "" or "  |cff808080(not known)|r"))
+                    r.line = line
+                    if wslot then   -- a weapon: the one it uses, and how many to pick from
+                        local cur, names = ns.RebuffPicked(line)
+                        r.text:SetText((wslot == 17 and "Off hand: " or "Main hand: ") .. "|cffffd100" .. cur .. "|r"
+                            .. (#names > 1 and ("  |cff808080(" .. (#names - 1) .. " more to pick from)|r") or ""))
+                    else
+                        r.text:SetText(line .. (cast and "" or "  |cff808080(not known)|r"))
+                    end
+                    r.pick:SetShown(wslot ~= nil and #(select(2, ns.RebuffPicked(line))) > 1)
                     r:Show()
                 else
                     r:Hide()
