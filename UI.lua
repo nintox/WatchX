@@ -6358,7 +6358,9 @@ function ns.BuildLevelSettings()
         "|cffaaaaaa•|r  |cffffd100Camp Tent|r – at a campfire, tops rested up to 5% of a level. Then |cffffd100Boosted Rest|r: 1 hour wait.",
         "|cffaaaaaa•|r  |cffffd100Well Fed|r – XP food, +5% kill XP for about 15 minutes. Gone when you die.",
         "|cffaaaaaa•|r  |cffffd100XP food|r – food whose tooltip says \"Experience gained from kills is increased\". None left: a warning.",
-        "|cffaaaaaa•|r  |cffffd100Cozy Sleeping Bag|r – lie on it: +1% XP a minute, up to +3%. A quest chain from level 14.",
+        "|cffaaaaaa•|r  |cffffd100Cozy Sleeping Bag|r – lie on it: +1% XP a minute, up to +3%. A quest chain from level 14."
+            .. " At 3/3, once it's ready again, lying on it sets the timer back to 2 hours (it turns yellow).",
+        "|cffaaaaaa•|r  |cffffd100Camp Benefits|r – sit a minute by a campfire: what the camp gave you (Fish Bowl, Camp Chair …), for 1 hour.",
         "",
         "Border: |cff40ff40green|r you have it    |cffff6060red|r missing    |cffffd100yellow|r soon or running out    "
             .. "|cffaaaaaagrey|r worth getting",

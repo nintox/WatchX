@@ -24,7 +24,7 @@ RARE SCAN (like unitscan)
 - 428 rares to pick from (from Questie's data), your own names, respawn timers, map spots.
 
 LEVELING
-- XP bar, XP boosts (rested, XP food, sleeping bag, campfire), eating & drinking timer,
+- XP bar, XP boosts (rested, XP food, sleeping bag, campfire, Camp Benefits), eating & drinking timer,
   buff warnings. Profiles.
 
 INSTALL

@@ -34,7 +34,7 @@
 
 ## Leveling and more
 
-- An XP bar with rested and quest XP, XP boosts (rested, XP food, sleeping bag, campfire and tent).
+- An XP bar with rested and quest XP, XP boosts (rested, XP food, sleeping bag, campfire and tent), and what a camp gave you (Camp Benefits).
 - An eating & drinking timer: time left, where your health / mana ends, a tick for each gain.
 - Buff warnings before and when a buff runs out. Profiles for different setups.
 

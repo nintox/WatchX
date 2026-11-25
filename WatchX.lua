@@ -1510,6 +1510,7 @@ local AuraIsXP
 -- "Well Fed" from stat food doesn't count when its text can be read).
 local function ReadAuras()
     local byName, found = {}, {}
+    local campName = SpellName(1229741)   -- Camp Benefits: one buff holding all a camp's effects, 1 hour
     for id, en in pairs(AURA_NAMES) do
         byName[en] = id
         local n = SpellName(id)
@@ -1517,11 +1518,11 @@ local function ReadAuras()
     end
     for _, filter in ipairs({ "HELPFUL", "HARMFUL" }) do
         for i = 1, 40 do
-            local name, count, expires, sid
+            local name, count, expires, sid, inst
             if C_UnitAuras and C_UnitAuras.GetAuraDataByIndex then
                 local ok, a = pcall(C_UnitAuras.GetAuraDataByIndex, "player", i, filter)
                 if not ok or type(a) ~= "table" then break end
-                name, count, expires, sid = a.name, a.applications, a.expirationTime, a.spellId
+                name, count, expires, sid, inst = a.name, a.applications, a.expirationTime, a.spellId, Plain(a.auraInstanceID)
             elseif UnitAura then
                 local ok, n, _, c, _, _, e, _, _, _, s = pcall(UnitAura, "player", i, filter)
                 if not ok or n == nil then break end
@@ -1533,6 +1534,18 @@ local function ReadAuras()
             if name == nil and sid == nil then found.unreadable = true end   -- there, but hidden (secret): an unsure read
             if filter == "HELPFUL" and type(name) == "string" and name:lower():find("campfire", 1, true) then
                 found.campfire = true   -- e.g. Welcoming Campfire: there's a fire close by
+            end
+            if filter == "HELPFUL" and type(expires) == "number" and expires > 0 then
+                -- the camp: Camp Benefits (what you got, read from its text later), the 1-minute sitting timer,
+                -- and every buff of about an hour (if a camp object gives its own, it ends with Camp Benefits)
+                if sid == 1229741 or (type(name) == "string" and (name == "Camp Benefits" or name == campName)) then
+                    found.camp = { sid = sid, name = name, inst = inst, expires = expires }
+                elseif sid == 1289723 or sid == 1229739 or name == "Welcoming Campfire" then
+                    found.welcome = { expires = expires }
+                elseif sid and not AURA_NAMES[sid] and expires - GetTime() > 600 then
+                    found.hour = found.hour or {}
+                    found.hour[#found.hour + 1] = { sid = sid, name = name, expires = expires }
+                end
             end
             if filter == "HELPFUL" and (name == "Food" or name == "Food & Drink" or name == "Refreshment") then
                 found.eating = true     -- sitting and eating: the new Well Fed comes after 10 seconds
@@ -1609,6 +1622,40 @@ local function TooltipText(data)
         end
     end
     return #out > 0 and table.concat(out, "\n") or nil
+end
+
+-- What a camp gave you: Camp Benefits' text, one effect a line (its name and "… remaining" left out), plus any
+-- buff that came at the same moment. Read once per camp (again in 10 s if the text wasn't ready).
+function ns.CampEffects(camp, hour)
+    local key = tostring(camp.sid or camp.name) .. ":" .. math.floor(tonumber(camp.expires) or 0)
+    local c = ns.campTip
+    if c and c.key == key and (c.ok or GetTime() < c.retry) then return c.lines end
+    local text
+    local T = C_TooltipInfo
+    if T and T.GetUnitBuffByAuraInstanceID and camp.inst then
+        local ok, data = pcall(T.GetUnitBuffByAuraInstanceID, "player", camp.inst)
+        if ok then text = TooltipText(data) end
+    end
+    local desc = (C_Spell and C_Spell.GetSpellDescription) or GetSpellDescription
+    if not text and desc and camp.sid then
+        local ok, t = pcall(desc, camp.sid)
+        t = ok and Plain(t)
+        if type(t) == "string" and t ~= "" then text = t end
+    end
+    local lines, have = {}, {}
+    for l in (text or ""):gmatch("[^\n]+") do
+        l = l:gsub("^%s+", ""):gsub("%s+$", "")
+        if l ~= "" and l ~= camp.name and not l:lower():find("remaining", 1, true) and not have[l] then
+            have[l] = true; lines[#lines + 1] = l
+        end
+    end
+    for _, h in ipairs(hour or {}) do
+        if type(h.name) == "string" and not have[h.name] and math.abs((h.expires or 0) - (camp.expires or 0)) <= 30 then
+            have[h.name] = true; lines[#lines + 1] = h.name
+        end
+    end
+    ns.campTip = { key = key, lines = lines, ok = text ~= nil, retry = GetTime() + 10 }
+    return lines
 end
 
 -- The old way, if the tooltip data API can't read it: a hidden tooltip, line by line.
@@ -2414,8 +2461,11 @@ ComputeLevelStatus = function()
     if wr then
         local st = math.max(1, math.min(3, wr.stacks))
         icon = ItemIcon(SLEEPING_BAG) or SpellIcon(WELL_RESTED) or icon   -- the bag, not the buff
-        add(st >= 3 and "ok" or "wait", ("Well-Rested %d/3: +%d%% XP."):format(st, st)
-            .. (st < 3 and " Keep lying on the bag for the full +3%." or ""), bagTip, wr.left, st)
+        -- full, but the bag is ready again: lying on it sets the timer back to 2 hours
+        local renew = st >= 3 and bags > 0 and wr.left and wr.left < 6900 and ItemCooldownLeft(SLEEPING_BAG) <= 0
+        add((st >= 3 and not renew) and "ok" or "wait", ("Well-Rested %d/3: +%d%% XP."):format(st, st)
+            .. (st < 3 and " Keep lying on the bag for the full +3%." or "")
+            .. (renew and " |cffffd100The bag is ready: lie on it again to set the timer back to 2 hours.|r" or ""), bagTip, wr.left, st)
     elseif bags > 0 then
         local cd = ItemCooldownLeft(SLEEPING_BAG)
         seen.bagCd = cd > 0 or nil
@@ -2424,6 +2474,21 @@ ComputeLevelStatus = function()
     elseif level >= 14 then
         add("info", "You don't have one yet – a quest chain from level 14.", bagTip .. "\n\nThe chain starts at Alexston "
             .. "Farmstead in Westfall (Alliance) or the Burned-Out Remains in the Barrens (Horde).")
+    end
+    -- the camp: Camp Benefits and what it gave you (only while you have it, or are sitting by a fire for it)
+    local cf = auraCache.found or {}
+    local campLeft = cf.camp and (cf.camp.expires - GetTime()) or nil
+    local sitLeft = cf.welcome and (cf.welcome.expires - GetTime()) or nil
+    name, slot, use, options = "Camp Benefits", "camp", nil, nil
+    icon = SpellIcon(1229741) or "Interface\\Icons\\Spell_Fire_Fire"
+    local campTip = "Sit by a campfire for a minute: Camp Benefits, for 1 hour – everything the camp's objects give "
+        .. "(Fish Bowl, Camp Chair, Lodestone, Mana Well …). Sit again to add objects put down later."
+    if campLeft and campLeft > 0 then
+        local eff = ns.CampEffects(cf.camp, cf.hour)
+        add(campLeft < 300 and "wait" or "ok", #eff > 0 and table.concat(eff, "\n")
+            or "You have it – the game didn't let its text be read (hover the buff).", campTip, campLeft)
+    elseif sitLeft and sitLeft > 0 then
+        add("wait", "Keep sitting – Camp Benefits comes when the minute is up.", campTip, sitLeft)
     end
     CheckBoosts(seen)
     return rows
