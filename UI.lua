@@ -5869,6 +5869,25 @@ do (function()
         return (cur - first[2]) / (now - first[1])
     end
 
+    -- Where you'll end, when your numbers are hidden from addons: the game itself runs your % through a curve
+    -- "now + gain, at most 100" (addons may not add to a hidden number). One curve per gain, made once.
+    local endCurves = {}
+    local function EndCurve(gain)
+        gain = math.floor(gain + 0.5)
+        if endCurves[gain] == nil then
+            local ok, c = pcall(function()
+                local c = C_CurveUtil.CreateCurve()
+                if c.SetType and Enum and Enum.LuaCurveType then c:SetType(Enum.LuaCurveType.Linear) end
+                c:AddPoint(0, gain)
+                if gain < 100 then c:AddPoint(1 - gain / 100, 100) end
+                c:AddPoint(1, 100)
+                return c
+            end)
+            endCurves[gain] = ok and c or false
+        end
+        return endCurves[gain] or nil
+    end
+
     -- One tile: the power it restores (health or mana), what's left of the buff, and how far it'll get you.
     local function Paint(r, a, what, label, color)
         local cur, max   -- (not "a and b or c": mana that can't be read must not turn into health)
@@ -5919,12 +5938,24 @@ do (function()
             end
             local pf = (what == "mp") and UnitPowerPercent or UnitHealthPercent
             local scale = CurveConstants and CurveConstants.ScaleTo100
+            local function P(curve)   -- your % through a curve (a hidden number the game can show)
+                if what == "mp" then return pf("player", 0, false, curve) end
+                return pf("player", false, curve)
+            end
+            -- what the rest of the buff gives, as % of your maximum (the maximum may be readable when the value isn't)
+            local maxR = N(rawMax)
+            local gain = (tk and a.left and maxR and maxR > 0) and math.min(100, tk.ps * a.left / maxR * 100) or nil
             local pctShown = false
             if pf and scale then
-                pctShown = pcall(function()
-                    local v = (what == "mp") and pf("player", 0, false, scale) or pf("player", false, scale)
-                    r.pct:SetFormattedText(color .. "%d%%|r", v)
-                end)
+                -- "26% » 95%": now, and where you'll be when it's done; else "26% +69%"; else just "26%"
+                local curve = gain and EndCurve(gain)
+                pctShown = (curve and pcall(function()
+                        r.pct:SetFormattedText(color .. "%d%%|r |cffcccccc»|r " .. color .. "%d%%|r", P(scale), P(curve))
+                    end))
+                    or (gain and pcall(function()
+                        r.pct:SetFormattedText(color .. "%d%%|r |cffcccccc+" .. math.floor(gain + 0.5) .. "%%|r", P(scale))
+                    end))
+                    or pcall(function() r.pct:SetFormattedText(color .. "%d%%|r", P(scale)) end)
             end
             -- the tick over the %, when the game could show it
             local y = pctShown and 24 or 6
@@ -5932,7 +5963,7 @@ do (function()
             r.info:SetText("")   -- (the % and the tick say it; a line under each icon only crowded them)
             return
         end
-        r.pct:SetText(color .. math.floor(cur / max * 100 + 0.5) .. "%|r")
+        r.pct:SetText(color .. math.floor(cur / max * 100 + 0.5) .. "%|r")   -- (with where you'll end, below)
         local fr, fg, fb = (what == "mp") and 0.15 or 0.15, (what == "mp") and 0.45 or 0.8, (what == "mp") and 1 or 0.2
         r.fill:SetVertexColor(fr, fg, fb, 0.45)
         r.fillTop:SetVertexColor(fr + 0.4, fg + 0.3, fb, 0.9)
@@ -5969,12 +6000,15 @@ do (function()
             end
             return
         end
+        -- now » where you'll be when it's done (or full)
+        if rate and rate > 0 and a.left and missing > 0 then
+            local endPct = math.min(100, math.floor((cur + rate * a.left) / max * 100))
+            r.pct:SetText(color .. math.floor(cur / max * 100 + 0.5) .. "%|r |cffcccccc»|r " .. color .. endPct .. "%|r")
+        end
         if missing <= 0 then
             r.info:SetText("|cff40ff40full|r")
-        elseif rate and rate > 0 and a.left then
-            local fullIn = missing / rate
-            r.info:SetText(fullIn <= a.left and ("|cff40ff40full in " .. math.ceil(fullIn) .. "s|r")
-                or ("|cffccccccends at " .. math.floor((cur + rate * a.left) / max * 100) .. "%|r"))
+        elseif rate and rate > 0 and a.left and missing / rate <= a.left then
+            r.info:SetText("|cff40ff40full in " .. math.ceil(missing / rate) .. "s|r")
         else
             r.info:SetText("")
         end
@@ -6047,7 +6081,7 @@ do (function()
                     Paint(r, l[1], l[2], l[3], l[4])
                     if r.danger then r:SetAlpha(0.35 + 0.65 * math.abs(math.sin(GetTime() * 6))) end
                 end
-                local x = (i - (n + 1) / 2) * (ICON + 18)
+                local x = (i - (n + 1) / 2) * (ICON + 40)   -- (room for "26% » 95%" over each)
                 if r.x ~= x then r.x = x; r:ClearAllPoints(); r:SetPoint("CENTER", f, "CENTER", x, 0) end
                 r:Show()
             else

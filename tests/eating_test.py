@@ -25,7 +25,7 @@ check("20%" in str(ev('R.pct.__text')), "the % above: " + str(ev('R.pct.__text')
 check("+151" in str(ev('R.tick.__text')), "a tick: " + str(ev('R.tick.__text')))
 ex('FIRST = R.nextTick; tick(1.05)')
 check(ev('R.nextTick') > ev('FIRST'), "the next tick a second later")
-check("ends at" in str(ev('R.info.__text')) or "full in" in str(ev('R.info.__text')), "where it ends: " + str(ev('R.info.__text')))
+check("20%|r |cffcccccc»|r |cff4da6ff7" in str(ev("R.pct.__text")), "now » where it ends: " + str(ev('R.pct.__text')))
 
 # smooth: buffs looked at again and again (UNIT_AURA) don't restart the tick – one a second
 ex('PLAYS = 0; local old = R.tickAnim.Play; R.tickAnim.Play = function(s) PLAYS = PLAYS + 1; return old(s) end')
@@ -38,6 +38,27 @@ check(ev('R.pct.__text') == "", "hidden mana: no %")
 check(ev('R.info.__text') == "", "no line under the icon: " + str(ev('R.info.__text')))
 check(ev('R.bar:IsShown()'), "the game's own fill for hidden mana")
 check("+151" in str(ev('R.tick.__text')), "the tick still comes")
+# hidden mana, but the game's curve API is there: "26% » 95%" worked out by the game
+ex(r"""
+CurveConstants = { ScaleTo100 = { scale = true } }
+Enum = Enum or {}; Enum.LuaCurveType = { Linear = 1 }
+C_CurveUtil = { CreateCurve = function()
+  local c = { pts = {} }
+  function c:SetType() end
+  function c:AddPoint(x, y) self.pts[#self.pts+1] = { x, y } end
+  return c end }
+local function eval(c, x)
+  if c.scale then return x * 100 end
+  for i = 2, #c.pts do local a, b = c.pts[i-1], c.pts[i]; if x <= b[1] then return a[2] + (b[2]-a[2]) * (x-a[1]) / (b[1]-a[1]) end end
+  return c.pts[#c.pts][2]
+end
+function UnitPowerPercent(u, pt, pred, curve) return eval(curve, 0.26) end
+methods.SetFormattedText = function(self, f, ...) self.__text = string.format(f, ...) end
+tick(0.3)
+""")
+t = str(ev('R.pct.__text'))
+check("26%|r |cffcccccc»|r" in t, "hidden: now » end through the curve: " + t)
+
 
 # "X over Y sec": an even share each second
 ex('MP = 1000; AURAS = { { name = "Food", spellId = 2, icon = 1, expirationTime = T + 30, duration = 30 } }; TIPS = { "Restores 1,338 health over 30 sec." }; fire("UNIT_AURA", "player"); tick(0.5)')
