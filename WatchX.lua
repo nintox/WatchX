@@ -2754,6 +2754,38 @@ end
     local function ValidKey(k)
         return type(k) == "string" and #k >= 2 and #k <= 40 and k:find("^[%a\128-\255]+%-?[%a\128-\255]*$") ~= nil
     end
+    -- A name the game would take: first name and surname 2–12 letters each (letters only – æ ø å é count), never
+    -- three of the same letter in a row, and nothing rude (WoW refuses those names anyway). nil = fine, else why not.
+    local RUDE_PART = { kuk = 1, pikk = 1, fitte = 1, hore = 1, faen = 1, suge = 1, sug = 1, dritt = 1, homo = 1,
+        neger = 1, fuck = 1, shit = 1, cunt = 1, dick = 1, cock = 1, pussy = 1, penis = 1, vagina = 1, whore = 1,
+        slut = 1, bitch = 1, fag = 1, faggot = 1, rape = 1, rapist = 1, nazi = 1, hitler = 1, suck = 1, sucker = 1,
+        anal = 1, anus = 1, porn = 1, sex = 1, tits = 1, cum = 1, nigger = 1, nigga = 1, retard = 1, wank = 1,
+        -- the same in the other languages people play in (the game has its own filter; this stops the obvious)
+        fick = 1, ficken = 1, scheisse = 1, schlampe = 1, hure = 1, fotze = 1, wichser = 1, arsch = 1, schwanz = 1,
+        nutte = 1, spast = 1, merde = 1, pute = 1, salope = 1, connard = 1, conne = 1, encule = 1, bite = 1,
+        chatte = 1, nique = 1, batard = 1, puta = 1, puto = 1, mierda = 1, cabron = 1, cono = 1, polla = 1,
+        pendejo = 1, maricon = 1, joder = 1, verga = 1, cazzo = 1, merda = 1, stronzo = 1, figa = 1, fitta = 1,
+        hora = 1, javla = 1, knulla = 1, kneppe = 1, pik = 1, fisse = 1, luder = 1, kut = 1, lul = 1, hoer = 1,
+        kanker = 1, tering = 1, kurwa = 1, chuj = 1, pizda = 1, jebac = 1 }
+    local RUDE_IN = { "fuck", "cunt", "nigg", "fitte", "faggot", "whore", "hitler", "kuken", "kurwa", "fotze",
+        "wichser", "hurensohn", "arschloch", "putain", "vaffanculo", "puttana", "klootzak", "hijodeputa", "jebac" }   -- even inside a name
+    function ns.NameProblem(name)
+        if type(name) ~= "string" then return "That isn't a name." end
+        local parts = {}
+        for part in name:gmatch("[^%s%-]+") do parts[#parts + 1] = part end
+        if #parts == 0 then return "Put in a name." end
+        if #parts > 2 then return "A name is a first name and a surname – no more." end
+        for _, part in ipairs(parts) do
+            if not part:find("^[%a\128-\255]+$") then return "Names are letters only: " .. part end
+            local letters = select(2, part:gsub("[^\128-\191]", ""))   -- (letters, not bytes: æ ø å are two bytes)
+            if letters < 2 or letters > 12 then return "Each name is 2 to 12 letters: " .. part end
+            local low = part:lower()
+            if low:find("(%a)%1%1") then return "WoW doesn't allow three of the same letter in a row: " .. part end
+            if RUDE_PART[low] then return "That isn't a name WoW would allow." end
+            for _, w in ipairs(RUDE_IN) do if low:find(w, 1, true) then return "That isn't a name WoW would allow." end end
+        end
+        return nil
+    end
     -- A whole number within limits, or nil.
     local function Int(v, lo, hi)
         v = tonumber(v)
@@ -3142,6 +3174,8 @@ end
             local why = "That isn't a player name WatchX can use."
             Print(why .. " (" .. tostring(name or key) .. ")") return false, why
         end
+        local bad = ns.NameProblem(key)   -- only names the game would take go on the list (and out to others)
+        if bad then Print(bad) return false, bad end
         local copper = type(reward) == "number" and math.floor(reward) or ns.ParseMoney(tostring(reward or ""))
         if not copper or copper <= 0 then
             Print("A bounty needs a reward: gold, silver or copper (e.g. |cffffd100/wx wanted Name: 50g ninja looter|r).")
@@ -3271,7 +3305,7 @@ end
     -- passed on by someone else can be learned, never change one you have; never one "by you" from anyone else.
     local function Apply(op, f, from)
         local key = ns.ProperName(f[1])   -- (one written in small letters by someone else is the same player)
-        if not ValidKey(key) then return end
+        if not ValidKey(key) or ns.NameProblem(key) then return end   -- (a name no player can have: not taken in)
         local now = time()
         if op == "A" then
             local t = Int(f[7], 1, now + 300)
