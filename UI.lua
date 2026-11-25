@@ -4851,8 +4851,10 @@ local function LevelTipOwner(owner)
             dx = d * lv:GetEffectiveScale() / GameTooltip:GetEffectiveScale()
         end
     end
-    if right then GameTooltip:SetPoint("BOTTOMRIGHT", lv, "BOTTOMLEFT", dx - 4, 0)
-    else GameTooltip:SetPoint("BOTTOMLEFT", lv, "BOTTOMRIGHT", dx + 4, 0) end
+    -- past the "+8%" box too: it sits on the same side (the one facing the middle of the screen)
+    local edge = (lv.bonusBox and lv.bonusBox:IsShown()) and lv.bonusBox or lv
+    if right then GameTooltip:SetPoint("BOTTOMRIGHT", edge, "BOTTOMLEFT", dx - 4, 0)
+    else GameTooltip:SetPoint("BOTTOMLEFT", edge, "BOTTOMRIGHT", dx + 4, 0) end
 end
 
 local function LevelIconTip(self)
@@ -5084,10 +5086,15 @@ local function BuildLevel()
     f:SetScript("OnEnter", function(self)
         if moving then return end
         local b = ns.levelBonus
-        Tip(self, "XP boosts", "Extra XP you have, and what you're missing. Hover an icon for how to get it.",
+        LevelTipOwner(self)   -- beside the strip and the box, not on top of them
+        GameTooltip:SetText("XP boosts")
+        for _, line in ipairs({ "Extra XP you have, and what you're missing. Hover an icon for how to get it.",
             b and ("|cff40ff40+" .. (b.food + b.bag) .. "% XP from kills|r: XP food " .. b.food .. "%, sleeping bag " .. b.bag .. "%"
-                .. ((b.rested or 0) > 0 and ("\n|cff80b8ffRested " .. b.rested .. "% of a level|r: kills give double XP until it's spent" .. (b.tent and " (the tent filled it)" or "")) or "")) or nil,
-            "|cffffd100Right-click:|r settings  ·  gone at level " .. ns.MaxLevel())
+                .. ((b.rested or 0) > 0 and ("\n|cff80b8ffRested " .. b.rested .. "% of a level|r: kills give double XP until it's spent" .. (b.tent and " (the tent filled it)" or "")) or "")) or false,
+            "|cffffd100Right-click:|r settings  ·  gone at level " .. ns.MaxLevel() }) do
+            if line then GameTooltip:AddLine(line, 1, 1, 1, true) end
+        end
+        GameTooltip:Show()
     end)
     f:SetScript("OnLeave", GameTooltip_Hide)
     -- the extra XP all together, in a small window beside the strip with one tile the size of the icons:

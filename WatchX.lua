@@ -4135,6 +4135,17 @@ local function OnEvent(_, event, arg1, arg2, ...)
                 Print("|cffffd100The game blocked " .. tostring(arg2) .. " – that action needs a click on this "
                     .. "client. Please tell " .. ns.AUTHOR .. " (see /wx log).|r")
             end
+        elseif arg1 then
+            -- another addon's: the game only says "Interface action failed because of an AddOn" – say which
+            -- (once per addon and action a session)
+            ns.otherBlocks = ns.otherBlocks or {}
+            local k = tostring(arg1) .. ":" .. tostring(arg2)
+            if not ns.otherBlocks[k] then
+                ns.otherBlocks[k] = true
+                Log("blocked other", tostring(arg1), tostring(arg2))
+                Print("|cff999999\"Interface action failed\" was |r" .. tostring(arg1) .. "|cff999999 (" .. tostring(arg2)
+                    .. "), not WatchX.|r")
+            end
         end
     elseif event == "INSPECT_READY" then
         ns.OnInspectReady(arg1)
