@@ -88,6 +88,13 @@ check(str(ev('WatchXRebuff.icons[1]:GetAttribute("macrotext1")')) == "/use Cripp
 ex('if not WatchXRebuffOptions then NS.BuildRebuffSettings() end; NS.RebuffList()[1] = nil; NS.RebuffList()[2] = nil; WatchXRebuffOptions:GetScript("OnShow")(WatchXRebuffOptions)')
 sug = ev('(function() local t = {} for _, c in ipairs(WatchXRebuffOptions.sugs) do if c:IsShown() then t[#t + 1] = c.line:sub(1, 9) end end return table.concat(t, ",") end)()')
 check(sug == "Main hand,Off hand:", "a rogue's quick add: main hand and off hand poison " + str(sug))
+# a poison typed as a buff: made a weapon line (any rank), main hand then off hand; old lines fixed too
+ex('NS.db.rebuff.ROGUE = nil; NS.AddRebuff("Instant Poison IV"); NS.AddRebuff("Deadly Poison V")')
+check(ev('NS.RebuffList()[1]') == "Main hand: Instant Poison" and ev('NS.RebuffList()[2]') == "Off hand: Deadly Poison",
+      "typed poisons: Main hand: Instant Poison, Off hand: Deadly Poison")
+ex('NS.db.rebuff.ROGUE = { "Instant Poison IV", "Instant Poison III" }')
+check(ev('NS.RebuffList()[1]') == "Main hand: Instant Poison" and ev('NS.RebuffList()[2]') == "Off hand: Instant Poison",
+      "lines added before: fixed the same way")
 errs = errors(ev)
 check(len(errs) == 0, "no Lua errors " + (str(errs[0])[:300] if errs else ""))
 print("rebuff:", "ALL PASSED" if not fails else "%d FAILED" % len(fails))

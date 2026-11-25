@@ -7043,7 +7043,9 @@ do (function()
         if type(d.rebuff) ~= "table" then d.rebuff = {} end
         local k = ClassKey()
         if type(d.rebuff[k]) ~= "table" then d.rebuff[k] = {} end
-        return d.rebuff[k]
+        local list = d.rebuff[k]
+        if ns.FixRebuffLines and not list.fixed then list.fixed = true; ns.FixRebuffLines(list) end
+        return list
     end
     local function Names(line)   -- "A / B" -> { "A", "B" }
         local t = {}
@@ -7119,6 +7121,38 @@ do (function()
             end
         end
         return best, bestName
+    end
+
+    -- A poison, oil or stone typed as a buff ("Instant Poison IV"): it goes on a weapon – made a weapon line, any
+    -- rank ("Main hand: Instant Poison"); the main hand first, then the off hand.
+    local WEAPON_ITEM = { "poison", "wizard oil", "mana oil", "sharpening stone", "weightstone", "weapon oil" }
+    local function WeaponItemName(text)
+        local l = tostring(text):lower()
+        for _, w in ipairs(WEAPON_ITEM) do if l:find(w, 1, true) then return true end end
+        return false
+    end
+    local function NoRank(text) return (tostring(text):gsub("%s+[IVX]+%s*$", "")) end
+    function ns.WeaponLineFor(list, text)
+        if WeaponLine(text) or not WeaponItemName(text) or Known(text) then return nil end
+        local mh, oh = false, false
+        for _, l in ipairs(list) do
+            local slot = WeaponLine(l)
+            if slot == 16 then mh = true elseif slot == 17 then oh = true end
+        end
+        return ((mh and not oh) and "Off hand: " or "Main hand: ") .. NoRank(text)
+    end
+    function ns.FixRebuffLines(list)
+        local i = 1
+        while list[i] do
+            local w = ns.WeaponLineFor(list, list[i])
+            local dup = false
+            if w then for _, l in ipairs(list) do if l:lower() == w:lower() then dup = true end end end
+            if w and dup then table.remove(list, i)
+            else
+                if w then list[i] = w end
+                i = i + 1
+            end
+        end
     end
 
     local function Build()
@@ -7421,6 +7455,11 @@ do (function()
         text = tostring(text or ""):match("^%s*(.-)%s*$")
         if text == "" then return false end
         local list = ns.RebuffList()
+        local w = ns.WeaponLineFor(list, text)
+        if w then
+            ns.Print("|cffffd100" .. text .. "|r goes on a weapon – added as |cffffd100" .. w .. "|r (any rank you have).")
+            text = w
+        end
         for _, l in ipairs(list) do if l:lower() == text:lower() then return false end end
         list[#list + 1] = text
         local known = WeaponLine(text) ~= nil
@@ -7497,7 +7536,7 @@ do (function()
         eb:SetMaxLetters(80)
         eb.hint = eb:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
         eb.hint:SetPoint("LEFT", eb, "LEFT", 2, 0)
-        eb.hint:SetText("Ice Armor   ·   Arcane Intellect / Arcane Brilliance")
+        eb.hint:SetText("e.g. Ice Armor")
         local function go()
             if ns.AddRebuff(eb:GetText()) then eb:SetText("") end
             eb:ClearFocus()
