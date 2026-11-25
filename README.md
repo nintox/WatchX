@@ -2,11 +2,36 @@
 
 # WatchX
 
-**Made by Rikerud** – a World of Warcraft: Forever addon.
+**Made by Rikerud** – a PvP addon for World of Warcraft: Forever, with a rare scan like unitscan. `/wx`
 
-Rare mob spawn alerts (Prince Nazjak / Tidal Charm built in) with respawn timers, instant phone alerts via
-[ntfy](https://ntfy.sh) and Discord, an AFK logout warning, attack alerts, a Nearby enemies list with stealth
-warnings, class/healer/KOS nameplate icons, XP boosts until level 60, buff warnings, an avoid list (people you don't want to play with, with your own notes), and profiles. `/wx`
+## PvP
+
+- **Nearby** – the enemy players around you, newest first: who has you targeted, who went into Stealth or
+  Vanish (with a warning card), level, class, guild. Click a row to target.
+- **Kill on sight** – players and whole guilds; they get a red card and a skull on their nameplate.
+- **WANTED bounties** – put gold on a player's head, shared with your guild and friends who run WatchX. A
+  reward for one kill or per kill (e.g. 1g a kill, up to 10). Kills are claimed by themselves, you pay by mail
+  with one click, and it can be announced in guild chat.
+- **Nameplate icons** – class, proven healers and KOS over enemy players.
+- **History** – everyone you've met: kills, deaths, last seen, notes, guilds.
+- **Avoid list** – people you don't want to play with: tooltip, group warning, a mark in chat.
+
+## Alerts
+
+- **Phone alerts** within a second, with a screenshot, through [ntfy](https://ntfy.sh) and/or Discord: an
+  enemy player, a rare up, attacked while idle or AFK.
+- **AFK logout warning** 5 minutes before, and a note when you've been logged out.
+
+## Rare scan (like unitscan)
+
+- A catalogue of 428 rares (from Questie's data), your own names, spawn alerts with a big target button,
+  respawn timers and spots on the map. Prince Nazjak (Tidal Charm) is built in.
+
+## Leveling and more
+
+- An XP bar with rested and quest XP, XP boosts (rested, XP food, sleeping bag, campfire and tent).
+- An eating & drinking timer: time left, where your health / mana ends, a tick for each gain.
+- Buff warnings before and when a buff runs out. Profiles for different setups.
 
 ## Install
 

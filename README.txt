@@ -1,9 +1,26 @@
 WatchX – Made by Rikerud
 ========================
 
-Rare mob spawn alerts – in game and on your phone within a second (ntfy and/or Discord),
-with a screenshot. Prince Nazjak (Tidal Charm) is built in, and you can add your own mobs.
-Also warns you 5 minutes before an AFK logout, and when you get logged out.
+A PvP addon for World of Warcraft: Forever, with a rare scan like unitscan. /wx
+
+PVP
+- Nearby: the enemy players around you – who has you targeted, who went into Stealth
+  (with a warning card). Click a row to target.
+- Kill on sight (players and guilds), class / healer / KOS icons on nameplates.
+- WANTED bounties shared with your guild and friends: a reward for one kill or per kill,
+  claimed by themselves, paid by mail with one click, announced in guild chat if you like.
+- History of everyone you've met, and an avoid list.
+
+ALERTS
+- Phone alerts within a second (ntfy and/or Discord, with a screenshot): an enemy player,
+  a rare up, attacked while idle. A warning 5 minutes before an AFK logout.
+
+RARE SCAN (like unitscan)
+- 428 rares to pick from (from Questie's data), your own names, respawn timers, map spots.
+
+LEVELING
+- XP bar, XP boosts (rested, XP food, sleeping bag, campfire), eating & drinking timer,
+  buff warnings. Profiles.
 
 INSTALL
 1. CurseForge app: search for WatchX. Or by hand: put the "WatchX" folder in
