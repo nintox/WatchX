@@ -43,7 +43,15 @@ check("Kill on sight – [Kessa Shade]" in str(ev('said()')), "a new KOS player:
 # a battleground: nothing
 ex('tick(5, 1); local ii = IsInInstance; IsInInstance = function() return true, "pvp" end; NS.ShareSpot({ key = "A-X", name = "Aldric Brightmane", level = 37, class = "PALADIN" }, "kos"); IsInInstance = ii')
 check(ev('said()') == "", "in a battleground: nothing")
-# the whole way: a stealth cast seen by the Enemies list
+# from the player's menu: said where you ask, whatever the ticks
+ex('NS.db.shareParty = false; NS.db.shareGuild = false; tick(2, 1)')
+ex('NS.db.enemies["Bram-X"] = { name = "Bram Stonefist", class = "WARRIOR", level = 58, guild = "Stormborn", kos = true }')
+ex('NS.EnemyMenu(UIParent, "Bram-X")')
+ex('for _, b in ipairs(WatchXMenu and WatchXMenu.buttons or {}) do if b:IsShown() and tostring(b:GetText()):find("Tell my guild") then b:GetScript("OnClick")(b) end end')
+out = str(ev('said()'))
+print("    menu:", out)
+check(out.startswith("GUILD|WatchX: Kill on sight – [Bram Stonefist] 58 Warrior <Stormborn>"), "menu: Tell my guild")
+
 errs = errors(ev)
 check(len(errs) == 0, "no Lua errors " + (str(errs[0])[:300] if errs else ""))
 print("share:", "ALL PASSED" if not fails else "%d FAILED" % len(fails))

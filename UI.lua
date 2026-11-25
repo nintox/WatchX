@@ -446,6 +446,17 @@ function ns.EnemyMenu(anchor, key)
         { r.kos and "Remove from KOS" or "|cffff4040Kill on sight (KOS)|r", function() ns.SetKOS(key, not r.kos) end },
         { r.avoid and "Remove from avoid list" or "|cffff8040Avoid|r – don't play with", function() ns.SetAvoid(key, not r.avoid) end },
     }
+    -- tell your party / guild about this one: who, level, class, guild, KOS / WANTED with the reward, where you are
+    local function Tell(where)
+        local live = ns.nearby and ns.nearby[key]
+        local e = { name = r.name or (live and live.name), class = r.class or (live and live.class),
+            level = r.level or (live and live.level), guild = r.guild or (live and live.guild) }
+        local kind = (r.wanted and ns.WantedState(r.wanted).open) and "wanted" or (r.kos or (live and live.kos)) and "kos"
+            or (live and live.stealth and time() - live.stealth < 60) and "stealth" or "enemy"
+        ns.ShareSpot(e, kind, kind == "wanted" and r.wanted or (kind == "stealth" and live.stealthHow) or nil, where)
+    end
+    if IsInGroup and IsInGroup() then items[#items + 1] = { "|cff80b8ffTell my party|r", function() Tell("party") end } end
+    if IsInGuild and IsInGuild() then items[#items + 1] = { "|cff40ff40Tell my guild|r", function() Tell("guild") end } end
     if r.guild then
         local gk = ns.db.kosGuilds[r.guild:lower()]
         items[#items + 1] = { (gk and "Guild off KOS: " or "KOS the guild: ") .. r.guild, function() ns.SetGuildKOS(r.guild, not gk) end }
@@ -2283,7 +2294,7 @@ function ns.BuildNearbySettings()
         "|cffaaaaaa•|r  |cffd8a0ffSTEALTH|r = went into Stealth, Vanish, Prowl or Shadowmeld – and the warning pops up.",
         "|cffaaaaaa•|r  The warnings sit on top of the list: |cffd8a0ffStealthed player|r and |cffff5959Enemy player detected|r.",
         "|cffaaaaaa•|r  Needs |cffffd100enemy nameplates|r (key V). In dungeons and raids it's faded (or hidden, if ticked).",
-        "|cffaaaaaa•|r  |cffffd100Right-click a row|r: KOS, avoid, KOS the guild, a note. |cffff3030KOS|r players get a red card.",
+        "|cffaaaaaa•|r  |cffffd100Right-click a row|r: KOS, avoid, KOS the guild, tell your party / guild, a note. |cffff3030KOS|r players get a red card.",
         "|cffaaaaaa•|r  |cffff8040Avoid|r = people you don't want to play with (any player): tooltip, group warning, [Avoid] in chat.",
         "|cffaaaaaa•|r  |cffffd100Nameplate icons|r: the class over each player, |cff40ff60+|r = proven healer, |cffff3030red ring + skull|r = KOS.",
         "|cffaaaaaa•|r  Friendly: their talents (inspected). Enemies: a healing-talent spell like Riptide or Wild Growth.",
@@ -3991,20 +4002,26 @@ end
 -- battlegrounds or arenas.
 ns.spotSaid = {}   -- lower-case name .. ":" .. kind -> when it was said (by you or someone else)
 ns.SPOT_HEAD = { stealth = "Stealth", kos = "Kill on sight", wanted = "WANTED", enemy = "Enemy" }
-function ns.ShareSpot(e, kind, extra)
+-- force = "party" / "guild": you asked for it (the player's menu) – said there, whatever the ticks.
+function ns.ShareSpot(e, kind, extra, force)
     local d = db()
-    if not (d and (d.shareParty or d.shareGuild) and e and type(e.name) == "string") then return end
-    local want = (kind == "stealth" and d.shareStealth ~= false) or (kind == "kos" and d.shareKOS ~= false)
-        or (kind == "wanted" and d.shareWanted ~= false) or (kind == "enemy" and d.shareAll == true)
-    if not want then return end
-    if IsInInstance then
-        local _, it = IsInInstance()
-        if it == "pvp" or it == "arena" then return end
-    end
+    if not (d and e and type(e.name) == "string") then return end
     local now = GetTime()
     local k = e.name:lower() .. ":" .. kind
-    if ns.spotSaid[k] and now - ns.spotSaid[k] < 60 then return end
-    if now - (ns.spotLast or -99) < (kind == "enemy" and 10 or 3) then return end
+    if force then
+        if now - (ns.spotLast or -99) < 1 then return end   -- (a double click)
+    else
+        if not (d.shareParty or d.shareGuild) then return end
+        local want = (kind == "stealth" and d.shareStealth ~= false) or (kind == "kos" and d.shareKOS ~= false)
+            or (kind == "wanted" and d.shareWanted ~= false) or (kind == "enemy" and d.shareAll == true)
+        if not want then return end
+        if IsInInstance then
+            local _, it = IsInInstance()
+            if it == "pvp" or it == "arena" then return end
+        end
+        if ns.spotSaid[k] and now - ns.spotSaid[k] < 60 then return end
+        if now - (ns.spotLast or -99) < (kind == "enemy" and 10 or 3) then return end
+    end
     -- who, what, where
     local info = ((e.level and e.level > 0) and (" " .. e.level) or (e.level == -1 and " ??" or ""))
         .. (e.class and (" " .. e.class:sub(1, 1) .. e.class:sub(2):lower()) or "")
@@ -4026,12 +4043,14 @@ function ns.ShareSpot(e, kind, extra)
     local msg = "WatchX: " .. ns.SPOT_HEAD[kind] .. " – [" .. e.name .. "]" .. info
         .. (e.guild and (" <" .. e.guild .. ">") or "") .. more .. (where and where ~= "" and (" · " .. where) or "")
     local sent = false
-    if d.shareParty and IsInGroup and IsInGroup() then
+    local toParty = (force == "party") or (not force and d.shareParty)
+    local toGuild = (force == "guild") or (not force and d.shareGuild)
+    if toParty and IsInGroup and IsInGroup() then
         local chan = (IsInRaid and IsInRaid()) and "RAID" or "PARTY"
         if LE_PARTY_CATEGORY_INSTANCE and IsInGroup(LE_PARTY_CATEGORY_INSTANCE) and not IsInGroup(LE_PARTY_CATEGORY_HOME) then chan = "INSTANCE_CHAT" end
         sent = (ns.SendChat and ns.SendChat(msg:sub(1, 255), chan)) or sent
     end
-    if d.shareGuild and IsInGuild and IsInGuild() then
+    if toGuild and IsInGuild and IsInGuild() then
         sent = (ns.SendChat and ns.SendChat(msg:sub(1, 255), "GUILD")) or sent
     end
     if sent then
