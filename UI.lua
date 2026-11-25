@@ -4804,6 +4804,8 @@ local LV_STATUS = { ok = "|cff40ff40You have it|r", todo = "|cffff6060Missing|r"
 local lv, lvLabel
 local function LevelScale() return ClampScale(db().levelScale) end
 local function LevelWidth(n) return LV_PAD * 2 + n * LV_ICON + math.max(0, n - 1) * LV_GAP end
+-- seconds left on a row now (it's worked out every few seconds; the clock runs on from when it ends)
+function ns.RowLeft(r) return r.ends and (r.ends - GetTime()) or r.timer end
 
 local function LevelLabel()
     if not (lv and moving and lv:IsShown()) then return end
@@ -4864,7 +4866,8 @@ local function LevelIconTip(self)
     local c = r.state == "info" and { 0.75, 0.75, 0.75 } or LV_COLORS[r.state] or { 1, 1, 1 }
     GameTooltip:SetText(r.name or "XP boost")
     GameTooltip:AddLine(r.text or "", c[1], c[2], c[3], true)
-    if r.timer then GameTooltip:AddLine("Time left: " .. ns.Clock(r.timer), 1, 0.82, 0) end
+    local left = ns.RowLeft(r)
+    if left then GameTooltip:AddLine("Time left: " .. ns.Clock(math.max(0, left)), 1, 0.82, 0) end
     local n = r.options and #r.options or 0
     if n == 0 and r.tip then
         GameTooltip:AddLine(" ")
@@ -5183,6 +5186,9 @@ local function BuildLevel()
         end
         b.pulse1 = Pulse(b.flash, 0.05, 0.4)
         b.pulse2 = Pulse(b.border, 0.4, 1)
+        b.pulses = {}   -- (made once: painting doesn't make a new list every time)
+        if b.pulse1 then b.pulses[#b.pulses + 1] = b.pulse1 end
+        if b.pulse2 then b.pulses[#b.pulses + 1] = b.pulse2 end
     end
     -- any edge only changes the size (the icons keep their shape); the top-left corner stays put
     AddGrips(f, function(self, st, cx, cy)
@@ -5200,6 +5206,27 @@ local function BuildLevel()
     return f
 end
 
+-- The clock on an icon: short, to fit (1h / 13m / 45), red under 2 minutes. Every second, from row.ends.
+function ns.PaintLevelTimer(b, r)
+    local left = ns.RowLeft(r)
+    if left then
+        local sec = math.max(0, math.floor(left))
+        local t = sec >= 3600 and (math.floor(sec / 3600) .. "h") or sec >= 60 and (math.floor(sec / 60) .. "m") or tostring(sec)
+        local col = left < 120 and 1 or (r.state == "wait" and 2 or 3)
+        if b.timerText ~= t then b.timerText = t; b.timer:SetText(t) end
+        if b.timerCol ~= col then
+            b.timerCol = col
+            if col == 1 then b.timer:SetTextColor(1, 0.35, 0.35)
+            elseif col == 2 then b.timer:SetTextColor(1, 0.82, 0)
+            else b.timer:SetTextColor(0.25, 1, 0.25) end
+        end
+        b.dim:Show()
+    else
+        if b.timerText ~= "" then b.timerText = ""; b.timer:SetText("") end
+        b.dim:Hide()
+    end
+end
+
 -- Looks only (icon, border, numbers, clock) – fine in combat.
 local function PaintLevelIcon(b, r)
     b.row = r
@@ -5211,23 +5238,12 @@ local function PaintLevelIcon(b, r)
     b.badge:SetTexture(LV_BADGES[r.state])
     b.badge:SetAlpha(LV_BADGES[r.state] and 1 or 0)
     b.count:SetText(r.count or "")
-    if r.timer then
-        b.dim:Show()
-        local sec = math.max(0, math.floor(r.timer))   -- short, to fit on the icon: 1h / 13m / 45
-        b.timer:SetText(sec >= 3600 and (math.floor(sec / 3600) .. "h") or sec >= 60 and (math.floor(sec / 60) .. "m") or tostring(sec))
-        if r.timer < 120 then b.timer:SetTextColor(1, 0.35, 0.35)
-        elseif r.state == "wait" then b.timer:SetTextColor(1, 0.82, 0)
-        else b.timer:SetTextColor(0.25, 1, 0.25) end
-    else
-        b.timer:SetText("")
-        b.dim:Hide()
-    end
+    b.timerCol = nil   -- (a new row: its colour is set again)
+    ns.PaintLevelTimer(b, r)
     b.flashing = r.state == "todo"
     local pulse = b.flashing and db().levelFlash ~= false and not moving
-    for _, ag in ipairs({ b.pulse1 or false, b.pulse2 or false }) do
-        if ag then
-            if pulse and not ag:IsPlaying() then ag:Play() elseif not pulse and ag:IsPlaying() then ag:Stop() end
-        end
+    for _, ag in ipairs(b.pulses or {}) do
+        if pulse and not ag:IsPlaying() then ag:Play() elseif not pulse and ag:IsPlaying() then ag:Stop() end
     end
     if lvMenu and lvMenu:IsShown() and lvMenu.owner == b then OpenLevelMenu(b) end   -- keep the column current
 end
@@ -5305,7 +5321,12 @@ function ns.RefreshLevel()
     end
     -- nothing new since last time (the list is worked out once a second): leave it be
     local key = tostring(ns.levelVersion) .. tostring(moving) .. tostring(d.levelMissing)   -- (a count: never a reused table)
-    if lv.painted == key and lv:IsShown() then return end
+    if lv.painted == key and lv:IsShown() then
+        for _, b in ipairs(lv.icons) do   -- only the clocks run on
+            if b.row and b:IsShown() then ns.PaintLevelTimer(b, b.row) end
+        end
+        return
+    end
     lv.painted = key
     for i, b in ipairs(lv.icons) do
         local r = rows[i]

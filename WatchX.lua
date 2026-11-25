@@ -251,9 +251,26 @@ local function PresetFor(name)
     end
 end
 
--- All mobs: presets first, then custom ones.
+-- All mobs: presets first, then custom ones. The same list is handed out again while the names are the same (it's
+-- asked for every refresh; "on" is brought up to date in place), so it doesn't make new tables each time.
 function ns.GetMobList()
-    local list = {}
+    local list = ns.mobList
+    if list and list.db == db and #list == #ns.PRESETS + #db.custom then
+        local same, k = true, #ns.PRESETS
+        for i, p in ipairs(ns.PRESETS) do
+            local m = list[i]
+            if m.name ~= p.name then same = false break end
+            m.enabled = db.watch[p.name] and true or false
+        end
+        for i, name in ipairs(same and db.custom or {}) do
+            local m = list[k + i]
+            if m.name ~= name then same = false break end
+            m.enabled = db.watch[name] and true or false
+        end
+        if same then return list end
+    end
+    list = { db = db }
+    ns.mobList = list
     for _, p in ipairs(ns.PRESETS) do
         list[#list + 1] = { name = p.name, preset = true, note = p.note, enabled = db.watch[p.name] and true or false }
     end
@@ -2220,15 +2237,16 @@ if CreateFrame then
         if event == "UNIT_SPELLCAST_SUCCEEDED" then
             if unit == "player" and ns.OnCampCast then pcall(ns.OnCampCast, spellID) end
         elseif event == "UNIT_AURA" then
-            if unit == "player" then statusCache.dirty = true end
+            -- your buffs changed: they're read again (each read makes a new table per buff, so not every second)
+            if unit == "player" then statusCache.dirty = true; ns.auraGen = (ns.auraGen or 0) + 1 end
         elseif event == "PLAYER_REGEN_ENABLED" then
             ns.combatEnd = GetTime()
-            if C_Timer then C_Timer.After(3.2, function() statusCache.dirty = true end) end   -- a good look then
+            if C_Timer then C_Timer.After(3.2, function() statusCache.dirty = true; ns.auraGen = (ns.auraGen or 0) + 1 end) end   -- a good look then
         elseif event == "PLAYER_XP_UPDATE" or event == "UPDATE_EXHAUSTION" or event == "PLAYER_LEVEL_UP" then
             statusCache.dirty = true
         else
             -- after a loading screen (an instance, a /reload) the bags can read empty for a moment: wait a little
-            if event == "PLAYER_ENTERING_WORLD" then bagState.loadingUntil = GetTime() + 5 end
+            if event == "PLAYER_ENTERING_WORLD" then bagState.loadingUntil = GetTime() + 5; ns.auraGen = (ns.auraGen or 0) + 1 end
             bagState.dirty, statusCache.dirty = true, true
         end
     end, "bags & XP events")
@@ -2306,12 +2324,13 @@ function ns.OnCampCast(spellID)
     statusCache.dirty = true
 end
 
--- Worked out at most once a second (sooner after a change to your buffs, bags or XP, but never more than
--- three times a second): the bars refresh on lots of events, and this used to cost real CPU in a busy city.
+-- Worked out again after a change to your buffs, bags or XP (but never more than three times a second), else every
+-- 5 seconds: the bars refresh on lots of events, and each look makes new tables. The icons' clocks count down by
+-- themselves in between (row.ends).
 local ComputeLevelStatus
 function ns.LevelStatus()
     local since = GetTime() - statusCache.at
-    if since < 1 and not (statusCache.dirty and since >= 0.3) then return statusCache.rows end
+    if since < 5 and not (statusCache.dirty and since >= 0.3) then return statusCache.rows end
     statusCache.rows = ComputeLevelStatus()
     statusCache.at, statusCache.dirty = GetTime(), false
     ns.levelVersion = (ns.levelVersion or 0) + 1   -- the icons repaint when this changes
@@ -2325,7 +2344,10 @@ ComputeLevelStatus = function()
     -- in a fight (and a moment either side of it) buffs can read hidden: the last good look is used then, and a
     -- look that couldn't make out every buff never replaces a good one
     local unsure = ns.AurasUnsure()
-    if not unsure or not auraCache.found then
+    -- read again only when something changed (UNIT_AURA, bags, XP, a fight ended) or it's 10 s old: the times count
+    -- down from the last read (each read makes a new table for every buff on you)
+    local stale = statusCache.dirty or not auraCache.found or GetTime() - auraCache.at >= 10
+    if stale and (not unsure or not auraCache.found) then
         local ok, found = pcall(ReadAuras)
         if ok and not (found.unreadable and auraCache.found) then auraCache.found, auraCache.at = found, GetTime() end
     end
@@ -2344,6 +2366,7 @@ ComputeLevelStatus = function()
     local name, icon, slot, use, options
     local function add(state, text, tip, timer, count)
         rows[#rows + 1] = { state = state, name = name, icon = icon, text = text, tip = tip, timer = timer,
+            ends = timer and (GetTime() + timer) or nil,   -- (the icons count down from this between two looks)
             count = (count and count > 0) and tostring(count) or nil, slot = slot, use = use, options = options }
     end
     local picks = type(db.levelPick) == "table" and db.levelPick or {}
@@ -2604,7 +2627,15 @@ function ns.CheckBuffs()
     local now, soon = GetTime(), tonumber(db.buffSoon) or 60
     local fight = ns.AurasUnsure()
     if not fight then
-        local ok, list = pcall(ReadBuffs)
+        -- the last read, unless your buffs changed since (UNIT_AURA) or it's 10 s old (a read makes a table per buff)
+        local B = ns.buffRead
+        local ok, list
+        if B and B.gen == ns.auraGen and now - B.at < 10 then
+            ok, list = true, B.list
+        else
+            ok, list = pcall(ReadBuffs)
+            if ok and not list.unreadable then ns.buffRead = { list = list, gen = ns.auraGen, at = now } end
+        end
         if ok and list.unreadable then fight = true end   -- couldn't make them all out: no conclusions this time
         if ok and not fight then
             local here = {}

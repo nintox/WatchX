@@ -227,6 +227,16 @@ def load(extra_stubs="", quiet=True):
             raise SystemExit("could not load %s: %s" % (f, r))
     ex("ns=NS")
     ex(RUNTIME)
+    # like the game: when a test puts new auras on you (AURAS = {...} / HARM = {...}), UNIT_AURA fires
+    ex('''
+    local store = { AURAS = AURAS, HARM = HARM }
+    rawset(_G, "AURAS", nil); rawset(_G, "HARM", nil)
+    setmetatable(_G, { __index = function(_, k) return store[k] end,
+      __newindex = function(t, k, v)
+        if k == "AURAS" or k == "HARM" then store[k] = v; if fire then fire("UNIT_AURA", "player") end
+        else rawset(t, k, v) end
+      end })
+    ''')
     ex('fire("ADDON_LOADED", "WatchX"); fire("PLAYER_LOGIN"); fire("PLAYER_ENTERING_WORLD", true, false)')
     ex("tick(40, 0.05)")
     return lua, ex, ev
