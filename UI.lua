@@ -5094,6 +5094,20 @@ local function BuildLevel()
             "|cffffd100Right-click:|r settings  ·  gone at level " .. ns.MaxLevel() }) do
             if line then GameTooltip:AddLine(line, 1, 1, 1, true) end
         end
+        local c = ns.levelCamp
+        if c then
+            GameTooltip:AddLine(" ")
+            if c.expires then
+                GameTooltip:AddDoubleLine("Camp Benefits", ns.Clock(math.max(0, c.expires - GetTime())), 1, 0.82, 0, 1, 0.82, 0)
+                local lines = c.lines or {}
+                for _, l in ipairs(lines) do GameTooltip:AddLine(l, 0.25, 1, 0.35, true) end
+                if #lines == 0 then GameTooltip:AddLine("(its text couldn't be read – hover the buff)", 0.6, 0.6, 0.6, true) end
+            end
+            if c.sitExpires then
+                GameTooltip:AddLine("Sitting by the fire – Camp Benefits in " .. math.ceil(math.max(0, c.sitExpires - GetTime())) .. " s"
+                    .. (c.expires and " (adds what's new)" or ""), 1, 0.82, 0, true)
+            end
+        end
         GameTooltip:Show()
     end)
     f:SetScript("OnLeave", GameTooltip_Hide)
@@ -5120,6 +5134,12 @@ local function BuildLevel()
         return t
     end
     f.bonus, f.bonus2 = Text(12, 5), Text(9, -7)
+    box.camp = box:CreateTexture(nil, "OVERLAY", nil, 3)   -- Camp Benefits (or sitting for it): a little fire in the corner
+    box.camp:SetSize(13, 13)
+    box.camp:SetPoint("TOPRIGHT", box.inner, "TOPRIGHT", 4, 4)
+    box.camp:SetTexture("Interface\\Icons\\Spell_Fire_Fire")
+    box.camp:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+    box.camp:Hide()
     box:EnableMouse(true)
     box:SetScript("OnEnter", function() local h = f:GetScript("OnEnter"); if h then h(f) end end)
     box:SetScript("OnLeave", GameTooltip_Hide)
@@ -5222,12 +5242,22 @@ local function PaintBonus()
     local rested = b and b.rested or 0
     local top = pct > 0 and ("|cff40ff40+" .. pct .. "%|r") or (rested > 0 and "|cff80b8ffR|r" or "")
     local bottom = rested > 0 and ("|cff80b8ff" .. (pct > 0 and "R " or "") .. rested .. "%|r") or (pct > 0 and "|cffccccccXP|r" or "")
+    local c = ns.levelCamp
+    if top == "" and bottom == "" and c then   -- no XP bonus, but a camp: "Camp" and its time
+        local left = c.expires and (c.expires - GetTime()) or (c.sitExpires and (c.sitExpires - GetTime())) or 0
+        top = "|cffffd100Camp|r"
+        bottom = "|cffcccccc" .. (left >= 60 and (math.floor(left / 60) .. "m") or (math.ceil(math.max(0, left)) .. "s")) .. "|r"
+    end
+    box.camp:SetShown(c ~= nil)
+    if c then box.camp:SetDesaturated(c.expires == nil) end   -- grey while you're still sitting for it
     local key = top .. "|" .. bottom
     if lv.bonusText ~= key then
         lv.bonusText = key
         lv.bonus:SetText(top)
         lv.bonus2:SetText(bottom)
-        if pct > 0 then box.edge:SetColorTexture(0.25, 0.9, 0.3, 1) else box.edge:SetColorTexture(0.5, 0.72, 1, 1) end
+        if pct > 0 then box.edge:SetColorTexture(0.25, 0.9, 0.3, 1)
+        elseif rested > 0 then box.edge:SetColorTexture(0.5, 0.72, 1, 1)
+        else box.edge:SetColorTexture(1, 0.6, 0.2, 1) end   -- only the camp
         box:SetShown(key ~= "|")
     end
     local right = LevelOnRight()
@@ -6362,7 +6392,7 @@ function ns.BuildLevelSettings()
         "|cffaaaaaa•|r  |cffffd100XP food|r – food whose tooltip says \"Experience gained from kills is increased\". None left: a warning.",
         "|cffaaaaaa•|r  |cffffd100Cozy Sleeping Bag|r – lie on it: +1% XP a minute, up to +3%. A quest chain from level 14."
             .. " At 3/3, once it's ready again, lying on it sets the timer back to 2 hours (it turns yellow).",
-        "|cffaaaaaa•|r  |cffffd100Camp Benefits|r – sit a minute by a campfire: what the camp gave you (Fish Bowl, Camp Chair …), for 1 hour.",
+        "|cffaaaaaa•|r  |cffffd100Camp Benefits|r – sit a minute by a campfire: a little fire on the \"+%\" box; hover it for what the camp gave you (Fish Bowl, Camp Chair …) and the time left.",
         "",
         "Border: |cff40ff40green|r you have it    |cffff6060red|r missing    |cffffd100yellow|r soon or running out    "
             .. "|cffaaaaaagrey|r worth getting",

@@ -2480,21 +2480,16 @@ ComputeLevelStatus = function()
         add("info", "You don't have one yet – a quest chain from level 14.", bagTip .. "\n\nThe chain starts at Alexston "
             .. "Farmstead in Westfall (Alliance) or the Burned-Out Remains in the Barrens (Horde).")
     end
-    -- the camp: Camp Benefits and what it gave you (only while you have it, or are sitting by a fire for it)
+    -- the camp: Camp Benefits and what it gave you, or the minute of sitting for it – shown in the "+%" box
+    -- (ns.levelCamp: when it ends, its effects line by line, when the sitting minute ends)
     local cf = auraCache.found or {}
-    local campLeft = cf.camp and (cf.camp.expires - GetTime()) or nil
-    local sitLeft = cf.welcome and (cf.welcome.expires - GetTime()) or nil
-    name, slot, use, options = "Camp Benefits", "camp", nil, nil
-    icon = SpellIcon(1229741) or "Interface\\Icons\\Spell_Fire_Fire"
-    local campTip = "Sit by a campfire for a minute: Camp Benefits, for 1 hour – everything the camp's objects give "
-        .. "(Fish Bowl, Camp Chair, Lodestone, Mana Well …). Sit again to add objects put down later."
-    if campLeft and campLeft > 0 then
-        local eff = ns.CampEffects(cf.camp, cf.hour)
-        add(campLeft < 300 and "wait" or "ok", #eff > 0 and table.concat(eff, "\n")
-            or "You have it – the game didn't let its text be read (hover the buff).", campTip, campLeft)
-    elseif sitLeft and sitLeft > 0 then
-        add("wait", "Keep sitting – Camp Benefits comes when the minute is up.", campTip, sitLeft)
-    end
+    local campOn = cf.camp and cf.camp.expires - GetTime() > 0
+    local sitOn = cf.welcome and cf.welcome.expires - GetTime() > 0
+    ns.levelCamp = (campOn or sitOn) and {
+        expires = campOn and cf.camp.expires or nil,
+        lines = campOn and ns.CampEffects(cf.camp, cf.hour) or nil,
+        sitExpires = sitOn and cf.welcome.expires or nil,
+    } or nil
     CheckBoosts(seen)
     return rows
 end
