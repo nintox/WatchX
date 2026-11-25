@@ -5879,7 +5879,7 @@ do (function()
     local function Build()
         f = CreateFrame("Frame", "WatchXEating", UIParent)
         f:SetFrameStrata("MEDIUM")
-        f:SetSize(ICON * 4 + 60, ICON + 40)
+        f:SetSize(ICON * 4 + 140, ICON + 40)
         f:SetClampedToScreen(true)
         f:SetMovable(true)
         f:EnableMouse(false)
@@ -6144,7 +6144,7 @@ do (function()
                     Paint(r, l[1], l[2], l[3], l[4])
                     if r.danger then r:SetAlpha(0.35 + 0.65 * math.abs(math.sin(GetTime() * 6))) end
                 end
-                local x = (i - (n + 1) / 2) * (ICON + 40)   -- (room for "26% » 95%" over each)
+                local x = (i - (n + 1) / 2) * (ICON + 66)   -- (room for "100% » 100%" over each, side by side)
                 if r.x ~= x then r.x = x; r:ClearAllPoints(); r:SetPoint("CENTER", f, "CENTER", x, 0) end
                 r:Show()
             else
