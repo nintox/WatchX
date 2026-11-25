@@ -12,7 +12,7 @@ for f in ("../WatchX.lua", "../UI.lua", "../Data/Rares.lua"):
     print(("compile ok   " if ok else "COMPILE FAIL ") + f + ("" if ok else ": " + str(err)))
     if not ok: raise SystemExit(1)
 PYEOF
-for t in smoke_test combat_test warnings_test eating_test names_news_test announce_test multikill_test xpfood_test names_gate_test; do
+for t in smoke_test combat_test warnings_test eating_test names_news_test announce_test multikill_test xpfood_test names_gate_test sounds_test; do
     out="$("$PY" "$t.py" 2>&1)"
     if [ $? -eq 0 ]; then echo "pass  $(printf '%s' "$out" | tail -n 1)"; else echo "FAIL  $t"; printf '%s\n' "$out" | grep -v "^ok" | tail -n 15; fail=1; fi
 done

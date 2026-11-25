@@ -57,7 +57,8 @@ local defaults = {
     attackAlert = true,   -- alert when something attacks you while you're idle or AFK
     nearby = false,       -- the Nearby list of enemy players + stealth warnings (in game only, like Spy)
     stealthWarn = true,   -- Nearby: the "Stealthed player detected!" card
-    stealthSound = true,  -- Nearby: a sound with it
+    stealthSound = true,  -- Nearby: "Sounds" – all the PvP sounds on or off
+    sounds = {},          -- Nearby: kind (stealth, kos, wanted, enemy, bounty) -> a sound (UI.lua ns.SOUND_CHOICES)
     newEnemyCard = false, -- Nearby: an "Enemy player detected!" card for every new enemy (stealth/KOS always)
     warnDock = false,     -- Nearby: the cards sit on top of the list (off: top of the screen, movable)
     nearbyAttach = true,  -- Nearby: the list hangs under the mini bar, same width
@@ -1177,7 +1178,7 @@ local function OnStealthCast(unit, spellID)
     Print("|cffc080ffStealthed player detected:|r " .. e.name .. (info ~= "" and (" (" .. info .. ")") or "")
         .. " – " .. what)
     if db.stealthWarn == false then Refresh() return end
-    if db.stealthSound ~= false then PlaySound(SOUNDKIT.RAID_WARNING, "Master") end
+    if ns.AlertSound then ns.AlertSound("stealth") end
     if ns.ShowStealthToast then ns.ShowStealthToast(e) end
     Refresh()
 end
@@ -3812,7 +3813,7 @@ local PROFILE_KEYS = { "enemyPlayers", "friendlyPlayers", "attackAlert", "whispe
     "stealthWarn", "stealthSound", "nearbyShowEmpty", "nearbyKeep", "newEnemyCard", "warnDock", "nearbyAttach", "nearbyMax", "nearbyNoBG", "nearbyHideDungeon", "nearbyHideRaid",
     "plateIcons", "plateFriendly", "plateHealer", "plateSize", "plateKOS",
     "levelHelper", "levelMissing", "levelFlash", "levelWarn", "levelHideCombat", "levelHideInstance", "levelPoint", "levelScale", "levelWidth",
-    "buffWarn", "buffSoon", "buffGone", "buffGroups", "avoidGroup", "avoidChat", "scanOn", "wantedOn", "wantedGuild", "wantedFriends", "wantedAlert", "wantedAnnounce" }
+    "buffWarn", "buffSoon", "buffGone", "buffGroups", "avoidGroup", "avoidChat", "scanOn", "wantedOn", "wantedGuild", "wantedFriends", "wantedAlert", "wantedAnnounce", "sounds" }
 local PROFILE_MAX_NAME = 16
 
 local function Copy(v)

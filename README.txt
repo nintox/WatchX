@@ -13,6 +13,7 @@ PVP
 - Kill on sight (players and guilds), class / healer / KOS icons on nameplates.
 - WANTED bounties shared with your guild and friends: a reward for one kill or per kill,
   claimed by themselves, paid by mail with one click, announced in guild chat if you like.
+- Sounds of your choice for Stealth, Kill on sight, WANTED, a new enemy nearby and bounty news.
 - History of everyone you've met, and an avoid list.
 
 ALERTS

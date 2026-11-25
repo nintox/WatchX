@@ -1929,7 +1929,7 @@ function ns.BuildNearbySettings()
         function() return db().nearby end, function(v) ns.SetNearby(v) end)
     check("Stealth warning", "a card mid-screen when a player goes into stealth",
         function() return db().stealthWarn ~= false end, function(v) db().stealthWarn = v end)
-    check("Sound with the warning", nil,
+    check("Sounds", "off: no sound for any of the warnings below",
         function() return db().stealthSound ~= false end, function(v) db().stealthSound = v end)
     check("New enemy card", "for every new enemy (Stealth and KOS always show)",
         function() return db().newEnemyCard == true end, function(v) db().newEnemyCard = v end)
@@ -1943,6 +1943,43 @@ function ns.BuildNearbySettings()
         function() return db().nearbyShowEmpty == true end, function(v) db().nearbyShowEmpty = v end)
     check("KOS alert", "a red card + sound when a KOS player shows up",
         function() return db().kosAlert ~= false end, function(v) db().kosAlert = v end)
+    -- a sound for each: [ Raid warning ] [>]  (click: next, right-click: back; > plays it)
+    o.soundBtns = {}
+    ns.soundBtns = o.soundBtns   -- (for the tests)
+    for _, k in ipairs(ns.SOUND_KINDS) do
+        local lab = o:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+        lab:SetPoint("TOPLEFT", o, "TOPLEFT", L + 2, y - 4)
+        lab:SetText("Sound: " .. k.label)
+        local b = FlatButton(o, "", 130, 20)
+        b:SetPoint("TOPLEFT", o, "TOPLEFT", L + 190, y - 1)
+        b:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+        function b.Paint()
+            local cur = ns.SoundChoice(k.kind)
+            for _, c in ipairs(ns.SOUND_CHOICES) do
+                if c.key == cur then SetButtonText(b, c.key == "off" and "|cff808080Off|r" or c.label) end
+            end
+        end
+        b:SetScript("OnClick", function(_, button)
+            local list, cur, at = ns.SOUND_CHOICES, ns.SoundChoice(k.kind), 1
+            for i, c in ipairs(list) do if c.key == cur then at = i end end
+            at = (button == "RightButton") and ((at - 2) % #list + 1) or (at % #list + 1)
+            if type(db().sounds) ~= "table" then db().sounds = {} end
+            db().sounds[k.kind] = list[at].key
+            b.Paint()
+            ns.PlayChoice(list[at].key)   -- hear it as you pick
+        end)
+        local play = FlatButton(o, ">", 22, 20, function() ns.PlayChoice(ns.SoundChoice(k.kind)) end)
+        play:SetPoint("LEFT", b, "RIGHT", 4, 0)
+        if k.hint then
+            local h = o:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+            h:SetPoint("LEFT", play, "RIGHT", 8, 0)
+            h:SetText(k.hint)
+        end
+        b.Paint()
+        o.soundBtns[#o.soundBtns + 1] = b
+        y = y - 26
+    end
+    y = y - 4
     check("Hide in dungeons", "off: faded",
         function() return db().nearbyHideDungeon == true end, function(v) db().nearbyHideDungeon = v end)
     check("Hide in raids", "off: faded",
@@ -2257,6 +2294,7 @@ function ns.BuildNearbySettings()
 
     page:SetScript("OnShow", function()
         for _, cb in ipairs(checks) do cb:SetChecked(cb.get()) end
+        for _, b in ipairs(o.soundBtns) do b.Paint() end   -- (a profile switch may have changed them)
         o.maxVal:SetText(ns.NearbyMax())
         o.keepVal:SetText(ns.NearbyKeepMin())
         o.sizeVal:SetText(ns.PlateSize())
@@ -3771,11 +3809,61 @@ function ns.DisarmCard()
     end
 end
 
+-- ---------------------------------------------------------------- PvP sounds, one choice per kind
+-- The game's own sounds (SOUNDKIT names, with stand-ins if WoW Forever lacks one). db.sounds[kind] = a key
+-- below, or "off"; "Sounds" (db.stealthSound) switches them all off at once.
+ns.SOUND_CHOICES = {
+    { key = "off",     label = "Off" },
+    { key = "raid",    label = "Raid warning", kit = { "RAID_WARNING" } },
+    { key = "alarm",   label = "Alarm",        kit = { "ALARM_CLOCK_WARNING_3", "ALARM_CLOCK_WARNING_2", "RAID_WARNING" } },
+    { key = "boss",    label = "Boss whisper", kit = { "UI_RAID_BOSS_WHISPER_WARNING", "RAID_WARNING" } },
+    { key = "ready",   label = "Ready check",  kit = { "READY_CHECK", "RAID_WARNING" } },
+    { key = "pvp",     label = "PvP queue",    kit = { "PVP_THROUGH_QUEUE", "READY_CHECK" } },
+    { key = "ping",    label = "Map ping",     kit = { "MAP_PING", "TELL_MESSAGE" } },
+    { key = "whisper", label = "Whisper",      kit = { "TELL_MESSAGE" } },
+    { key = "invite",  label = "Invite",       kit = { "IG_PLAYER_INVITE", "TELL_MESSAGE" } },
+    { key = "coins",   label = "Coins",        kit = { "LOOT_WINDOW_COIN_SOUND", "IG_BACKPACK_COIN_SELECT" } },
+    { key = "quest",   label = "Quest done",   kit = { "IG_QUEST_LIST_COMPLETE", "READY_CHECK" } },
+}
+ns.SOUND_KINDS = {   -- (in the settings in this order)
+    { kind = "stealth", label = "Stealth",          def = "raid" },
+    { kind = "kos",     label = "Kill on sight",    def = "alarm" },
+    { kind = "wanted",  label = "WANTED nearby",    def = "boss" },
+    { kind = "enemy",   label = "New enemy nearby", def = "off", hint = "at most every 5 s" },
+    { kind = "bounty",  label = "Bounty news",      def = "coins", hint = "posted, claimed, paid" },
+}
+function ns.SoundChoice(kind)
+    local v = type(db().sounds) == "table" and db().sounds[kind]
+    if v then return v end
+    for _, k in ipairs(ns.SOUND_KINDS) do if k.kind == kind then return k.def end end
+    return "off"
+end
+function ns.PlayChoice(key)
+    for _, c in ipairs(ns.SOUND_CHOICES) do
+        if c.key == key and c.kit and SOUNDKIT and PlaySound then
+            for _, name in ipairs(c.kit) do
+                if SOUNDKIT[name] and pcall(PlaySound, SOUNDKIT[name], "Master") then return true end
+            end
+        end
+    end
+    return false
+end
+function ns.AlertSound(kind)
+    if db().stealthSound == false then return end   -- "Sounds" off: none of them
+    local choice = ns.SoundChoice(kind)
+    if choice == "off" then return end
+    if kind == "enemy" then
+        if GetTime() - (ns.lastEnemySound or -99) < 5 then return end
+        ns.lastEnemySound = GetTime()
+    end
+    ns.PlayChoice(choice)
+end
+
 -- A KOS player showed up: the KOS card always wins, with a sound.
 function ns.OnKOS(e)
     if not db().nearby then return end
     ns.Print("|cffff3030Kill on sight:|r " .. e.name .. (e.guild and (" <" .. e.guild .. ">") or ""))
-    if db().stealthSound ~= false then PlaySound(SOUNDKIT.RAID_WARNING, "Master") end
+    ns.AlertSound("kos")
     ns.ShowStealthToast(e, "kos")
 end
 
@@ -3784,7 +3872,7 @@ function ns.OnWantedSeen(e, w)
     if not db().nearby then return end
     local rw = ns.WantedReward(w)
     ns.Print("|cffffa000WANTED|r nearby: " .. e.name .. (rw and (" – " .. rw) or "") .. (w.by and (" (from " .. w.by .. ")") or ""))
-    if db().stealthSound ~= false then PlaySound(SOUNDKIT.RAID_WARNING, "Master") end
+    ns.AlertSound("wanted")
     local function Card()   -- (waits until the fight is over when a card with a click is up)
         if not ns.ShowStealthToast(e, "wanted") then
             if toast then toast.queue = Card end
@@ -3829,15 +3917,16 @@ function ns.BountyCard(kind, who, reward, from, class)
     end
     Card()
     if not toast then return false end
-    local snd = SOUNDKIT and (SOUNDKIT.LOOT_WINDOW_COIN_SOUND or SOUNDKIT.RAID_WARNING)
-    if snd and db().stealthSound ~= false then pcall(PlaySound, snd, "Master") end
+    ns.AlertSound("bounty")
     return true
 end
 
 -- A new enemy in the list: the red card (not more often than every few seconds).
 local lastEnemyToast = 0
 function ns.OnNewEnemy(e)
-    if db().newEnemyCard ~= true or not db().nearby then return end
+    if not db().nearby then return end
+    ns.AlertSound("enemy")   -- (its own choice: works with the card off too)
+    if db().newEnemyCard ~= true then return end
     if toast and toast:IsShown() and GetTime() < (toast.bountyUntil or 0) then return end
     local shownHead = toast and toast:IsShown() and toast.head:GetText()
     if GetTime() - lastEnemyToast < 3 or shownHead == TOAST_KINDS.stealth.head or shownHead == TOAST_KINDS.kos.head
