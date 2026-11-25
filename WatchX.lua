@@ -1536,8 +1536,14 @@ local function ReadAuras()
             if filter == "HELPFUL" and (name == "Food" or name == "Food & Drink" or name == "Refreshment") then
                 found.eating = true     -- sitting and eating: the new Well Fed comes after 10 seconds
             end
-            local id = (AURA_NAMES[sid] and sid) or (type(name) == "string" and byName[name])
-            if filter == "HELPFUL" and AuraIsXP and id ~= WELL_RESTED and sid ~= WELL_FED then
+            local learned = filter == "HELPFUL" and sid and type(db.xpBuffs) == "table" and db.xpBuffs[sid]
+            local id = (AURA_NAMES[sid] and sid) or (type(name) == "string" and byName[name]) or (learned and WELL_FED)
+            -- buffs of 10–60 minutes (a food's Well Fed is one): what came new while you ate is learned (CheckBoosts)
+            if filter == "HELPFUL" and sid and type(expires) == "number" and expires > 0 then
+                local dur = expires - GetTime()
+                if dur >= 300 and dur <= 3600 then found.long = found.long or {}; found.long[sid] = type(name) == "string" and name or tostring(sid) end
+            end
+            if filter == "HELPFUL" and AuraIsXP and id ~= WELL_RESTED and sid ~= WELL_FED and not learned then
                 local xp = AuraIsXP(i, sid, name)
                 if id == WELL_FED and xp == false then id = nil          -- stat food's Well Fed
                 elseif not id and xp == "kill" then id = WELL_FED end    -- an XP-from-kills buff by another name
@@ -1876,6 +1882,32 @@ local function CheckBoosts(now)
         fedGone = nil
         pendingWarn.fed = now.food and now.food > 0 and ("Well Fed has run out – eat " .. (now.foodName or "XP food") .. ".")
             or "Well Fed has run out – and you have no XP food in your bags!"
+    end
+    -- An XP food whose Well Fed is called something else (or says it differently): the long buff that came while you
+    -- ate it (XP food gone from your bags, or eaten through the XP icon) – and Well Fed not seen – is learned as its
+    -- Well Fed, once.
+    local E = ns.eatWatch
+    if now.eating and not was.eating then
+        E = { food = was.food, long = was.long or {} }
+        ns.eatWatch = E
+    end
+    if E then
+        if not now.eating and not E.done then E.done = GetTime() end
+        local ateXP = ((now.food or 0) < (E.food or 0)) or (ns.foodUsedAt and GetTime() - ns.foodUsedAt < 90)
+        if E.done and GetTime() - E.done > 40 then
+            ns.eatWatch = nil
+        elseif ateXP and not now.fed then
+            for sid, nm in pairs(now.long or {}) do
+                if not E.long[sid] and sid ~= WELL_RESTED and sid ~= BOOSTED_REST then
+                    if type(db.xpBuffs) ~= "table" then db.xpBuffs = {} end
+                    db.xpBuffs[sid] = nm
+                    ns.eatWatch = nil
+                    statusCache.dirty = true
+                    Print("|cff40ff40" .. nm .. "|r is your XP food's buff – WatchX knows it from now on.")
+                    break
+                end
+            end
+        end
     end
     -- the last XP food: said once you stop eating (the count drops while you still sit and eat it)
     if ((was.food or 0) > 0 or was.foodOut) and (now.food or 0) == 0 then now.foodOut = true end
@@ -2254,6 +2286,7 @@ ComputeLevelStatus = function()
     local rows, seen = {}, {}
     seen.unsure = (unsure or (auraCache.found and auraCache.found.unreadable)) and true or nil   -- no news from this look
     seen.eating = auraCache.found and auraCache.found.eating or nil
+    seen.long = auraCache.found and auraCache.found.long or nil
     local name, icon, slot, use, options
     local function add(state, text, tip, timer, count)
         rows[#rows + 1] = { state = state, name = name, icon = icon, text = text, tip = tip, timer = timer,
@@ -2368,6 +2401,10 @@ ComputeLevelStatus = function()
     local wr = aura(WELL_RESTED)
     seen.rested = wr and true or nil
     seen.restedStacks = wr and wr.stacks or 0
+    -- the extra XP you have now, for the strip: XP food +5 %, the sleeping bag +1 % a stack; rested on top (double
+    -- XP from kills while it lasts – the tent fills it)
+    ns.levelBonus = { food = fed and 5 or 0, bag = wr and math.max(1, math.min(3, wr.stacks or 1)) or 0,
+        rested = seen.restedPct or 0, tent = seen.boost and true or false }
     name, icon, slot = "Cozy Sleeping Bag", ItemIcon(SLEEPING_BAG) or SpellIcon(WELL_RESTED) or "Interface\\Icons\\Spell_Nature_Sleep", "bag"
     local bags, toy = ItemCount(SLEEPING_BAG)
     options = {}
@@ -4218,8 +4255,16 @@ local function OnSlash(input)
             if not ok or type(a) ~= "table" then break end
             local name, sid, st, ex = Plain(a.name), Plain(a.spellId), Plain(a.applications), Plain(a.expirationTime)
             local left = (type(ex) == "number" and ex > 0) and math.floor(ex - GetTime()) or nil
-            Print(("%d. |cffffd100%s|r  id %s  ·  stacks %s  ·  %s"):format(i, tostring(name or "?"), tostring(sid or "?"),
-                tostring(st or 0), left and (left .. " s left") or "no end"))
+            local what = ""
+            if type(db.xpBuffs) == "table" and sid and db.xpBuffs[sid] then what = "  |cff40ff40XP food (learned)|r"
+            elseif sid == WELL_FED then what = "  |cff40ff40XP food|r"
+            elseif AuraIsXP then
+                local xp = AuraIsXP(i, sid, name)
+                what = xp == "kill" and "  |cff40ff40XP from kills|r" or xp == "rest" and "  |cffaaaaaarested XP|r"
+                    or xp == false and "" or "  |cff808080(text not readable)|r"
+            end
+            Print(("%d. |cffffd100%s|r  id %s  ·  stacks %s  ·  %s%s"):format(i, tostring(name or "?"), tostring(sid or "?"),
+                tostring(st or 0), left and (left .. " s left") or "no end", what))
             n = n + 1
         end
         if n == 0 then Print("No buffs on you.") end

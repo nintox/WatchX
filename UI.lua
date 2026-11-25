@@ -4841,6 +4841,7 @@ local function LevelFlyButton(m, i)
     b:SetScript("OnLeave", GameTooltip_Hide)
     b:SetScript("PostClick", function(self)
         if not self.opt or self.opt.craft then return end
+        if m.slot == "food" then ns.foodUsedAt = GetTime() end   -- (an XP food eaten: its buff can be learned)
         RememberPick(self.opt.fire and "fire" or m.slot, self.opt.id)
         ns.RefreshLevel()
     end)
@@ -4980,6 +4981,7 @@ local function BuildLevel()
         b:SetScript("OnEnter", function(self) ns.Safe("xp tooltip", function(s) OpenLevelMenu(s); LevelIconTip(s) end, self) end)
         b:SetScript("OnLeave", GameTooltip_Hide)
         b:SetScript("PostClick", function(self, button)
+            if button == "LeftButton" and self.row and self.row.slot == "food" then ns.foodUsedAt = GetTime() end
             if button == "RightButton" and not InCombatLockdown() and ns.OpenLevelSettings then ns.OpenLevelSettings() end
         end)
         b:Hide()
@@ -4992,10 +4994,18 @@ local function BuildLevel()
     end)
     f:SetScript("OnEnter", function(self)
         if moving then return end
+        local b = ns.levelBonus
         Tip(self, "XP boosts", "Extra XP you have, and what you're missing. Hover an icon for how to get it.",
+            b and ("|cff40ff40+" .. (b.food + b.bag) .. "% XP from kills|r: XP food " .. b.food .. "%, sleeping bag " .. b.bag .. "%"
+                .. ((b.rested or 0) > 0 and ("\n|cff80b8ffRested " .. b.rested .. "% of a level|r: kills give double XP until it's spent" .. (b.tent and " (the tent filled it)" or "")) or "")) or nil,
             "|cffffd100Right-click:|r settings  ·  gone at level " .. ns.MaxLevel())
     end)
     f:SetScript("OnLeave", GameTooltip_Hide)
+    -- the extra XP all together, beside the icons: "+8%" (food + sleeping bag), and rested when you have it
+    f.bonus = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightLarge")
+    f.bonus:SetPoint("LEFT", f, "RIGHT", 8, 0)
+    do local fnt = f.bonus:GetFont(); if fnt then f.bonus:SetFont(fnt, 16, "OUTLINE") end end
+    f.bonus:SetShadowOffset(0, 0)
     -- (secure icons inside: it can't move in a fight, and a stray drag while locked doesn't move or save it)
     f:SetScript("OnDragStart", function(self)
         if moving and not InCombatLockdown() then self.dragging = true; self:StartMoving() end
@@ -5080,10 +5090,21 @@ local function PaintLevelIcon(b, r)
     if lvMenu and lvMenu:IsShown() and lvMenu.owner == b then OpenLevelMenu(b) end   -- keep the column current
 end
 
+-- "+8% XP" beside the icons (a plain text: fine in a fight too)
+local function PaintBonus()
+    if not (lv and lv.bonus) then return end
+    local b = ns.levelBonus
+    local pct = b and (b.food + b.bag) or 0
+    local t = pct > 0 and ("|cff40ff40+" .. pct .. "%|r |cffccccccXP|r") or ""
+    if b and (b.rested or 0) > 0 then t = t .. (t ~= "" and "\n" or "") .. "|cff80b8ffrested " .. b.rested .. "%|r" end
+    if lv.bonusText ~= t then lv.bonusText = t; lv.bonus:SetText(t) end
+end
+
 function ns.RefreshLevel()
     if not lv then return end
     local d = db()
     local all = d.levelHelper ~= false and ns.LevelStatus() or nil
+    PaintBonus()
     if InCombatLockdown() then
         -- the icons are secure buttons: in a fight they can't be shown, hidden, moved or given a new item,
         -- so only the ones already showing are repainted (it hides just before a fight, see below)
