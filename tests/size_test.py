@@ -23,6 +23,13 @@ ex('SlashCmdList["WATCHX"]("size 100")')
 ex('NS.SetSize("levelScale", NS.GetSize("levelScale") + 0.1)')
 check(ev('NS.db.levelScale') == 1.1, "+ : the XP boost icons 10 % bigger")
 check(abs(ev('WatchXLeveling and WatchXLeveling:GetScale() or 1.1') - 1.1) < 0.001, "and drawn so")
+ex('NS.db.nearby = true; NS.AttachNearby(); NS.RefreshUI()')
+if ev('WatchXNearby and WatchXNearby.attached'):
+    ex('NS.SetSize("nearbyScale", 1.4)')
+    check(ev('NS.db.miniScale') == 1.4 and abs(ev('WatchXNearby:GetScale()') - 1.4) < 0.001, "Enemies list under the mini bar: + makes it (and the mini bar) bigger")
+    ex('NS.SetSize("miniScale", 1)')
+else:
+    check(False, "the Enemies list hangs under the mini bar in this test")
 ex('InCombatLockdown = function() return true end')
 check(ev('NS.SetSize("miniScale", 2)') == False and ev('NS.db.miniScale') == 1, "not in a fight")
 ex('InCombatLockdown = function() return false end')

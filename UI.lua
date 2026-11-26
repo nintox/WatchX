@@ -946,7 +946,7 @@ local function BuildSettings()
             y = y - 26
         end
         sizeRow("Mini bar", "miniScale", "The mini bar – and what hangs under it: the Enemies list, the XP bar and the red alert.")
-        sizeRow("Enemies list", "nearbyScale", "The Enemies list in a spot of its own (under the mini bar it follows the mini bar).", true)
+        sizeRow("Enemies list", "nearbyScale", "The Enemies list. Under the mini bar it has the mini bar's size: this makes both bigger.", true)
         sizeRow("XP bar", "xpBarScale", "The XP bar in a spot of its own (under the mini bar or the XP boost icons it follows them).")
         sizeRow("XP boost icons", "levelScale", "Rested, sleeping bag, XP food, the +% box.", true)
         sizeRow("Rebuff icons", "rebuffScale", "Your buffs and poisons to keep up.")
@@ -5660,9 +5660,13 @@ end
 -- bigger with a click. Each keeps its top-left where it is. Under the mini bar, the Enemies list, the XP bar and the
 -- alert follow the mini bar's size.
 ns.SIZE_KEYS = { "miniScale", "nearbyScale", "xpBarScale", "levelScale", "rebuffScale" }
-function ns.GetSize(key) return ClampScale(db()[key]) end
+function ns.GetSize(key)
+    if key == "nearbyScale" and nb and nb.attached then key = "miniScale" end
+    return ClampScale(db()[key])
+end
 function ns.SetSize(key, value)
     if InCombatLockdown() then ns.Print("Sizes can't change in a fight – try again after it.") return false end
+    if key == "nearbyScale" and nb and nb.attached then key = "miniScale" end   -- under the mini bar: it has the mini bar's size
     local new = ClampScale(value)
     db()[key] = new
     local frames = {
