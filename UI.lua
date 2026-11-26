@@ -888,7 +888,14 @@ do
             SetButtonText(win.lock, on and "|cff40ff40Lock bars|r" or "Unlock bars")
         end
         ns.PaintLockButton()
-        CloseX(win)
+        local x = CloseX(win)
+        -- minimize: just the top line (Lock / Export stay); click again for the whole window
+        win.min = Button(win, "-", 24, 20, function() ns.MinimizeWindow(not win.minimized) end)
+        win.min:SetPoint("RIGHT", x, "LEFT", -4, 0)
+        win.min:SetScript("OnEnter", function(self) Tip(self, win.minimized and "Show it all" or "Minimize", "Just the top line – click again for the whole window.") end)
+        win.min:SetScript("OnLeave", GameTooltip_Hide)
+        win.exp:ClearAllPoints()
+        win.exp:SetPoint("RIGHT", win.min, "LEFT", -10, 0)
         local line = win:CreateTexture(nil, "ARTWORK")
         line:SetColorTexture(EDGE[1], EDGE[2], EDGE[3], 0.45)
         line:SetHeight(1)
@@ -896,6 +903,7 @@ do
         line:SetPoint("TOPRIGHT", win, "TOPRIGHT", -6, -48)
         -- the list of pages
         local nav = CreateFrame("Frame", nil, win)
+        win.nav, win.line = nav, line
         nav:SetPoint("TOPLEFT", win, "TOPLEFT", 6, -49)
         nav:SetPoint("BOTTOMLEFT", win, "BOTTOMLEFT", 6, 6)
         nav:SetWidth(176)
@@ -948,8 +956,25 @@ do
         content:SetPoint("BOTTOMRIGHT", win, "BOTTOMRIGHT", -8, 8)
         win:Hide()
     end
+    function ns.RaiseWindow() if win and win:IsShown() and win.Raise then win:Raise() end end
+    function ns.MinimizeWindow(on)
+        if not win then return end
+        local l, t = win:GetLeft(), win:GetTop()   -- (the top-left stays where it is)
+        if l and t then
+            win:ClearAllPoints()
+            win:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", l, t)
+        end
+        win.minimized = on and true or false
+        win:SetHeight(on and 50 or 660)
+        win.nav:SetShown(not on)
+        content:SetShown(not on)
+        win.line:SetShown(not on)
+        SetButtonText(win.min, on and "+" or "-")
+        if l and t then SavePoint(win, "settingsPoint") end
+    end
     function ns.OpenWindow(key)
         if not win then Build() end
+        if win.minimized then ns.MinimizeWindow(false) end
         if not tabs[key] then key = "main" end
         for k, page in pairs(tabs) do
             if k ~= key then page:Hide(); if holder[page] then holder[page]:Hide() end end
@@ -2351,11 +2376,41 @@ function ns.BuildNearbySettings()
     check("Warnings on top of the list", "off: top of the screen (Unlock to move)",
         function() return db().warnDock == true end, function(v) db().warnDock = v end)
 
+    -- a sound for a kind: Name ....... [ Raid warning v ] [>]  (click: the list to pick from; > plays it)
+    P.soundBtns, P.combatSnd = {}, {}
+    ns.soundBtns = P.soundBtns   -- (for the tests: the Sounds box's)
+    local function soundRow(kind, label, hint, list)
+        local lab = o:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+        lab:SetPoint("TOPLEFT", o, "TOPLEFT", L + 24, y - 4)
+        lab:SetText(label)
+        local b = FlatButton(o, "", 150, 20)
+        b:SetPoint("TOPLEFT", o, "TOPLEFT", CTRL, y - 1)
+        function b.Paint()
+            local cur = ns.SoundChoice(kind)
+            SetButtonText(b, (cur == "off" and "|cff808080Off|r" or ns.SoundLabel(cur)) .. "  |cff999999v|r")
+        end
+        b:SetScript("OnClick", function(self) ns.ToggleSoundMenu(self, kind, b.Paint) end)
+        local play = FlatButton(o, ">", 24, 20, function() ns.TrySound(ns.SoundChoice(kind)) end)
+        play:SetPoint("LEFT", b, "RIGHT", 4, 0)
+        play:SetScript("OnEnter", function(self) Tip(self, "Play it", label) end)
+        play:SetScript("OnLeave", GameTooltip_Hide)
+        if hint then
+            local h = o:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+            h:SetPoint("LEFT", play, "RIGHT", 10, 0)
+            h:SetText(hint)
+        end
+        b.Paint()
+        list = list or P.soundBtns
+        list[#list + 1] = b
+        y = y - 27
+        return b
+    end
+
     heading("COMBAT")
     check("+Combat / -Combat on screen", "red when a fight starts, green when it's over",
         function() return db().combatText == true end, function(v) db().combatText = v end)
-    check("Sound with it", nil,
-        function() return db().combatTextSound == true end, function(v) db().combatTextSound = v end)
+    soundRow("combatStart", "Sound: +Combat", nil, P.combatSnd)
+    soundRow("combatEnd", "Sound: -Combat", nil, P.combatSnd)
     do
         local t1 = Button(o, "Test", 70, 22, function() ns.ShowCombatText(true); C_Timer.After(2, function() ns.ShowCombatText(false) end) end)
         t1:SetPoint("TOPLEFT", o, "TOPLEFT", L + 24, y - 2)
@@ -2368,33 +2423,7 @@ function ns.BuildNearbySettings()
     heading("SOUNDS")
     check("Sounds", "off: no sound for any of these",
         function() return db().stealthSound ~= false end, function(v) db().stealthSound = v end)
-    -- a sound for each: [ Raid warning v ] [>]  (click: the list to pick from; > plays it)
-    P.soundBtns = {}
-    ns.soundBtns = P.soundBtns   -- (for the tests)
-    for _, k in ipairs(ns.SOUND_KINDS) do
-        local lab = o:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-        lab:SetPoint("TOPLEFT", o, "TOPLEFT", L + 24, y - 4)
-        lab:SetText(k.label)
-        local b = FlatButton(o, "", 150, 20)
-        b:SetPoint("TOPLEFT", o, "TOPLEFT", CTRL, y - 1)
-        function b.Paint()
-            local cur = ns.SoundChoice(k.kind)
-            SetButtonText(b, (cur == "off" and "|cff808080Off|r" or ns.SoundLabel(cur)) .. "  |cff999999v|r")
-        end
-        b:SetScript("OnClick", function(self) ns.ToggleSoundMenu(self, k.kind, b.Paint) end)
-        local play = FlatButton(o, ">", 24, 20, function() ns.TrySound(ns.SoundChoice(k.kind)) end)
-        play:SetPoint("LEFT", b, "RIGHT", 4, 0)
-        play:SetScript("OnEnter", function(self) Tip(self, "Play it", k.label) end)
-        play:SetScript("OnLeave", GameTooltip_Hide)
-        if k.hint then
-            local h = o:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-            h:SetPoint("LEFT", play, "RIGHT", 10, 0)
-            h:SetText(k.hint)
-        end
-        b.Paint()
-        P.soundBtns[#P.soundBtns + 1] = b
-        y = y - 27
-    end
+    for _, k in ipairs(ns.SOUND_KINDS) do soundRow(k.kind, k.label, k.hint) end
 
     heading("TELL YOUR GROUP")
     -- two columns: what your party / raid hears, and what your guild hears
@@ -2633,6 +2662,7 @@ function ns.BuildNearbySettings()
     function ns.RefreshPvPOptions()
         for _, cb in ipairs(checks) do cb:SetChecked(cb.get()) end
         for _, b in ipairs(P.soundBtns) do b.Paint() end
+        for _, b in ipairs(P.combatSnd) do b.Paint() end
         P.max(); P.keep(); P.size()
         RefreshKOS()
         ns.RefreshAvoidCount()
@@ -2778,7 +2808,7 @@ end
 -- A small label above a bar while unlocked (not part of the bar, so it doesn't grow with it).
 local function MakeLabel(name)
     local l = CreateFrame("Frame", name, UIParent)
-    l:SetFrameStrata("DIALOG")
+    l:SetFrameStrata("HIGH")   -- (under the settings window: it's raised above the HIGH frames)
     l:SetHeight(18)
     local bg = l:CreateTexture(nil, "BACKGROUND")
     bg:SetAllPoints()
@@ -3046,7 +3076,7 @@ end
 local function BuildAlertSpot()
     local f = CreateFrame("Button", "WatchXAlertSpot", UIParent)
     f:SetSize(240, TARGET_H)
-    f:SetFrameStrata("DIALOG")
+    f:SetFrameStrata("HIGH")
     f:SetClampedToScreen(true)
     f:SetMovable(true)
     f:RegisterForDrag("LeftButton")
@@ -3148,8 +3178,9 @@ function ns.StartMove(keepWindow)
     moving = true
     if ns.CloseWindow and not keepWindow then ns.CloseWindow() end   -- (the settings window would be in the way)
     if ns.PaintLockButton then ns.PaintLockButton() end
+    if C_Timer and ns.RaiseWindow then C_Timer.After(0, ns.RaiseWindow) end   -- (the window stays above what unlocking shows)
     if ns.ShowGrid then ns.ShowGrid(true) end
-    mini:SetFrameStrata("DIALOG")
+    mini:SetFrameStrata("HIGH")
     mini:EnableMouseWheel(true)
     ShowGrips(mini, true)
     RefreshMini()
@@ -8328,9 +8359,8 @@ do
         cf:SetAlpha(1)
         cf:Show()
         if cf.fade and not moving then cf.fade:Play() end
-        if db().combatTextSound == true then
-            pcall(PlaySound, on and (SOUNDKIT and SOUNDKIT.RAID_WARNING or 8959) or (SOUNDKIT and SOUNDKIT.IG_QUEST_LIST_COMPLETE or 618), "Master")
-        end
+        local snd = ns.SoundChoice(on and "combatStart" or "combatEnd")   -- (Combat box: off unless you pick one)
+        if snd ~= "off" then ns.PlayChoice(snd) end
     end
     function ns.CombatTextMove(on)
         if on then
