@@ -2351,6 +2351,20 @@ function ns.BuildNearbySettings()
     check("Warnings on top of the list", "off: top of the screen (Unlock to move)",
         function() return db().warnDock == true end, function(v) db().warnDock = v end)
 
+    heading("COMBAT")
+    check("+Combat / -Combat on screen", "red when a fight starts, green when it's over",
+        function() return db().combatText == true end, function(v) db().combatText = v end)
+    check("Sound with it", nil,
+        function() return db().combatTextSound == true end, function(v) db().combatTextSound = v end)
+    do
+        local t1 = Button(o, "Test", 70, 22, function() ns.ShowCombatText(true); C_Timer.After(2, function() ns.ShowCombatText(false) end) end)
+        t1:SetPoint("TOPLEFT", o, "TOPLEFT", L + 24, y - 2)
+        local h = o:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+        h:SetPoint("LEFT", t1, "RIGHT", 10, 0)
+        h:SetText("Unlock bars (top) to move it · wheel: size")
+        y = y - 32
+    end
+
     heading("SOUNDS")
     check("Sounds", "off: no sound for any of these",
         function() return db().stealthSound ~= false end, function(v) db().stealthSound = v end)
@@ -3157,6 +3171,7 @@ function ns.StartMove(keepWindow)
     if ns.LevelMove then ns.LevelMove(true) end
     if ns.EatingMove then ns.EatingMove(true) end
     if ns.RebuffMove then ns.RebuffMove(true) end
+    if ns.CombatTextMove then ns.CombatTextMove(true) end
 end
 
 function ns.ToggleUnlock()
@@ -3183,6 +3198,7 @@ function ns.StopMove(why)
     if ns.LevelMove then ns.LevelMove(false) end
     if ns.EatingMove then ns.EatingMove(false) end
     if ns.RebuffMove then ns.RebuffMove(false) end
+    if ns.CombatTextMove then ns.CombatTextMove(false) end
     ns.Print(why or "Locked.")
     ns.RefreshUI()
     ns.UpdateTargetButton()
@@ -8258,6 +8274,90 @@ do (function()
         ns.AddTab("rebuff", page, true)
     end
 end)() end
+
+-- ---------------------------------------------------------------- +Combat / -Combat (WatchX > PvP > Enemies list)
+-- Big text mid-screen as a fight starts (+Combat, red) and when it's over (-Combat, green); it fades by itself
+-- (the game's animation – no Lua each frame). Not a secure frame: fine in a fight. Unlocked: drag it, wheel: size.
+do
+    local cf
+    local function Build()
+        cf = CreateFrame("Frame", "WatchXCombatText", UIParent)
+        cf:SetSize(260, 48)
+        cf:SetFrameStrata("HIGH")
+        cf:SetClampedToScreen(true)
+        cf:SetMovable(true)
+        cf:SetScale(ClampScale(db().combatTextScale))
+        LoadPoint(cf, "combatTextPoint", { "CENTER", "CENTER", 0, 180 })
+        cf.text = cf:CreateFontString(nil, "OVERLAY", "GameFontNormalHuge")
+        local font = cf.text:GetFont()
+        if font then cf.text:SetFont(font, 30, "THICKOUTLINE") end
+        cf.text:SetPoint("CENTER")
+        cf.bg = cf:CreateTexture(nil, "BACKGROUND")   -- only while unlocked: something to grab
+        cf.bg:SetAllPoints()
+        cf.bg:SetColorTexture(0, 0, 0, 0.45)
+        cf.bg:Hide()
+        if cf.CreateAnimationGroup then
+            local ag = cf:CreateAnimationGroup()
+            local a = ag:CreateAnimation("Alpha")
+            a:SetFromAlpha(1); a:SetToAlpha(0)
+            a:SetStartDelay(1.2); a:SetDuration(0.6)
+            ag:SetScript("OnFinished", function() if not moving then cf:Hide() end end)
+            cf.fade = ag
+        end
+        cf:RegisterForDrag("LeftButton")
+        cf:SetScript("OnDragStart", function(self) if moving then self.dragging = true; self:StartMoving() end end)
+        cf:SetScript("OnDragStop", function(self)
+            if not self.dragging then return end
+            self.dragging = nil
+            self:StopMovingOrSizing()
+            SavePoint(self, "combatTextPoint")
+        end)
+        cf:SetScript("OnMouseWheel", function(self, delta)
+            if not moving then return end
+            Rescale(self, "combatTextScale", delta)
+            SavePoint(self, "combatTextPoint")
+        end)
+        cf:EnableMouse(false)
+        cf:Hide()
+    end
+    function ns.ShowCombatText(on)
+        if not cf then Build() end
+        cf.text:SetText(on and "+Combat" or "-Combat")
+        if on then cf.text:SetTextColor(1, 0.25, 0.2) else cf.text:SetTextColor(0.3, 1, 0.35) end
+        if cf.fade then cf.fade:Stop() end
+        cf:SetAlpha(1)
+        cf:Show()
+        if cf.fade and not moving then cf.fade:Play() end
+        if db().combatTextSound == true then
+            pcall(PlaySound, on and (SOUNDKIT and SOUNDKIT.RAID_WARNING or 8959) or (SOUNDKIT and SOUNDKIT.IG_QUEST_LIST_COMPLETE or 618), "Master")
+        end
+    end
+    function ns.CombatTextMove(on)
+        if on then
+            if not cf then Build() end
+            if cf.fade then cf.fade:Stop() end
+            cf.text:SetText("+Combat"); cf.text:SetTextColor(1, 0.25, 0.2)
+            cf:SetAlpha(1)
+            cf.bg:Show()
+            cf:EnableMouse(true)
+            cf:EnableMouseWheel(true)
+            cf:SetShown(db().combatText == true)
+        elseif cf then
+            if cf.dragging then cf.dragging = nil; cf:StopMovingOrSizing() end
+            cf.bg:Hide()
+            cf:EnableMouse(false)
+            cf:EnableMouseWheel(false)
+            cf:Hide()
+        end
+    end
+    local ev = CreateFrame("Frame")
+    pcall(ev.RegisterEvent, ev, "PLAYER_REGEN_DISABLED")
+    pcall(ev.RegisterEvent, ev, "PLAYER_REGEN_ENABLED")
+    ev:SetScript("OnEvent", function(_, event)
+        if not (db() and db().combatText == true) or moving then return end
+        ns.Safe("combat text", ns.ShowCombatText, event == "PLAYER_REGEN_DISABLED")
+    end)
+end
 
 -- ---------------------------------------------------------------- export / import (/wx export)
 -- Everything WatchX keeps is for the whole account (all your characters): settings and profiles (and which profile

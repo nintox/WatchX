@@ -46,6 +46,7 @@
   it. Per class, with quick-add suggestions and a catalogue of every class's buffs (or type a spell ID / Wowhead link); in a row or a column. Unlocked, drag an icon to place it on its own – drop it next to another and they link; size and gap for all. "Either one" lines (Dampen Magic or Amplify Magic); quiet in cities, hidden in combat if you like. Rogues: every poison in your bags, each rank shown
   with the level it needs – right-click picks one, left-click puts it on.
 - Sizes: drag a bar's bottom edge while unlocked, or click + / – in the settings (SIZE), or `/wx size 150` for all.
+- +Combat / -Combat on screen (red / green) as a fight starts and ends, if you like (PvP > Enemies list).
 - Settings in WatchX's own window (`/wx settings`, or Options > AddOns > WatchX): General, PvP (Enemies list,
   Nameplates, KOS & bounties, Avoid list) and Leveling pages. Alert profiles (Camping, Leveling, PvP …) for what you
   watch and how you're alerted; Export / import of everything at the top.
