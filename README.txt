@@ -39,7 +39,7 @@ INSTALL
 
 PHONE ALERTS (one-time setup)
 1. Get the free "ntfy" app, tap + and pick a secret topic name (or use a Discord webhook).
-2. In game: /wx > Settings. Paste ntfy.sh/<your-topic> and/or the Discord webhook
+2. In game: /wx (the settings). Paste ntfy.sh/<your-topic> and/or the Discord webhook
    and press "Save & reload".
 3. Download WatchX-Bridge.zip from  https://github.com/nintox/WatchX/releases
    Unzip it anywhere and double-click:

@@ -4256,7 +4256,7 @@ local function OnEvent(_, event, arg1, arg2, ...)
         if db.ntfyUrl == "" and db.discordWebhook == "" then
             Print("Phone alerts aren't set up yet – type /wx and press Settings.")
         end
-        Print("v" .. GetVersion() .. " loaded – Made by " .. ns.AUTHOR .. ". /wx opens the panel.")
+        Print("v" .. GetVersion() .. " loaded – Made by " .. ns.AUTHOR .. ". /wx opens the settings.")
         return
     end
     if not db then return end
@@ -4345,7 +4345,7 @@ local function OnSlash(input)
     end
 
     if cmd == "" then
-        if ns.TogglePanel then ns.TogglePanel() end
+        if ns.ToggleSettings then ns.ToggleSettings("main") end
     elseif cmd == "settings" or cmd == "options" or cmd == "config" then
         if ns.OpenSettings then ns.OpenSettings() end
     elseif cmd == "guide" or cmd == "help" or cmd == "howto" then
@@ -4565,7 +4565,7 @@ local function OnSlash(input)
         Print((rest == "previous" and "Previous" or "This") .. " session's log (" .. #lines .. " lines):")
         for i = math.max(1, #lines - 24), #lines do DEFAULT_CHAT_FRAME:AddMessage("  " .. lines[i]) end
     else
-        Print("Made by " .. ns.AUTHOR .. ". Commands: /wx (panel) | settings | guide | test | add <name> | "
+        Print("Made by " .. ns.AUTHOR .. ". Commands: /wx (settings) | guide | test | add <name> | "
             .. "remove <name> | profile [name] | enemy | friend | nearby [on|off|test] | xp | buffs [name|test] | avoid [name: note] | wanted [name: reward note] | rares | mem | auras | attack | afk [minutes] | instant | list | mini | quiet | alert | move | lock | unlock | minimap | sound | "
             .. "whisper | dead [name] | "
             .. "respawn <min> [name] | reset | log [previous]")

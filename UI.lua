@@ -1,7 +1,7 @@
 -- WatchX – Made by Rikerud
--- UI: panel (/wx), mini bar, the settings window (/wx settings; Options > AddOns > WatchX opens it), guide, minimap button,
+-- UI: the settings window (/wx; Options > AddOns > WatchX opens it), mini bar, guide, minimap button,
 -- the secure chat log bar and the "held back" send bar.
--- Look: Blizzard's own. Windows (panel, History, guide) get the dark stone frame with a gold trim and a
+-- Look: Blizzard's own. Windows (History, guide) get the dark stone frame with a gold trim and a
 -- header plate; the small bars (mini bar, Nearby, XP, alerts, menus) and the settings window the tooltip edge.
 -- Flat dark buttons with a gold edge, gold headings.
 
@@ -15,7 +15,7 @@ local EDGE = { 0.80, 0.64, 0.30, 1 }       -- WoW Forever's gold (the unit frame
 local ACCENT = { 1, 0.82, 0 }              -- Blizzard gold
 local LOGO = "Interface\\AddOns\\WatchX\\Media\\logo"   -- Media/logo.tga (made by Media/make_logo.py)
 
-local panel, mini, settingsPage, settingsCategory, helpFrame, prompt, sendBar
+local mini, settingsPage, settingsCategory, helpFrame, prompt, sendBar
 local promptPending = false
 local db = function() return ns.db end
 
@@ -1244,12 +1244,6 @@ local function BuildSettings()
     test:SetPoint("LEFT", save, "RIGHT", 8, 0)
     local guide = Button(o, "How it works", 120, 24, function() HideBlizzardMenus(); ns.ShowHelp() end)
     guide:SetPoint("LEFT", test, "RIGHT", 8, 0)
-    local unlock = Button(o, "Unlock bars", 110, 24, function()
-        HideBlizzardMenus()
-        ns.StartMove()
-        if panel and not panel:IsShown() then ns.TogglePanel() end
-    end)
-    unlock:SetPoint("LEFT", guide, "RIGHT", 8, 0)
     y = y - 34
 
     local status = o:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
@@ -1462,19 +1456,8 @@ local function BuildSettings()
         function() return db().hideIdle end, function(v) db().hideIdle = v end)
     check("Alert in the mini bar's spot", "off: own spot",
         function() return db().alertSame ~= false end, function(v) db().alertSame = v end, true)
-    local move = Button(o, "Unlock bars", 110, 22, function()
-        HideBlizzardMenus()
-        ns.StartMove()
-        if panel and not panel:IsShown() then ns.TogglePanel() end   -- its Lock button locks them again
-    end)
-    move:SetPoint("TOPLEFT", o, "TOPLEFT", L, y - 4)
-    move:SetScript("OnEnter", function(self)
-        Tip(self, "Unlock bars", "Shows the mini bar – and the red alert, if it has its own spot – so you can drag "
-            .. "them. Press Lock (top of the screen) or type /wx lock when done.")
-    end)
-    move:SetScript("OnLeave", GameTooltip_Hide)
     local reset = Button(o, "Reset timers", 110, 22, function() StaticPopup_Show("WATCHX_RESET") end)
-    reset:SetPoint("LEFT", move, "RIGHT", 8, 0)
+    reset:SetPoint("TOPLEFT", o, "TOPLEFT", L, y - 4)
     y = y - 34
 
     closeCard()
@@ -2344,15 +2327,8 @@ function ns.BuildNearbySettings()
     y = y - 4
     local ex = Button(o, "Show example", 130, 24, function() HideBlizzardMenus(); ns.NearbyTest() end)
     ex:SetPoint("TOPLEFT", o, "TOPLEFT", L, y)
-    local mv = Button(o, "Move / resize", 130, 24, function()
-        HideBlizzardMenus()
-        if not db().nearby then ns.SetNearby(true) end
-        ns.StartMove()
-        if panel and not panel:IsShown() then ns.TogglePanel() end   -- its Lock button locks them again
-    end)
-    mv:SetPoint("LEFT", ex, "RIGHT", 8, 0)
     local clr = Button(o, "Clear list", 110, 24, function() wipe(ns.nearby); ns.RefreshUI() end)
-    clr:SetPoint("LEFT", mv, "RIGHT", 8, 0)
+    clr:SetPoint("LEFT", ex, "RIGHT", 8, 0)
     local hist = Button(o, "History...", 110, 24, function() HideBlizzardMenus(); ns.ShowHistory() end)
     hist:SetPoint("LEFT", clr, "RIGHT", 8, 0)
     y = y - 34
@@ -2649,386 +2625,12 @@ function ns.BuildNearbySettings()
     end
 end
 
--- WatchX's own look: a dark card, a thin status-colored strip at the top, one row per mob with a
--- colored dot, small "ready" checks, and flat buttons with an accent edge.
-local ROWS = 2 + #ns.PRESETS + ns.MAX_CUSTOM   -- mobs + the enemy-player and friendly-player rows
-local GREEN, RED, ORANGE, GREY = { 0.25, 0.85, 0.40 }, { 1, 0.27, 0.27 }, { 1, 0.6, 0.2 }, { 0.45, 0.45, 0.45 }
-
-local function Dot(parent, size)
-    local t = parent:CreateTexture(nil, "ARTWORK")
-    t:SetSize(size or 7, size or 7)
-    t:SetColorTexture(1, 1, 1, 1)
-    if t.SetMask then pcall(t.SetMask, t, "Interface\\CharacterFrame\\TempPortraitAlphaMask") end
-    t.Paint = function(self, c) self:SetVertexColor(c[1], c[2], c[3], 1) end
-    return t
+-- (the old WatchX panel is gone: its things are in the settings window) – key: the page to open
+function ns.ToggleSettings(key)
+    if ns.SettingsShown and ns.SettingsShown() == (key or "main") then ns.CloseWindow() return end
+    ns.OpenWindow(key or "main")
 end
-
-local function BuildPanel()
-    local p = CreateFrame("Frame", "WatchXPanel", UIParent)
-    p:SetWidth(PANEL_W)
-    p:SetFrameStrata("MEDIUM")
-    p:SetClampedToScreen(true)
-    p:SetMovable(true)
-    p:EnableMouse(true)
-    p:RegisterForDrag("LeftButton")
-    p:SetScript("OnDragStart", p.StartMoving)
-    p:SetScript("OnDragStop", function(self) self:StopMovingOrSizing(); SavePoint(self, "panelPoint") end)
-    LoadPoint(p, "panelPoint", { "CENTER", "CENTER", 320, 120 })
-    p.title = Window(p, "WatchX", 170)
-    p:Hide()
-    tinsert(UISpecialFrames, "WatchXPanel")
-
-    -- the strip at the top: green watching, red when something is up, orange when something is missing
-    p.strip = p:CreateTexture(nil, "ARTWORK")
-    p.strip:SetPoint("TOPLEFT", p, "TOPLEFT", 8, -24)
-    p.strip:SetPoint("TOPRIGHT", p, "TOPRIGHT", -8, -24)
-    p.strip:SetHeight(2)
-
-    p.logo = p:CreateTexture(nil, "OVERLAY")
-    p.logo:SetSize(16, 16)
-    p.logo:SetPoint("RIGHT", p.title, "LEFT", -4, 0)
-    p.logo:SetTexture(LOGO)
-
-    CloseX(p)
-
-    -- the status tag, right under the header plate
-    p.tag = CreateFrame("Frame", nil, p)
-    p.tag:SetHeight(16)
-    p.tag:SetPoint("TOPRIGHT", p, "TOPRIGHT", -PAD, -28)
-    p.tag.bg = p.tag:CreateTexture(nil, "BACKGROUND")
-    p.tag.bg:SetAllPoints()
-    p.tag.text = p.tag:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    p.tag.text:SetPoint("CENTER", 0, 0)
-
-    local y = -48
-    p.rowsTop = y
-    p.rows = {}
-    for i = 1, ROWS do
-        local hit = CreateFrame("Button", nil, p)
-        hit:SetHeight(18)
-        hit:SetPoint("TOPLEFT", p, "TOPLEFT", PAD - 4, y - (i - 1) * 19)
-        hit:SetPoint("TOPRIGHT", p, "TOPRIGHT", -(PAD - 4), y - (i - 1) * 19)
-        hit:RegisterForClicks("LeftButtonUp", "RightButtonUp")
-        local lit = hit:CreateTexture(nil, "HIGHLIGHT")
-        lit:SetAllPoints()
-        lit:SetColorTexture(1, 1, 1, 0.06)
-        hit.dot = Dot(hit)
-        hit.dot:SetPoint("LEFT", hit, "LEFT", 6, 0)
-        hit.name = hit:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-        hit.name:SetPoint("LEFT", hit, "LEFT", 19, 0)
-        hit.name:SetPoint("RIGHT", hit, "RIGHT", -96, 0)
-        hit.name:SetJustifyH("LEFT")
-        hit.name:SetWordWrap(false)
-        hit.state = hit:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-        hit.state:SetPoint("RIGHT", hit, "RIGHT", -22, 0)
-        -- × at the right: removes the row (your own mobs), or switches it off (built-in ones, enemy players)
-        hit.del = CreateFrame("Button", nil, hit)
-        hit.del:SetSize(11, 11)
-        hit.del:SetPoint("RIGHT", hit, "RIGHT", -5, 0)
-        hit.del:SetNormalTexture("Interface\\Buttons\\UI-StopButton")
-        hit.del:SetHighlightTexture("Interface\\Buttons\\UI-StopButton", "ADD")
-        local dt = hit.del:GetNormalTexture()
-        if dt then dt:SetVertexColor(0.55, 0.55, 0.55) end
-        hit.del:SetScript("OnClick", function()
-            if hit.enemy then ns.SetEnemyPlayers(false)
-            elseif hit.friend then ns.SetFriendlyPlayers(false)
-            elseif hit.near then ns.SetNearby(false)
-            elseif hit.mob and hit.mob.preset then ns.SetWatched(hit.mob.name, false)
-            elseif hit.mob then ns.RemoveCustom(hit.mob.name) end
-        end)
-        hit.del:SetScript("OnEnter", function(self)
-            Tip(self, (hit.mob and hit.mob.preset or hit.enemy or hit.friend or hit.near) and "Switch off" or "Remove",
-                hit.enemy and "Stop alerting on enemy players."
-                    or hit.friend and "Stop alerting on friendly players."
-                    or hit.near and "Hide the Enemies list." or hit.mob and hit.mob.preset
-                    and ("Stop watching " .. hit.mob.name .. " (built in – click the row to switch it on again).")
-                    or hit.mob and ("Remove " .. hit.mob.name .. " from the list.") or nil)
-        end)
-        hit.del:SetScript("OnLeave", GameTooltip_Hide)
-        hit.state:SetWidth(92)
-        hit.state:SetJustifyH("RIGHT")
-        hit.state:SetWordWrap(false)
-        hit:SetScript("OnClick", function(self, button)
-            if self.enemy then ns.SetEnemyPlayers(not db().enemyPlayers) return end
-            if self.friend then ns.SetFriendlyPlayers(not db().friendlyPlayers) return end
-            if self.near then ns.SetNearby(not db().nearby) return end
-            local mob = self.mob
-            if not mob then return end
-            if IsShiftKeyDown() then
-                StaticPopup_Show("WATCHX_RESPAWN", mob.name, nil, mob.name)
-            elseif button == "RightButton" then
-                if not mob.preset then StaticPopup_Show("WATCHX_REMOVE", mob.name, nil, mob.name) end
-            else
-                ns.SetWatched(mob.name, not mob.enabled)
-            end
-        end)
-        hit:SetScript("OnEnter", function(self)
-            if self.near then
-                Tip(self, "Enemies", "A list of the enemy players around you, like Spy – click one to "
-                    .. "target it. A player going into stealth pops up a warning. In game only.",
-                    " ", "|cffffd100Click:|r on/off", "|cffffd100See an example:|r /wx enemies test")
-                return
-            end
-            if self.friend then
-                local last = ns.lastFriend
-                Tip(self, "Any friendly player", "An alert when a friendly player shows up – not in instances, "
-                    .. "cities or inns, and not your group. Needs friendly nameplates (Shift+V).",
-                    last and ("Last: " .. last.name .. ", " .. ns.Fmt(time() - last.at) .. " ago") or nil,
-                    " ", "|cffffd100Click:|r on/off")
-                return
-            end
-            if self.enemy then
-                local last = ns.lastEnemy
-                Tip(self, "Any enemy player", "An alert when a hostile player shows up (not in instances).",
-                    last and ("Last: " .. last.name .. ", " .. ns.Fmt(time() - last.at) .. " ago") or nil,
-                    " ", "|cffffd100Click:|r on/off")
-                return
-            end
-            local mob = self.mob
-            if not mob then return end
-            local m = ns.MobState(mob.name)
-            local _, short, detail = ns.GetMobStatus(mob.name)
-            local est, how = ns.EstimatedRespawn(mob.name)
-            Tip(self, mob.name .. (mob.note and ("  |cffaaaaaa(" .. mob.note .. ")|r") or ""),
-                short .. (detail ~= "" and (" · " .. detail) or ""),
-                "Kills seen: " .. #m.kills .. " · Respawn: " .. (est and (ns.Fmt(est) .. " (" .. how .. ")") or "not known yet"),
-                " ", "|cffffd100Click:|r watch on/off", "|cffffd100Shift-click:|r set respawn time",
-                "|cffffd100×:|r " .. (mob.preset and "switch off" or "remove"))
-        end)
-        hit:SetScript("OnLeave", GameTooltip_Hide)
-        p.rows[i] = hit
-    end
-
-    -- everything under the rows moves with the number of rows
-    local low = CreateFrame("Frame", nil, p)
-    low:SetPoint("LEFT", p, "LEFT", 0, 0)
-    low:SetPoint("RIGHT", p, "RIGHT", 0, 0)
-    p.low = low
-    local ly = -2
-
-    local add = CreateFrame("Button", nil, low)
-    add:SetHeight(16)
-    add:SetPoint("TOPLEFT", low, "TOPLEFT", PAD + 2, ly)
-    add:SetNormalFontObject("GameFontNormalSmall")
-    add:SetHighlightFontObject("GameFontHighlightSmall")
-    add:SetText("+ Watch your target")
-    local afs = add:GetFontString()
-    if afs then afs:SetTextColor(ACCENT[1], ACCENT[2], ACCENT[3]); add:SetWidth((afs:GetStringWidth() or 110) + 4) else add:SetWidth(120) end
-    add:SetScript("OnClick", function() ns.AddTarget() end)
-    add:SetScript("OnEnter", function(self) Tip(self, "Watch your target", "Target a rare mob or a player first, then click.") end)
-    add:SetScript("OnLeave", GameTooltip_Hide)
-    -- the active profile, at the right: click to switch
-    local prof = CreateFrame("Button", nil, low)
-    prof:SetHeight(16)
-    prof:SetPoint("TOPRIGHT", low, "TOPRIGHT", -(PAD + 2), ly)
-    prof:SetNormalFontObject("GameFontHighlightSmall")
-    prof:SetHighlightFontObject("GameFontNormalSmall")
-    prof:SetText("Profile")
-    prof:SetScript("OnClick", function(self) ns.ToggleProfileMenu(self) end)
-    prof:SetScript("OnEnter", function(self)
-        Tip(self, "Alert profile", "What you watch and how you're alerted – click to switch (e.g. Camping, Leveling, PvP) or make a new one.")
-    end)
-    prof:SetScript("OnLeave", GameTooltip_Hide)
-    profileLabels[#profileLabels + 1] = function(name)
-        prof:SetText("|cff808080Alerts:|r " .. name)
-        local fs = prof:GetFontString()
-        prof:SetWidth(math.min(120, ((fs and fs:GetStringWidth()) or 80) + 4))
-    end
-    ly = ly - 24
-
-    local line = low:CreateTexture(nil, "ARTWORK")
-    line:SetColorTexture(1, 1, 1, 0.08)
-    line:SetHeight(1)
-    line:SetPoint("TOPLEFT", low, "TOPLEFT", PAD, ly)
-    line:SetPoint("TOPRIGHT", low, "TOPRIGHT", -PAD, ly)
-    ly = ly - 8
-
-    -- three small "ready" checks: a dot and a word each, with a tooltip
-    p.ready = {}
-    local prev
-    for i, item in ipairs({ { "plates", "Nameplates" }, { "phone", "Phone" }, { "afk", "AFK warning" } }) do
-        local b = CreateFrame("Button", nil, low)
-        b:SetSize(70, 16)
-        if prev then b:SetPoint("LEFT", prev, "RIGHT", 14, 0) else b:SetPoint("TOPLEFT", low, "TOPLEFT", PAD, ly) end
-        prev = b
-        b.dot = Dot(b, 6)
-        b.dot:SetPoint("LEFT", b, "LEFT", 2, 0)
-        b.text = b:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-        b.text:SetPoint("LEFT", b, "LEFT", 12, 0)
-        b.text:SetText(item[2])
-        b:SetWidth(12 + math.ceil(b.text:GetStringWidth() or 60))
-        b.key = item[1]
-        b:SetScript("OnEnter", function(self) if self.tip then Tip(self, item[2], self.tip) end end)
-        b:SetScript("OnLeave", GameTooltip_Hide)
-        b:SetScript("OnClick", function(self) if self.key ~= "plates" then ns.OpenSettings() end end)   -- links + AFK: main page
-        p.ready[item[1]] = b
-    end
-    ly = ly - 22
-
-    p.note = low:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    p.note:SetPoint("TOPLEFT", low, "TOPLEFT", PAD, ly)
-    p.note:SetPoint("TOPRIGHT", low, "TOPRIGHT", -PAD, ly)
-    p.note:SetJustifyH("LEFT")
-    p.note:SetJustifyV("TOP")
-    p.note:SetWordWrap(true)
-    p.noteY = ly
-
-    p.buttons = CreateFrame("Frame", nil, low)
-    p.buttons:SetHeight(22)
-    p.buttons:SetPoint("LEFT", low, "LEFT", 0, 0)
-    p.buttons:SetPoint("RIGHT", low, "RIGHT", 0, 0)
-    local bw = (PANEL_W - PAD * 2 - 12) / 3
-    local test = FlatButton(p.buttons, "Send test", bw, 22, function() ns.SendTest() end)
-    test:SetPoint("TOPLEFT", p.buttons, "TOPLEFT", PAD, 0)
-    local set = FlatButton(p.buttons, "Settings", bw, 22, function() ns.OpenSettings() end)
-    set:SetPoint("LEFT", test, "RIGHT", 6, 0)
-    p.lock = FlatButton(p.buttons, "Unlock", bw, 22, function() ns.ToggleUnlock() end)
-    p.lock:SetPoint("LEFT", set, "RIGHT", 6, 0)
-    p.lock:SetScript("OnEnter", function(self)
-        Tip(self, "Unlock / Lock", "Unlock shows the mini bar and the alert so you can drag them. Lock keeps them there.")
-    end)
-    p.lock:SetScript("OnLeave", GameTooltip_Hide)
-
-    p:SetScript("OnShow", function() ns.RefreshUI() end)
-    return p
-end
-
-local function Paint(row, color, name, state, removable)
-    row.del:SetShown(removable and true or false)
-    row.dot:Paint(color)
-    row.name:SetText(name)
-    row.state:SetText(state)
-end
-
-local function RefreshPanel()
-    local p, d = panel, db()
-    local list = ns.GetMobList()
-    local shown, anyUp = 0, false
-    for i, row in ipairs(p.rows) do
-        local mob = list[i]
-        row.mob, row.enemy, row.friend, row.near = mob, nil, nil, nil
-        if mob then
-            shown = i
-            local state, short, detail, left = ns.GetMobStatus(mob.name)
-            if not mob.enabled then
-                Paint(row, GREY, "|cff808080" .. mob.name .. "|r", "|cff606060off|r")
-            elseif state == "up" then
-                anyUp = true
-                Paint(row, RED, mob.name, (ns.IsPlayerEntry(mob.name) and "|cff66ccffFOUND|r" or "|cffff4545UP|r")
-                    .. " |cffaaaaaa" .. detail:gsub("^seen ", ""):gsub(" ago$", "") .. "|r", true)
-            elseif state == "dead" then
-                Paint(row, ORANGE, mob.name, left and (left > 0 and ("|cffaaaaaarespawn ~" .. ns.Fmt(left) .. "|r")
-                    or "|cffffd100due|r") or "|cffaaaaaadead|r", true)
-            else
-                Paint(row, GREEN, mob.name, "|cffaaaaaawatching|r", true)
-            end
-        end
-        row:SetShown(mob ~= nil)
-    end
-    -- the enemy-player row, under the mobs
-    local er = p.rows[shown + 1]
-    if er then
-        er.mob, er.enemy, er.near = nil, true, nil
-        local last = ns.lastEnemy
-        if not d.enemyPlayers then
-            Paint(er, GREY, "|cff808080Enemy players|r", "|cff606060off|r")
-        elseif last and time() - last.at < 60 then
-            anyUp = true
-            Paint(er, RED, "Enemy players", "|cffff4545" .. last.name .. "|r", true)
-        else
-            Paint(er, GREEN, "Enemy players", "|cffaaaaaawatching|r", true)
-        end
-        er:Show()
-        shown = shown + 1
-    end
-    -- the friendly-player row
-    local fr = p.rows[shown + 1]
-    if fr then
-        fr.mob, fr.enemy, fr.friend, fr.near = nil, nil, true, nil
-        local last = ns.lastFriend
-        if not d.friendlyPlayers then
-            Paint(fr, GREY, "|cff808080Friendly players|r", "|cff606060off|r")
-        elseif last and time() - last.at < 60 then
-            anyUp = true
-            Paint(fr, RED, "Friendly players", "|cff66ccff" .. last.name .. "|r", true)
-        elseif ns.FriendPlatesMissing() then
-            Paint(fr, ORANGE, "Friendly players", "|cffff9933Shift+V|r", true)
-        else
-            Paint(fr, GREEN, "Friendly players", "|cffaaaaaawatching|r", true)
-        end
-        fr:Show()
-        shown = shown + 1
-    end
-    for i = shown + 1, #p.rows do p.rows[i]:Hide() end
-
-    -- ready checks
-    local plates = GetCVar("nameplateShowEnemies") == "1"
-    local phoneSet = d.ntfyUrl ~= "" or d.discordWebhook ~= ""
-    local instant = d.instant ~= false and d.instantOK ~= false
-    local r = p.ready
-    r.plates.dot:Paint(plates and GREEN or RED)
-    r.plates.tip = plates and ("On – WatchX sees mobs within " .. (GetCVar("nameplateMaxDistance") or "41") .. " yards.")
-        or "Enemy nameplates are OFF – press V. Nothing can be spotted without them."
-    local phoneOk = d.whisper and phoneSet and (instant or d.chatlogOn == true)
-    r.phone.dot:Paint(phoneOk and (d.instantOK and GREEN or { 1, 0.82, 0 }) or RED)
-    r.phone.tip = not d.whisper and "Phone alerts are off (Settings)."
-        or not phoneSet and "Not set up yet – click to open Settings and paste your ntfy or Discord link."
-        or not instant and (d.chatlogOn == true and "Slow alerts through the chat log (instant alerts don't work here)."
-            or "Instant alerts don't work here – turn on the chat log (yellow bar).")
-        or d.instantOK and "Instant alerts with a screenshot – working."
-        or "Set up – press Send test to check it reaches your phone."
-    local afkLeft = ns.AfkStatus and ns.AfkStatus()
-    r.afk.dot:Paint(d.afkWarn and (afkLeft and { 1, 0.82, 0 } or GREEN) or GREY)
-    r.afk.tip = not d.afkWarn and "Off (Settings)."
-        or afkLeft and ("You are AFK – logged out in about " .. ns.Fmt(math.max(afkLeft, 0)) .. ".")
-        or "Your phone is told 5 minutes before an AFK logout, and when you're logged out."
-
-    -- one short note, only when something needs doing
-    local note
-    if not plates and ns.NeedsEnemyPlates() then
-        note = "|cffff9933Enemy nameplates are off.|r Press V."
-    elseif ns.FriendPlatesMissing() then
-        note = "|cffff9933Friendly nameplates are off.|r Press Shift+V."
-    elseif not phoneSet then
-        note = "|cffff9933Phone alerts aren't set up.|r Open Settings and paste your ntfy or Discord link."
-    elseif not instant and d.chatlogOn ~= true then
-        note = "|cffff9933Turn on the chat log|r with the yellow bar – instant alerts don't work here."
-    elseif afkLeft and d.afkWarn then
-        note = "|cffffd100You are AFK|r – logged out in about " .. ns.Fmt(math.max(afkLeft, 0)) .. "."
-    end
-    p.note:SetText(note or "")
-    p.note:SetShown(note ~= nil)
-    local noteH = note and (math.ceil(p.note:GetStringHeight() or 12) + 8) or 0
-    p.buttons:ClearAllPoints()
-    p.buttons:SetPoint("TOPLEFT", p.low, "TOPLEFT", 0, p.noteY - noteH)
-    p.buttons:SetPoint("TOPRIGHT", p.low, "TOPRIGHT", 0, p.noteY - noteH)
-
-    local lowTop = p.rowsTop - shown * 19 - 6
-    p.low:ClearAllPoints()
-    p.low:SetPoint("TOPLEFT", p, "TOPLEFT", 0, lowTop)
-    p.low:SetPoint("TOPRIGHT", p, "TOPRIGHT", 0, lowTop)
-    local lowH = -(p.noteY - noteH) + 22 + PAD
-    p.low:SetHeight(lowH)
-    p:SetHeight(-lowTop + lowH)
-
-    -- the strip and the tag: the most important state
-    local c, tag
-    if anyUp then c, tag = RED, "UP!"
-    elseif (not plates and ns.NeedsEnemyPlates()) or ns.FriendPlatesMissing() or not phoneOk then
-        c, tag = ORANGE, "CHECK"
-    elseif ns.IsWatchingAnything() then c, tag = ACCENT, "WATCHING"
-    else c, tag = GREY, "IDLE" end
-    p.strip:SetColorTexture(c[1], c[2], c[3], 0.9)
-    p.tag.text:SetText(tag)
-    p.tag.text:SetTextColor(c[1], c[2], c[3])
-    p.tag.bg:SetColorTexture(c[1], c[2], c[3], 0.14)
-    p.tag:SetWidth((p.tag.text:GetStringWidth() or 50) + 12)
-end
-
-function ns.TogglePanel()
-    if not panel then return end
-    panel:SetShown(not panel:IsShown())
-end
+function ns.TogglePanel() ns.ToggleSettings("alerts") end   -- (the mini bar's click)
 
 -- ---------------------------------------------------------------- mini bar
 -- One line per watched mob (and enemy players), stacked. "Only on alerts" hides the quiet lines, and
@@ -3242,7 +2844,7 @@ local function MiniLines(all)
     if #lines > MINI_MAX then
         local more = #lines - MINI_MAX + 1
         for i = #lines, MINI_MAX, -1 do lines[i] = nil end
-        lines[MINI_MAX] = { "|cff808080+" .. more .. " more – click for the panel|r", "" }
+        lines[MINI_MAX] = { "|cff808080+" .. more .. " more – click for the list|r", "" }
     end
     return lines
 end
@@ -3331,8 +2933,8 @@ local function BuildMini()
     end)
     m:SetScript("OnEnter", function(self)
         if moving then return end
-        Tip(self, "WatchX", "|cffffd100Click:|r panel", "|cffffd100Right-click:|r settings",
-            "|cffffd100Shift-right-click:|r hide the mini bar", "|cffffd100Move it:|r Unlock in the panel")
+        Tip(self, "WatchX", "|cffffd100Click:|r what you watch (Alerts & scan)", "|cffffd100Right-click:|r settings",
+            "|cffffd100Shift-right-click:|r hide the mini bar", "|cffffd100Move it:|r Unlock bars, top of the settings")
     end)
     m:SetScript("OnLeave", GameTooltip_Hide)
     return m
@@ -3549,7 +3151,6 @@ function ns.StartMove(keepWindow)
         ns.Print("Unlocked – drag the mini bar (the alert pops up there too, same size), pull its edges to "
             .. "resize, then press Lock at the top of the screen (or /wx lock).")
     end
-    if panel then panel.lock:SetText("|cffffd100Lock|r") end
     LockBar():Show()
     ns.UpdateTargetButton()
     if ns.NearbyMove then ns.NearbyMove(true) end
@@ -3577,7 +3178,6 @@ function ns.StopMove(why)
     if alertLabel then alertLabel:Hide() end
     SavePoint(mini, "miniPoint")
     if alertSpot then alertSpot:Hide() end
-    if panel then panel.lock:SetText("Unlock") end
     if lockBar then lockBar:Hide() end
     if ns.NearbyMove then ns.NearbyMove(false) end
     if ns.LevelMove then ns.LevelMove(false) end
@@ -3728,7 +3328,19 @@ local function BuildNearby()
         local fps = math.floor((tonumber(GetFramerate()) or 0) + 0.5)
         local mc = ms < 100 and "|cff40ff40" or ms < 250 and "|cffffd100" or "|cffff4040"
         local fc = fps >= 50 and "|cff40ff40" or fps >= 25 and "|cffffd100" or "|cffff4040"
-        self.stats:SetText(mc .. ms .. "|r|cff999999ms|r " .. fc .. fps .. "|r|cff999999fps|r")
+        self.stats:SetText(mc .. ms .. "|r|cff999999ms|r  " .. fc .. fps .. "|r|cff999999fps|r")
+        -- at the right end of the title's line, on the title's baseline: left of the count and the coin only when they
+        -- show (else it would float in the middle)
+        local inset = 8
+        if self.news:IsShown() then inset = inset + (self.news:GetWidth() or 18) + 6 end
+        local ct = self.count:GetText()
+        if type(ct) == "string" and ct ~= "" then inset = inset + (self.count:GetStringWidth() or 0) + 8 end
+        local base = 6 + math.floor((self.title:GetStringHeight() or 13) + 0.5)
+        if self.statsAt ~= inset * 1000 + base then
+            self.statsAt = inset * 1000 + base
+            self.stats:ClearAllPoints()
+            self.stats:SetPoint("BOTTOMRIGHT", self, "TOPRIGHT", -inset, -base)
+        end
         -- no room next to the title: leave it out rather than write over it
         local tr, sl = self.title:GetRight(), self.stats:GetLeft()
         if tr and sl and sl < tr + 4 then self.stats:SetText("") end
@@ -3918,7 +3530,8 @@ local function RefreshNearby()
         .. (hidden > 0 and ("  |cffaaaaaa+" .. hidden .. "|r") or ""))
     if not combat then
         local zone = ns.NearbyZoneMode()
-        local want = d.nearby and (moving or (zone ~= "hide" and (#list > 0 or d.nearbyShowEmpty == true or news)))
+        local peek = ns.nearbyPeekUntil and GetTime() < ns.nearbyPeekUntil   -- (just switched on: shown a moment)
+        local want = d.nearby and (moving or (zone ~= "hide" and (#list > 0 or d.nearbyShowEmpty == true or news or peek)))
         nb:SetShown(want and true or false)
         if not want then nb.rowSig = nil; Card() return end
         local n = math.min(#list, NearbyMax())
@@ -4892,7 +4505,7 @@ local HELP = {
     } },
     { "WHAT TO WATCH", {
         Bullet(Y .. "Prince Nazjak|r is built in."),
-        Bullet("More mobs or players: target it and click " .. Y .. "+ Watch your target|r in the panel,"),
+        Bullet("More mobs or players: target it and click " .. Y .. "Add target|r (settings > Alerts & scan),"),
         "     or type the name under " .. Y .. "Watch list|r in Settings.",
         Bullet(Y .. "Any enemy player|r / " .. Y .. "Any friendly player|r: every player who shows up."),
         Bullet("The " .. Y .. "×|r removes a name."),
@@ -4910,7 +4523,7 @@ local HELP = {
         Bullet(Y .. "Profiles|r – switch between sets of choices, e.g. Camping, Leveling, PvP."),
     } },
     { "THE BARS", {
-        Bullet(Y .. "Unlock|r (in the panel) – drag the bars, pull their edges to resize. Then " .. Y .. "Lock|r."),
+        Bullet(Y .. "Unlock bars|r (top of the settings) – drag the bars, pull their edges to resize. Then " .. Y .. "Lock bars|r."),
         Bullet(Y .. "Only on alerts|r – the mini bar hides until something happens."),
         Bullet(Y .. "Auto-hide|r – the mini bar hides when nothing is watched."),
     } },
@@ -4927,7 +4540,7 @@ local HELP = {
         Bullet(G .. "Something odd? Type /wx log.|r"),
     } },
 }
-local HELP_FOOT = G .. "/wx|r  panel     " .. G .. "/wx settings     /wx test     /wx guide|r\n\n"
+local HELP_FOOT = G .. "/wx|r  settings     " .. G .. "/wx test     /wx guide     /wx lock|r\n\n"
     .. G .. "WatchX – Made by|r " .. H .. ns.AUTHOR .. "|r"
 
 local function BuildHelp()
@@ -5006,7 +4619,7 @@ local function BuildHelp()
     f:SetScript("OnShow", Layout)
 
     local bw = 120
-    local b1 = Button(f, "Open panel", bw, 24, function() if panel then panel:Show() end end)
+    local b1 = Button(f, "Unlock bars", bw, 24, function() f:Hide(); ns.StartMove() end)
     b1:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", PAD, PAD)
     local b2 = Button(f, "Settings", bw, 24, function() f:Hide(); ns.OpenSettings() end)
     b2:SetPoint("LEFT", b1, "RIGHT", 8, 0)
@@ -5032,6 +4645,14 @@ function ns.SetMinimapShown(show)
     end
 end
 
+-- the minimap button's click: the Enemies list on or off (on: shown at once, even while it's empty)
+function ns.ToggleEnemies()
+    if db().nearby then ns.SetNearby(false) return end
+    ns.SetNearby(true)
+    ns.nearbyPeekUntil = GetTime() + 8   -- shown for a moment even while it's empty, so you see it's on
+    ns.RefreshUI()
+    if C_Timer then C_Timer.After(8.2, function() ns.RefreshUI() end) end
+end
 local function InitMinimap()
     local LDB = LibStub and LibStub("LibDataBroker-1.1", true)
     LDBIcon = LibStub and LibStub("LibDBIcon-1.0", true)
@@ -5042,8 +4663,8 @@ local function InitMinimap()
         icon = LOGO,
         OnClick = function(_, button)
             if IsShiftKeyDown() then ns.ShowHelp()
-            elseif button == "RightButton" then ns.OpenSettings()
-            else ns.TogglePanel() end
+            elseif button == "RightButton" then ns.ToggleSettings("main")
+            else ns.ToggleEnemies() end
         end,
         OnTooltipShow = function(tt)
             tt:AddLine("WatchX")
@@ -5059,7 +4680,7 @@ local function InitMinimap()
             end
             if not any then tt:AddLine("No mobs watched", 0.6, 0.6, 0.6) end
             tt:AddLine(" ")
-            tt:AddLine("|cffffd100Click:|r panel   |cffffd100Right-click:|r settings", 1, 1, 1)
+            tt:AddLine("|cffffd100Click:|r the Enemies list on / off   |cffffd100Right-click:|r settings", 1, 1, 1)
             tt:AddLine("|cffffd100Shift-click:|r how it works", 1, 1, 1)
         end,
     })
@@ -5275,9 +4896,8 @@ local function RefreshUIInner()
     local bx, btop = BarSpot()
     local spot = math.floor(bx + 0.5) .. ":" .. math.floor(btop + 0.5)
     if spot ~= ns.barSpotKey then ns.barSpotKey = spot; ns.UpdateChatLogPrompt() end
-    if panel and panel:IsShown() then RefreshPanel() end
 end
--- Guarded: an error is shown once in chat (and in /wx log) instead of stopping the bars and the panel.
+-- Guarded: an error is shown once in chat (and in /wx log) instead of stopping the bars.
 -- Lots of events want a refresh (a burst of nameplates at login can be dozens a second): they're gathered into at
 -- most one refresh every 0.15 s – the first right away, the rest a moment later.
 local refreshAt, refreshQueued = 0, false
@@ -7069,15 +6689,7 @@ function ns.BuildLevelSettings()
         function() return db().levelHideCombat ~= false end, function(v) db().levelHideCombat = v end)
     check("Hide in dungeons and raids", nil,
         function() return db().levelHideInstance == true end, function(v) db().levelHideInstance = v end)
-    y = y - 8
-    local mv = Button(page, "Move / resize", 130, 24, function()
-        HideBlizzardMenus()
-        db().levelHelper = true
-        ns.StartMove()
-        if panel and not panel:IsShown() then ns.TogglePanel() end   -- its Lock button locks them again
-    end)
-    mv:SetPoint("TOPLEFT", page, "TOPLEFT", L, y)
-    y = y - 44
+    y = y - 16
     local help = page:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
     help:SetPoint("TOPLEFT", page, "TOPLEFT", L, y)
     help:SetWidth(W)
@@ -7890,7 +7502,8 @@ do (function()
             else
                 GameTooltip:SetText(self.line)
                 GameTooltip:AddLine(self.have and "|cff40ff40You have it.|r" or "|cffff6060Missing|r – click to cast it on yourself.", 1, 1, 1, true)
-                GameTooltip:AddLine("|cffffd100Right-click:|r settings", 0.8, 0.8, 0.8)
+                GameTooltip:AddLine(#Names(self.line) > 1 and "|cffffd100Right-click:|r which a click casts (any of them counts)"
+                    or "|cffffd100Right-click:|r settings", 0.8, 0.8, 0.8)
             end
             GameTooltip:Show()
         end)
@@ -7921,6 +7534,7 @@ do (function()
         b:SetScript("PostClick", function(self, button)
             if button ~= "RightButton" or moving then return end
             if self.slot then GameTooltip_Hide(); ns.RebuffChoose(self, self.line)
+            elseif #Names(self.line) > 1 then GameTooltip_Hide(); ns.RebuffCastMenu(self, self.line)
             elseif not InCombatLockdown() and ns.OpenRebuffSettings then ns.OpenRebuffSettings() end
         end)
         b:Hide()
@@ -7946,7 +7560,10 @@ do (function()
         local d = db()
         if not d then return end
         local rows = {}
-        if d.rebuffOn ~= false and not (UnitIsDeadOrGhost and UnitIsDeadOrGhost("player") == true) and ReadHave() then
+        local alive = not (UnitIsDeadOrGhost and UnitIsDeadOrGhost("player") == true)
+        -- your buffs can't be trusted just now (the first seconds after a fight): leave the icons as they are
+        if d.rebuffOn ~= false and alive and not moving and not ReadHave() then return end
+        if d.rebuffOn ~= false and alive and ReadHave() then
             for _, line in ipairs(ns.RebuffList()) do
                 local slot, what = WeaponLine(line)
                 if slot then
@@ -7968,6 +7585,8 @@ do (function()
                         if have[n:lower()] then got = true end
                         if not cast and Known(n) then cast = n end
                     end
+                    local pick = #names > 1 and ns.RebuffCastPick(line) or nil
+                    if pick and Known(pick) then cast = pick end
                     if cast and (not got or d.rebuffAll == true or moving) then
                         rows[#rows + 1] = { line = line, cast = cast, have = got }
                     end
@@ -8018,8 +7637,10 @@ do (function()
             b:SetAlpha(r.have and 0.4 or 1)
             if r.have then b.frame:SetBackdropBorderColor(EDGE[1], EDGE[2], EDGE[3], 1)
             else b.frame:SetBackdropBorderColor(1, 0.25, 0.25, 1) end
+            -- (quiet in cities and inns, when ticked: no pulsing while resting)
+            local quiet = d.rebuffRestQuiet == true and IsResting and IsResting() == true
             if b.pulse then
-                if not r.have and not moving then if not b.pulse:IsPlaying() then b.pulse:Play() end
+                if not r.have and not moving and not quiet then if not b.pulse:IsPlaying() then b.pulse:Play() end
                 elseif b.pulse:IsPlaying() then b.pulse:Stop(); b.flash:SetAlpha(0) end
             end
             b:EnableMouse(true)
@@ -8063,6 +7684,23 @@ do (function()
         end
     end
     function ns.RebuffMove() ns.RefreshRebuff() end
+    -- "Show in combat" off: hidden as a fight starts (still allowed then), back when it's over; resting changes the pulse
+    do
+        local ev = CreateFrame("Frame")
+        pcall(ev.RegisterEvent, ev, "PLAYER_REGEN_DISABLED")
+        pcall(ev.RegisterEvent, ev, "PLAYER_REGEN_ENABLED")
+        pcall(ev.RegisterEvent, ev, "PLAYER_UPDATE_RESTING")
+        ev:SetScript("OnEvent", function(_, event)
+            if event == "PLAYER_REGEN_DISABLED" then
+                if db() and db().rebuffCombat == false then
+                    for _, g in pairs(groups) do pcall(g.Hide, g) end
+                    if label then label:Hide() end
+                end
+            else
+                ns.Safe("rebuff icons", ns.RefreshRebuff)
+            end
+        end)
+    end
     function ns.RebuffFrame() return f end
 
     -- your buffs changed (a moment later: one look for a burst), a fight ended, you came into the world
@@ -8121,6 +7759,60 @@ do (function()
         ns.Safe("rebuff icons", ns.RefreshRebuff)
         return true
     end
+    -- Either one: two lines made into one ("Dampen Magic / Amplify Magic"): any of them counts, and you pick which
+    -- a click casts (right-click the icon). Split takes them apart again.
+    function ns.RebuffCastPick(line)
+        local p = type(db().rebuffPick) == "table" and db().rebuffPick[line] or nil
+        return type(p) == "string" and p or nil
+    end
+    function ns.RebuffMerge(a, b)
+        local list = ns.RebuffList()
+        local ia, ib
+        for i, l in ipairs(list) do if l == a then ia = i elseif l == b then ib = i end end
+        if not (ia and ib) then return false end
+        local names, seen = {}, {}
+        for _, n in ipairs(Names(a)) do if not seen[n:lower()] then seen[n:lower()] = true; names[#names + 1] = n end end
+        for _, n in ipairs(Names(b)) do if not seen[n:lower()] then seen[n:lower()] = true; names[#names + 1] = n end end
+        local merged = table.concat(names, " / ")
+        list[ia] = merged
+        table.remove(list, ib)
+        haveGen = nil
+        ns.Print("Either one: |cffffd100" .. merged .. "|r – any of them counts. Right-click the icon to pick which a click casts.")
+        ns.Safe("rebuff icons", ns.RefreshRebuff)
+        return true
+    end
+    function ns.RebuffSplit(line)
+        local list = ns.RebuffList()
+        for i, l in ipairs(list) do
+            if l == line then
+                table.remove(list, i)
+                for j, n in ipairs(Names(line)) do table.insert(list, i + j - 1, n) end
+                haveGen = nil
+                ns.Safe("rebuff icons", ns.RefreshRebuff)
+                return true
+            end
+        end
+        return false
+    end
+    -- right-click an "either one" icon: which a click casts
+    function ns.RebuffCastMenu(anchor, line)
+        local items, pick = {}, ns.RebuffCastPick(line)
+        local cur
+        for _, n in ipairs(Names(line)) do if not cur and Known(n) then cur = n end end
+        if pick and Known(pick) then cur = pick end
+        for _, n in ipairs(Names(line)) do
+            if Known(n) then
+                items[#items + 1] = { (n == cur) and ("|cffffd100> " .. n .. "|r") or ("   " .. n), function()
+                    ns.RebuffPick(line, n)
+                    ns.Safe("rebuff icons", ns.RefreshRebuff)
+                    if ns.RebuffSettingsRefresh then ns.RebuffSettingsRefresh() end
+                end }
+            end
+        end
+        items[#items + 1] = { "|cffaaaaaaSettings...|r", function() if ns.OpenRebuffSettings then ns.OpenRebuffSettings() end end }
+        ns.ShowMenu(anchor, "A click casts", items)
+    end
+
     -- Every class's buffs to keep up (Browse buffs…): yours first, the rest under "all classes".
     ns.REBUFF_CATALOG = {
         MAGE = { "Arcane Intellect", "Arcane Brilliance", "Frost Armor", "Ice Armor", "Mage Armor", "Molten Armor",
@@ -8144,6 +7836,22 @@ do (function()
         ROGUE = { "Main hand: Instant Poison / Deadly Poison / Wound Poison / Crippling Poison / Mind-numbing Poison",
                   "Off hand: Deadly Poison / Instant Poison / Crippling Poison / Wound Poison / Mind-numbing Poison" },
     }
+    -- only one of these can be up at a time: offered as one "either one" line too
+    ns.REBUFF_EITHER = {
+        MAGE = { "Dampen Magic / Amplify Magic", "Ice Armor / Frost Armor / Mage Armor / Molten Armor",
+                 "Arcane Intellect / Arcane Brilliance", "Fire Ward / Frost Ward" },
+        PRIEST = { "Power Word: Fortitude / Prayer of Fortitude", "Divine Spirit / Prayer of Spirit",
+                   "Shadow Protection / Prayer of Shadow Protection" },
+        WARRIOR = { "Battle Shout / Commanding Shout" },
+        DRUID = { "Mark of the Wild / Gift of the Wild" },
+        PALADIN = { "Blessing of Might / Greater Blessing of Might", "Blessing of Wisdom / Greater Blessing of Wisdom",
+                    "Blessing of Kings / Greater Blessing of Kings", "Blessing of Salvation / Greater Blessing of Salvation",
+                    "Devotion Aura / Retribution Aura / Concentration Aura / Shadow Resistance Aura / Frost Resistance Aura / Fire Resistance Aura / Sanctity Aura / Crusader Aura",
+                    "Seal of Righteousness / Seal of Command / Seal of the Crusader / Seal of Wisdom / Seal of Light" },
+        WARLOCK = { "Demon Skin / Demon Armor / Fel Armor" },
+        HUNTER = { "Aspect of the Hawk / Aspect of the Monkey / Aspect of the Cheetah / Aspect of the Pack / Aspect of the Wild / Aspect of the Viper / Aspect of the Dragonhawk" },
+        SHAMAN = { "Lightning Shield / Water Shield" },
+    }
     local CLASS_ORDER = { "WARRIOR", "PALADIN", "HUNTER", "ROGUE", "PRIEST", "SHAMAN", "MAGE", "WARLOCK", "DRUID" }
     -- The window: search (a name, a spell ID or a Wowhead link), your class's buffs (known ones bright), "All classes"
     -- for the rest. Click one to add it.
@@ -8152,7 +7860,7 @@ do (function()
         local ROW_H, NROWS = 22, 18
         if not cat then
             cat = CreateFrame("Frame", "WatchXBuffCatalog", UIParent)
-            cat:SetSize(380, 108 + NROWS * ROW_H)
+            cat:SetSize(520, 108 + NROWS * ROW_H)
             cat:SetFrameStrata("DIALOG")
             cat:SetToplevel(true)
             cat:SetClampedToScreen(true)
@@ -8174,7 +7882,7 @@ do (function()
             x:SetHighlightTexture("Interface\\Buttons\\UI-Panel-MinimizeButton-Highlight", "ADD")
             x:SetScript("OnClick", function() cat:Hide() end)
             cat.search = CreateFrame("EditBox", nil, cat, "InputBoxTemplate")
-            cat.search:SetSize(250, 20)
+            cat.search:SetSize(330, 20)
             cat.search:SetPoint("TOPLEFT", cat, "TOPLEFT", 20, -42)
             cat.search:SetAutoFocus(false)
             cat.search.hint = cat.search:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
@@ -8199,7 +7907,7 @@ do (function()
             cat.rows = {}
             for i = 1, NROWS do
                 local r = CreateFrame("Button", nil, cat)
-                r:SetSize(340, ROW_H - 2)
+                r:SetSize(480, ROW_H - 2)
                 r:SetPoint("TOPLEFT", cat, "TOPLEFT", 18, -72 - (i - 1) * ROW_H)
                 local hl = r:CreateTexture(nil, "HIGHLIGHT")
                 hl:SetAllPoints()
@@ -8244,13 +7952,15 @@ do (function()
         if cat.all:GetChecked() then for _, c in ipairs(CLASS_ORDER) do if c ~= mine then classes[#classes + 1] = c end end end
         for _, c in ipairs(classes) do
             local first = true
-            for _, line in ipairs(ns.REBUFF_CATALOG[c] or {}) do
+            local function put(line, either)
                 if q == "" or line:lower():find(q, 1, true) then
                     if first and #classes > 1 then items[#items + 1] = { head = c } end
                     first = false
-                    items[#items + 1] = { line = line }
+                    items[#items + 1] = { line = line, either = either }
                 end
             end
+            for _, line in ipairs(ns.REBUFF_EITHER[c] or {}) do put(line, true) end
+            for _, line in ipairs(ns.REBUFF_CATALOG[c] or {}) do put(line) end
         end
         cat.offset = math.min(cat.offset or 0, math.max(0, #items - NROWS))
         for i, r in ipairs(cat.rows) do
@@ -8269,6 +7979,7 @@ do (function()
                 r.icon:SetTexture((cast and SpellIcon(cast)) or (wslot and "Interface\\Icons\\Trade_BrewPoison") or "Interface\\Icons\\INV_Misc_QuestionMark")
                 r.icon:SetDesaturated(not cast and not wslot)
                 local label = wslot and ((wslot == 17 and "Off hand: " or "Main hand: ") .. Names(wwhat)[1] .. " …") or it.line
+                if it.either then label = "|cffffd100either:|r " .. label end
                 r.text:SetText((cast or wslot) and label or ("|cff909090" .. label .. "|r"))
                 r.state:SetText(r.added and "|cff40ff40added|r" or ((cast or (wslot and mine == "ROGUE")) and "|cffffd100+ add|r" or "not known"))
                 r:Show()
@@ -8337,6 +8048,10 @@ do (function()
         check("Also the ones you have", "dimmed, with a green edge", function() return db().rebuffAll == true end, function(v) db().rebuffAll = v end)
         check("Always show the weapon icons", "MH / OH with the poison that's on, faded, and its minutes left",
             function() return db().rebuffWeaponAlways ~= false end, function(v) db().rebuffWeaponAlways = v end)
+        check("Quiet in cities and inns", "no pulsing while you're resting",
+            function() return db().rebuffRestQuiet == true end, function(v) db().rebuffRestQuiet = v end)
+        check("Show in combat", "off: hidden while you fight",
+            function() return db().rebuffCombat ~= false end, function(v) db().rebuffCombat = v end)
         -- size and the gap between the icons; and every icon back in one row
         local paints = {}
         local function stepper(x, label, get, step)
@@ -8365,7 +8080,7 @@ do (function()
         join:SetPoint("TOPLEFT", page, "TOPLEFT", L + 400, y)
         join:SetScript("OnEnter", function(self)
             Tip(self, "Link them all again", "Every icon you placed on its own goes back into the one row. (To place one on "
-                .. "its own: Move, then drag the icon. Drop it next to another icon and they link.)")
+                .. "its own: Unlock bars at the top, then drag the icon. Drop it next to another icon and they link.)")
         end)
         join:SetScript("OnLeave", GameTooltip_Hide)
         y = y - 30
@@ -8394,13 +8109,8 @@ do (function()
         eb:SetScript("OnEditFocusLost", function(self) self.hint:SetShown(self:GetText() == "") end)
         local add = Button(page, "Add", 60, 22, go)
         add:SetPoint("LEFT", eb, "RIGHT", 6, 0)
-        local mv = Button(page, "Move", 70, 22, function()
-            HideBlizzardMenus()
-            if not moving then ns.StartMove() end
-        end)
-        mv:SetPoint("LEFT", add, "RIGHT", 6, 0)
         local br = Button(page, "Browse buffs...", 130, 22, function() ns.ShowBuffCatalog() end)
-        br:SetPoint("LEFT", mv, "RIGHT", 6, 0)
+        br:SetPoint("LEFT", add, "RIGHT", 6, 0)
         y = y - 30
         -- suggestions for your class: "+ Ice Armor …" (filled in when the page shows: your class, what you know)
         local sugLab = page:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
@@ -8430,7 +8140,7 @@ do (function()
         local rows = {}
         for i = 1, ROWS do
             local r = CreateFrame("Frame", nil, page)
-            r:SetSize(430, 20)
+            r:SetSize(600, 20)
             r:SetPoint("TOPLEFT", page, "TOPLEFT", L, y - (i - 1) * 22)
             r.icon = r:CreateTexture(nil, "ARTWORK")
             r.icon:SetSize(18, 18)
@@ -8438,16 +8148,38 @@ do (function()
             r.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
             r.text = r:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
             r.text:SetPoint("LEFT", r.icon, "RIGHT", 6, 0)
+            r.text:SetWidth(430)
+            r.text:SetJustifyH("LEFT")
+            r.text:SetWordWrap(false)
             r.del = FlatButton(r, "x", 20, 18, function()
                 local list = ns.RebuffList()
                 if r.index and list[r.index] then table.remove(list, r.index) end
                 ns.Safe("rebuff icons", ns.RefreshRebuff)
                 Refresh()
             end)
-            r.del:SetPoint("LEFT", r, "LEFT", 400, 0)
+            r.del:SetPoint("RIGHT", r, "RIGHT", 0, 0)
             r.pick = FlatButton(r, "v", 20, 18, function(self) ns.RebuffChoose(self, r.line) end)
             r.pick:SetPoint("RIGHT", r.del, "LEFT", -4, 0)
             r.pick:Hide()
+            -- "or…": make it and another one "either one"; "split": apart again
+            r.alt = FlatButton(r, "or...", 44, 18, function(self)
+                local items = {}
+                for _, l in ipairs(ns.RebuffList()) do
+                    if l ~= r.line and not WeaponLine(l) then
+                        items[#items + 1] = { l, function() ns.RebuffMerge(r.line, l); Refresh() end }
+                    end
+                end
+                if #items == 0 then items[1] = { "|cff808080Add another buff first|r", nil } end
+                ns.ShowMenu(self, "Either this or …", items)
+            end)
+            r.alt:SetPoint("RIGHT", r.del, "LEFT", -4, 0)
+            r.alt:SetScript("OnEnter", function(self)
+                Tip(self, "Either one", "Pick another buff on the list: the two become one line – any of them counts "
+                    .. "(e.g. Dampen Magic or Amplify Magic). Right-click the icon to pick which a click casts.")
+            end)
+            r.alt:SetScript("OnLeave", GameTooltip_Hide)
+            r.split = FlatButton(r, "split", 44, 18, function() ns.RebuffSplit(r.line); Refresh() end)
+            r.split:SetPoint("RIGHT", r.alt, "LEFT", -4, 0)
             r:Hide()
             rows[i] = r
         end
@@ -8486,6 +8218,16 @@ do (function()
                         r.text:SetText(line .. (cast and "" or "  |cff808080(not known)|r"))
                     end
                     r.pick:SetShown(wslot ~= nil)
+                    r.alt:SetShown(wslot == nil)
+                    r.split:SetShown(wslot == nil and #Names(line) > 1)
+                    if wslot == nil and #Names(line) > 1 then   -- either one: which a click casts, in gold
+                        local pick = ns.RebuffCastPick(line)
+                        if pick and Known(pick) then cast = pick end
+                        local parts = {}
+                        for _, n in ipairs(Names(line)) do parts[#parts + 1] = (n == cast) and ("|cffffd100" .. n .. "|r") or n end
+                        r.text:SetText(table.concat(parts, " |cff808080or|r ") .. (cast and "" or "  |cff808080(not known)|r"))
+                        r.icon:SetTexture((cast and SpellIcon(cast)) or "Interface\\Icons\\INV_Misc_QuestionMark")
+                    end
                     r:Show()
                 else
                     r:Hide()
@@ -8953,7 +8695,6 @@ local function InitPlates()
 end
 
 function ns.InitUI()
-    panel = BuildPanel()
     mini = BuildMini()
     InitMinimap()
     local ok, err = pcall(BuildSettings)
