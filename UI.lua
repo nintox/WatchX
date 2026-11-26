@@ -2684,6 +2684,31 @@ function ns.TogglePanel() ns.ToggleSettings("alerts") end   -- (the mini bar's c
 local LINE_H, MINI_MAX = 18, 8
 local targetBtn, targetName, targetDismissed = nil, nil, {}
 local moving = false
+-- Unlocked: a faint gold over what's under the mouse, so you see what you're about to drag. ok(frame): only when
+-- it can be dragged right now (e.g. not while it hangs under another bar). Gone again when the bars are locked.
+local moveHovers = {}
+-- (hooked when the bars are first unlocked – by then each frame has its own OnEnter, which a hook must come after)
+local function HookHover(e)
+    if e.hooked then return end
+    e.hooked = true
+    local f, t, ok = e.f, e.t, e.ok
+    f:HookScript("OnEnter", function(self) if moving and (not ok or ok(self)) then t:Show() end end)
+    f:HookScript("OnLeave", function() t:Hide() end)
+    f:HookScript("OnHide", function() t:Hide() end)
+end
+function ns.MoveHover(f, ok)
+    if not f or f.moveHover then return end
+    local t = f:CreateTexture(nil, "OVERLAY", nil, 7)
+    t:SetAllPoints(f)
+    t:SetColorTexture(1, 0.82, 0.25, 0.16)
+    t:Hide()
+    f.moveHover = t
+    local e = { f = f, t = t, ok = ok }
+    moveHovers[#moveHovers + 1] = e
+    if moving and C_Timer then C_Timer.After(0, function() HookHover(e) end) end   -- (made while unlocked)
+end
+function ns.MoveHoversOn() for _, e in ipairs(moveHovers) do HookHover(e) end end
+function ns.MoveHoversOff() for _, e in ipairs(moveHovers) do e.t:Hide() end end
 local function TargetShown() return targetBtn and targetBtn:IsShown() end
 -- The big alert pops up in the mini bar's spot (the bar steps aside), or in a spot of its own.
 local function OwnSpot() return db().alertSame == false end
@@ -2946,6 +2971,7 @@ local function BuildMini()
         ns.UpdateChatLogPrompt()
     end)
     -- only a drag that really started moves and saves it (never a stray drag while locked, never in combat)
+    ns.MoveHover(m)
     m:SetScript("OnDragStart", function(self)
         if moving and not InCombatLockdown() then self.dragging = true; self:StartMoving() end
     end)
@@ -3117,6 +3143,7 @@ local function BuildAlertSpot()
         local x, top, sc = self:GetCenter(), self:GetTop(), self:GetScale() or 1
         if x and top then db().alertPoint = { x = x * sc, top = top * sc } end
     end
+    ns.MoveHover(f)
     f:SetScript("OnDragStart", function(self) self.dragging = true; self:StartMoving() end)
     f:SetScript("OnDragStop", function(self)
         if not self.dragging then return end
@@ -3177,6 +3204,7 @@ function ns.StartMove(keepWindow)
     if InCombatLockdown() then ns.Print("Not in combat – unlock the bars when the fight is over.") return end
     moving = true
     if ns.CloseWindow and not keepWindow then ns.CloseWindow() end   -- (the settings window would be in the way)
+    ns.MoveHoversOn()
     if ns.PaintLockButton then ns.PaintLockButton() end
     if C_Timer and ns.RaiseWindow then C_Timer.After(0, ns.RaiseWindow) end   -- (the window stays above what unlocking shows)
     if ns.ShowGrid then ns.ShowGrid(true) end
@@ -3212,6 +3240,7 @@ end
 function ns.StopMove(why)
     if not moving then return end
     moving = false
+    ns.MoveHoversOff()
     if ns.PaintLockButton then ns.PaintLockButton() end
     for _, f in ipairs({ mini, alertSpot or false, ns.levelFrame or false, WatchXRebuff or false }) do   -- (the list and card: NearbyMove)
         if f and f.dragging then f.dragging = nil; f:StopMovingOrSizing() end   -- a drag still going (a fight starts)
@@ -3443,6 +3472,7 @@ local function BuildNearby()
             "|cffffd100Click here:|r everyone you've met (History)  ·  |cffffd100Right-click:|r settings")
     end)
     f:SetScript("OnLeave", GameTooltip_Hide)
+    ns.MoveHover(f, function(self) return not self.attached end)
     f:SetScript("OnDragStart", function(self)
         if moving and not self.attached and not InCombatLockdown() then self.dragging = true; self:StartMoving() end
     end)
@@ -3674,6 +3704,7 @@ function ns.ShowStealthToast(e, kind)
         toast:SetMovable(true)
         toast:SetClampedToScreen(true)
         toast:RegisterForDrag("LeftButton")
+        ns.MoveHover(toast, function(self) return not self.docked end)
         toast:SetScript("OnDragStart", function(self)
             if moving and not self.docked and not InCombatLockdown() then self.dragging = true; self:StartMoving() end
         end)
@@ -5389,6 +5420,7 @@ local function BuildLevel()
     box:Hide()
     f.bonusBox = box
     -- (secure icons inside: it can't move in a fight, and a stray drag while locked doesn't move or save it)
+    ns.MoveHover(f)
     f:SetScript("OnDragStart", function(self)
         if moving and not InCombatLockdown() then self.dragging = true; self:StartMoving() end
     end)
@@ -5852,6 +5884,7 @@ end
         f.bot2:SetWordWrap(false)
         f:EnableMouse(true)
         f:RegisterForDrag("LeftButton")
+        ns.MoveHover(f, function(self) return not self.compact end)
         f:SetScript("OnDragStart", function(self)
             if moving and not self.compact then self.dragging = true; self:StartMoving() end
         end)
@@ -6376,6 +6409,7 @@ do (function()
         f:RegisterForDrag("LeftButton")
         LoadPoint(f, "eatPoint", { "CENTER", "CENTER", 0, -170 })
         f.rows = { Tile(f), Tile(f), Tile(f), Tile(f) }
+        ns.MoveHover(f)
         f:SetScript("OnDragStart", function(self) if moving then self.dragging = true; self:StartMoving() end end)
         f:SetScript("OnDragStop", function(self)
             if not self.dragging then return end
@@ -7403,6 +7437,7 @@ do (function()
         g.bg:Hide()
         g.shown = {}
         g:RegisterForDrag("LeftButton")
+        ns.MoveHover(g)
         g:SetScript("OnDragStart", function(self)
             if moving and not InCombatLockdown() then self.dragging = true; self:StartMoving() end
         end)
@@ -7560,6 +7595,7 @@ do (function()
             GameTooltip:Show()
         end)
         b:SetScript("OnLeave", GameTooltip_Hide)
+        ns.MoveHover(b)   -- (unlocked: lit under the mouse)
         -- unlocked: drag it to place it on its own (or next to another one); Shift-drag moves its whole group
         b:SetMovable(true)
         b:RegisterForDrag("LeftButton")
@@ -8341,6 +8377,7 @@ do
             cf.fade = ag
         end
         cf:RegisterForDrag("LeftButton")
+        ns.MoveHover(cf)
         cf:SetScript("OnDragStart", function(self) if moving then self.dragging = true; self:StartMoving() end end)
         cf:SetScript("OnDragStop", function(self)
             if not self.dragging then return end
