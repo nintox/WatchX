@@ -28,6 +28,7 @@ LEVELING
 - XP bar, XP boosts (rested, XP food, sleeping bag, campfire, Camp Benefits), eating & drinking timer,
   buff warnings, rebuff icons (click to cast the buff you're missing). Profiles (one per character),
   export / import of everything (/wx export).
+- Sizes: + / - in the settings (SIZE), or /wx size 150 for every bar at once.
 
 INSTALL
 1. CurseForge app: search for WatchX. Or by hand: put the "WatchX" folder in

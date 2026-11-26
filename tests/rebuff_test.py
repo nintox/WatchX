@@ -83,8 +83,8 @@ NS.db.rebuff.ROGUE = { "Main hand: Instant Poison / Deadly Poison / Crippling Po
 NS.RebuffBagsChanged(); NS.RefreshRebuff()
 """)
 check(ev('shown()') == "Main hand: Instant Poison / Deadly Poison / Crippling Poison,Off hand: Deadly Poison / Instant Poison", "no poison on either: both icons")
-check(str(ev('WatchXRebuff.icons[1]:GetAttribute("macrotext1")')) == "/use Instant Poison\n/use 16", "left-click: Instant onto the main hand")
-check(str(ev('WatchXRebuff.icons[2]:GetAttribute("macrotext1")')) == "/use Deadly Poison\n/use 17", "and Deadly onto the off hand")
+check(str(ev('WatchXRebuff.icons[1]:GetAttribute("macrotext1")')) == "/use item:6947\n/use 16", "left-click: Instant onto the main hand (by item ID)")
+check(str(ev('WatchXRebuff.icons[2]:GetAttribute("macrotext1")')) == "/use item:2892\n/use 17", "and Deadly onto the off hand")
 check(ev('WatchXRebuff.icons[1].hand:GetText()') == "MH" and ev('WatchXRebuff.icons[2].hand:GetText()') == "OH", "MH / OH on them")
 # right-click: every poison in your bags (all ranks, not the cloth), with how many; pick one
 ex('B1 = WatchXRebuff.icons[1]; B1:GetScript("PostClick")(B1, "RightButton")')
@@ -92,9 +92,9 @@ menu = ev('(function() local t = {} for _, b in ipairs(WatchXMenu.buttons) do if
 print("    right-click:", menu)
 check(menu.count("Poison") == 4 and "Instant Poison II" in menu and "Linen" not in menu and "x20" in menu, "right-click: all 4 poisons with counts, nothing else")
 ex('for _, b in ipairs(WatchXMenu.buttons) do if b:IsShown() and tostring(b:GetText()):find("Crippling") then b:GetScript("OnClick")(b) end end')
-check(str(ev('WatchXRebuff.icons[1]:GetAttribute("macrotext1")')) == "/use Crippling Poison\n/use 16", "picked: left-click puts Crippling on from now on")
+check(str(ev('WatchXRebuff.icons[1]:GetAttribute("macrotext1")')) == "/use item:3775\n/use 16", "picked: left-click puts Crippling on from now on")
 ex('NS.RebuffPick(NS.RebuffList()[1], "Instant Poison II"); NS.RefreshRebuff()')
-check(str(ev('WatchXRebuff.icons[1]:GetAttribute("macrotext1")')) == "/use Instant Poison II\n/use 16", "any rank can be the default")
+check(str(ev('WatchXRebuff.icons[1]:GetAttribute("macrotext1")')) == "/use item:6949\n/use 16", "any rank can be the default")
 # on: still shown (faded), with the icon of what's on and its minutes
 ex('ENCH = { true, false }; NS.RefreshRebuff()')
 check(ev('shown()').startswith("Main hand"), "main hand on: still shown")
@@ -120,8 +120,61 @@ ex('NS.db.rebuff.ROGUE = { "Instant Poison IV", "Instant Poison III" }')
 check(str(ev('NS.RebuffList()[1]')).startswith("Main hand: Instant Poison /") and str(ev('NS.RebuffList()[2]')).startswith("Off hand: Instant Poison /"),
       "lines added before: fixed the same way")
 ex('NS.RefreshRebuff()')
-check(str(ev('WatchXRebuff.icons[1]:GetAttribute("macrotext1")')) == "/use Instant Poison II\n/use 16", "Instant Poison IV picked but not in the bags: another Instant rank you have")
+check(str(ev('WatchXRebuff.icons[1]:GetAttribute("macrotext1")')) == "/use item:6949\n/use 16", "Instant Poison IV picked but not in the bags: another Instant rank you have")
 ex('WatchXRebuffOptions:GetScript("OnShow")(WatchXRebuffOptions)')
+# WoW Forever: every rank has the same name ("Instant Poison"), told apart by the level it needs; picked by item ID
+ex(r"""
+ITEMS = { [7047] = "Instant Poison", [7049] = "Instant Poison", [7050] = "Instant Poison", [2892] = "Deadly Poison", [9001] = "Anesthetic Poison" }
+LEVELS = { [7047] = 20, [7049] = 28, [7050] = 36, [2892] = 30, [9001] = 52 }
+BAGS = { 7047, 7049, 2892 }
+REAGENT = { 7050, 9001 }
+NUM_TOTAL_EQUIPPED_BAG_SLOTS = 5
+local num = C_Container.GetContainerNumSlots
+C_Container.GetContainerNumSlots = function(bag) if bag == 5 then return 2 end return num(bag) end
+C_Container.GetContainerItemInfo = function(bag, slot)
+  local id = (bag == 0 and BAGS[slot]) or (bag == 5 and REAGENT[slot])
+  if id then return { itemID = id, itemName = ITEMS[id], stackCount = 10 } end
+end
+C_TooltipInfo.GetHyperlink = function(link)
+  local id = tonumber(link:match("item:(%d+)"))
+  if id and ITEMS[id] then
+    return { lines = { { leftText = ITEMS[id] }, { leftText = "Requires Level " .. LEVELS[id] },
+      { leftText = "Use: Coats a weapon with poison that lasts for 30 minutes." } } }
+  end
+end
+ENCH = { false, false }
+NS.db.rebuffPick, NS.db.rebuffPickID = nil, nil
+NS.db.rebuff.ROGUE = { "Main hand: Instant Poison / Deadly Poison", "Off hand: Deadly Poison / Instant Poison" }
+NS.RebuffBagsChanged(); NS.RefreshRebuff()
+""")
+check(str(ev('WatchXRebuff.icons[1]:GetAttribute("macrotext1")')) == "/use item:7050\n/use 16", "same name: the highest rank by default (lvl 36, from the reagent bag)")
+ex('B1 = WatchXRebuff.icons[1]; B1:GetScript("PostClick")(B1, "RightButton")')
+menu = ev('(function() local t = {} for _, b in ipairs(WatchXMenu.buttons) do if b:IsShown() then t[#t + 1] = tostring(b:GetText()) end end return table.concat(t, " | ") end)()')
+print("    right-click:", menu)
+check(menu.count("Instant Poison") == 3 and "lvl 20" in menu and "lvl 28" in menu and "lvl 36" in menu, "all 3 Instant Poisons, each with its level")
+check("Anesthetic Poison" in menu, "a poison not in any list (found by its text, in the reagent bag)")
+ex('for _, b in ipairs(WatchXMenu.buttons) do if b:IsShown() and tostring(b:GetText()):find("lvl 28") then b:GetScript("OnClick")(b) end end')
+check(str(ev('WatchXRebuff.icons[1]:GetAttribute("macrotext1")')) == "/use item:7049\n/use 16", "picked the lvl 28 one: that very one is put on")
+# its text without the Use: line yet (not loaded): not a "no" for good
+ex(r"""
+ITEMS[9100] = "Mind-numbing Poison"; LEVELS[9100] = 24; BAGS[4] = 9100
+HALF = true
+local full = C_TooltipInfo.GetHyperlink
+C_TooltipInfo.GetHyperlink = function(link)
+  if HALF and link == "item:9100" then return { lines = { { leftText = "Mind-numbing Poison" } } } end
+  return full(link)
+end
+C_Item.GetItemSpell = function(id) if id == 9100 then return "Mind-numbing Poison", 5761 end end
+NS.RebuffBagsChanged(); NS.RefreshRebuff()
+""")
+ex('B1 = WatchXRebuff.icons[1]; B1:GetScript("PostClick")(B1, "RightButton")')
+menu = ev('(function() local t = {} for _, b in ipairs(WatchXMenu.buttons) do if b:IsShown() then t[#t + 1] = tostring(b:GetText()) end end return table.concat(t, " | ") end)()')
+check("Mind-numbing" in menu, "text not loaded yet: found by its name")
+ex('HALF = false; NS.RebuffBagsChanged(); NS.RefreshRebuff()')
+menu = ev('(function() local t = {} for _, b in ipairs(WatchXMenu.buttons) do if b:IsShown() then t[#t + 1] = tostring(b:GetText()) end end return table.concat(t, " | ") end)()')
+ex('B1:GetScript("PostClick")(B1, "RightButton")')
+menu = ev('(function() local t = {} for _, b in ipairs(WatchXMenu.buttons) do if b:IsShown() then t[#t + 1] = tostring(b:GetText()) end end return table.concat(t, " | ") end)()')
+check("Mind-numbing Poison |cffaaaaaa(lvl 24)" in menu, "and later with its level")
 errs = errors(ev)
 check(len(errs) == 0, "no Lua errors " + (str(errs[0])[:300] if errs else ""))
 print("rebuff:", "ALL PASSED" if not fails else "%d FAILED" % len(fails))

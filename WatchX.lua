@@ -4397,6 +4397,19 @@ local function OnSlash(input)
             Print("Profiles: " .. table.concat(ns.ProfileNames(), ", ") .. " · active: " .. tostring(db.profile)
                 .. " · /wx profile <name> to switch")
         end
+    elseif cmd == "size" or cmd == "scale" then   -- /wx size 150: every bar and icon row at 150 %
+        local pct = tonumber((rest or ""):match("(%d+)"))
+        if not (ns.SetSize and ns.SIZE_KEYS) then return end
+        if pct then
+            local v = pct > 5 and pct / 100 or pct   -- (150 or 1.5)
+            for _, k in ipairs(ns.SIZE_KEYS) do ns.SetSize(k, v) end
+            Print("Size: |cffffd100" .. math.floor(ns.GetSize("miniScale") * 100 + 0.5) .. "%|r for every bar and icon row "
+                .. "(60–300 %). One at a time: WatchX settings > SIZE.")
+        else
+            local t = {}
+            for _, k in ipairs(ns.SIZE_KEYS) do t[#t + 1] = k:gsub("Scale$", "") .. " " .. math.floor(ns.GetSize(k) * 100 + 0.5) .. "%" end
+            Print("Sizes: " .. table.concat(t, " · ") .. " – /wx size 150 sets them all; one at a time: WatchX settings > SIZE.")
+        end
     elseif cmd == "xp" and rest == "reset" then
         if ns.ResetXPSession then ns.ResetXPSession() end
     elseif cmd == "xp" or cmd == "boosts" then

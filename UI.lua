@@ -909,6 +909,50 @@ local function BuildSettings()
     module("Minimap button", nil,
         function() return not db().minimap.hide end, function(v) ns.SetMinimapShown(v) end)
 
+    section("SIZE")
+    local sizeTexts = {}
+    do
+        -- a click bigger or smaller (10 %), for when dragging the bottom edge is fiddly – a MacBook's small screen
+        local function sizeRow(label, key, tip, col2)
+            if col2 then y = y + 26 end
+            local x = col2 and COL2 or L
+            local name = o:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+            name:SetPoint("TOPLEFT", o, "TOPLEFT", x, y - 4)
+            name:SetWidth(126)
+            name:SetJustifyH("LEFT")
+            name:SetWordWrap(false)
+            name:SetText(label)
+            local pct = o:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+            local function show()
+                local v = 0
+                for _, k in ipairs(key == "all" and ns.SIZE_KEYS or { key }) do v = math.max(v, ns.GetSize(k)) end
+                pct:SetText(key == "all" and "" or (math.floor(v * 100 + 0.5) .. "%"))
+            end
+            local function step(d)
+                for _, k in ipairs(key == "all" and ns.SIZE_KEYS or { key }) do ns.SetSize(k, ns.GetSize(k) + d) end
+                for _, fn in ipairs(sizeTexts) do fn() end
+            end
+            local minus = Button(o, "-", 26, 20, function() step(-0.1) end)
+            minus:SetPoint("TOPLEFT", o, "TOPLEFT", x + 130, y)
+            pct:SetPoint("LEFT", minus, "RIGHT", 2, 0)
+            pct:SetWidth(48)
+            local plus = Button(o, "+", 26, 20, function() step(0.1) end)
+            plus:SetPoint("LEFT", pct, "RIGHT", 2, 0)
+            for _, b in ipairs({ minus, plus }) do
+                b:SetScript("OnEnter", function(self) Tip(self, label, tip) end)
+                b:SetScript("OnLeave", GameTooltip_Hide)
+            end
+            sizeTexts[#sizeTexts + 1] = show
+            y = y - 26
+        end
+        sizeRow("Mini bar", "miniScale", "The mini bar – and what hangs under it: the Enemies list, the XP bar and the red alert.")
+        sizeRow("Enemies list", "nearbyScale", "The Enemies list in a spot of its own (under the mini bar it follows the mini bar).", true)
+        sizeRow("XP bar", "xpBarScale", "The XP bar in a spot of its own (under the mini bar or the XP boost icons it follows them).")
+        sizeRow("XP boost icons", "levelScale", "Rested, sleeping bag, XP food, the +% box.", true)
+        sizeRow("Rebuff icons", "rebuffScale", "Your buffs and poisons to keep up.")
+        sizeRow("|cffffd100Everything|r", "all", "All of them 10 % bigger or smaller. Also: /wx size 150", true)
+    end
+
     section("PHONE")
     -- (a bit shorter: room for the "New topic" button – anyone who knows a topic can read it, screenshots too)
     local ntfyBox = field("ntfyUrl", "ntfy link", "From the ntfy app, e.g. ntfy.sh/your-secret-topic. Anyone who knows the "
@@ -966,6 +1010,7 @@ local function BuildSettings()
 
     local function OnShow()
         chips:Refresh()
+        for _, fn in ipairs(sizeTexts) do fn() end
         for _, e in ipairs(fields) do e:Load() end
         for _, cb in ipairs(checks) do cb:SetChecked(cb.get()) end
         local d = db()
@@ -2724,7 +2769,7 @@ local function OwnSpot() return db().alertSame == false end
 local alertSpot   -- the stand-in shown while moving the alert's own spot
 -- Sizes: while unlocked, drag a bar's edges (right: width, bottom: size, corner: both) or scroll over
 -- it. In the mini bar's spot the alert has the mini bar's size.
-local function ClampScale(v) return math.floor(math.min(2.5, math.max(0.6, v or 1)) * 100 + 0.5) / 100 end
+local function ClampScale(v) return math.floor(math.min(3, math.max(0.6, v or 1)) * 100 + 0.5) / 100 end
 local function MiniScale() return ClampScale(db().miniScale) end
 local function AlertScale() return OwnSpot() and ClampScale(db().alertScale) or MiniScale() end
 local function AlertWidth()   -- its own spot: its own width (as the unlock preview shows it); else the mini bar's
@@ -5611,6 +5656,39 @@ function ns.LevelMove(on)
     if ns.XPBarMove then ns.XPBarMove(on) end
 end
 
+-- Sizes without dragging (WatchX settings > SIZE, /wx size): on a small screen, a MacBook's, the bars can be made
+-- bigger with a click. Each keeps its top-left where it is. Under the mini bar, the Enemies list, the XP bar and the
+-- alert follow the mini bar's size.
+ns.SIZE_KEYS = { "miniScale", "nearbyScale", "xpBarScale", "levelScale", "rebuffScale" }
+function ns.GetSize(key) return ClampScale(db()[key]) end
+function ns.SetSize(key, value)
+    if InCombatLockdown() then ns.Print("Sizes can't change in a fight – try again after it.") return false end
+    local new = ClampScale(value)
+    db()[key] = new
+    local frames = {
+        miniScale = { mini, "miniPoint" },
+        nearbyScale = { nb and not nb.attached and nb or nil, "nearbyPoint" },
+        xpBarScale = { ns.XPBarFrame and ns.XPBarFrame() or nil, "xpBarPoint" },
+        levelScale = { lv, "levelPoint" },
+        rebuffScale = { ns.RebuffFrame and ns.RebuffFrame() or nil, "rebuffPoint" },
+    }
+    local fr, pt = frames[key] and frames[key][1], frames[key] and frames[key][2]
+    if key == "xpBarScale" and fr and (fr.compact or not db().xpBarPoint) then fr = nil end   -- (follows the mini bar / the icons)
+    if fr then
+        SetScaleKeepTop(fr, new)
+        SavePoint(fr, pt)
+    end
+    if key == "levelScale" and lv then ns.ApplyLevelLayout() end
+    if key == "xpBarScale" then
+        local xbf = ns.XPBarFrame and ns.XPBarFrame()
+        if xbf then xbf.placedKey = nil end
+    end
+    if key ~= "levelScale" and key ~= "rebuffScale" then ns.ApplyLayout() end
+    if ns.RefreshXPBar then ns.Safe("XP bar", ns.RefreshXPBar) end
+    if key == "rebuffScale" and ns.RefreshRebuff then ns.Safe("rebuff icons", ns.RefreshRebuff) end
+    return true
+end
+
 -- A profile switch: its spot and size (out of combat – it holds secure icons).
 function ns.ApplyLevelLayout()
     if not lv or InCombatLockdown() then return end
@@ -5966,6 +6044,7 @@ end
         if xb and xb.compact and xb:IsShown() then Position() end
     end
 
+    function ns.XPBarFrame() return xb end
     function ns.XPBarMove(on)
         if not xb then return end
         if not on and xb.dragging then xb.dragging = nil; xb:StopMovingOrSizing() end
@@ -7139,20 +7218,61 @@ do (function()
     -- Every poison, oil and stone in your bags – found by its text ("Coats a weapon with poison …", "… applied to a
     -- weapon"), so all of WoW Forever's, whatever they're called; each rank its own. Read again when your bags change.
     local weaponItem = {}   -- itemID -> true / false (its text, read once)
+    local weaponLevel = {}  -- itemID -> the level it needs ("Requires Level 28"): tells ranks with the same name apart
+    local weaponTries = {}  -- itemID -> how often its text came without its "Use:" line (not loaded yet)
     local unread = false     -- an item's text wasn't there yet: the bags are looked at again in a moment
-    local function IsWeaponItem(id, bag, slot)
+    -- by name too, in case its text isn't loaded: "… Poison", "… Oil", "… Sharpening Stone", "… Weightstone"
+    local function WeaponByName(name)
+        local n = type(name) == "string" and name:lower() or ""
+        if n:find("elixir", 1, true) or n:find("potion", 1, true) or n:find("resist", 1, true) or n:find("gland", 1, true)
+            or n:find("sac", 1, true) or n:find("recipe", 1, true) or n:find("formula", 1, true) then return false end
+        n = n:gsub("%s+[ivx]+$", "")
+        return n:find("poison$") or n:find("wizard oil$") or n:find("mana oil$") or n:find("weapon oil$")
+            or n:find("sharpening stone$") or n:find("weightstone$") or false
+    end
+    local function HasUseSpell(id)
+        local get = (C_Item and C_Item.GetItemSpell) or GetItemSpell
+        if not get then return false end
+        local ok, n, sid = pcall(get, id)
+        return ok and (Plain0(n) ~= nil or Plain0(sid) ~= nil)
+    end
+    local function IsWeaponItem(id, bag, slot, name)
         local c = weaponItem[id]
         if c ~= nil then return c end
         local text = ns.ItemTooltipText and ns.ItemTooltipText(id, bag, slot)
-        if type(text) ~= "string" then unread = true return false end
+        if type(text) ~= "string" then
+            if WeaponByName(name) then return true end   -- (not kept: its text is read when it's there)
+            unread = true
+            return false
+        end
         local l = text:lower()
         c = (l:find("coats a weapon", 1, true) or l:find("coats your weapon", 1, true)
             or (l:find("weapon", 1, true) and (l:find("sharpen", 1, true) or l:find("oil", 1, true)
                 or l:find("weightstone", 1, true) or l:find("applied to", 1, true)))) and true or false
+        weaponLevel[id] = tonumber(text:match("[Rr]equires [Ll]evel (%d+)")) or weaponLevel[id]
+        -- its "Use:" line can come a moment after the rest: not kept yet (a few tries) – by its name meanwhile
+        local byName = WeaponByName(name) and true or false
+        if not c and not l:find("use:", 1, true) and (byName or HasUseSpell(id)) and (weaponTries[id] or 0) < 3 then
+            weaponTries[id] = (weaponTries[id] or 0) + 1
+            unread = true
+            return byName
+        end
+        c = c or byName
         weaponItem[id] = c
         return c
     end
+    local function ItemLevelOf(id)
+        if weaponLevel[id] then return weaponLevel[id] end
+        local get = (C_Item and C_Item.GetItemInfo) or GetItemInfo
+        if not get then return nil end
+        local ok, _, _, _, ilvl, req = pcall(get, id)
+        req, ilvl = ok and tonumber(Plain0(req)), ok and tonumber(Plain0(ilvl))
+        if req and req > 0 then weaponLevel[id] = req return req end
+        return ilvl
+    end
     local bagWeapon, bagWeaponDirty = {}, true
+    -- WoW Forever's poisons have no rank in their name (every Instant Poison is "Instant Poison"): each kind in
+    -- your bags is shown with the level it needs, and put on by its item ID – the one you picked, not any of them
     local function BagWeaponItems()
         if not bagWeaponDirty then return bagWeapon end
         bagWeaponDirty = false
@@ -7161,7 +7281,8 @@ do (function()
         if not (C and C.GetContainerNumSlots) then return bagWeapon end
         local byID = {}
         unread = false
-        for bag = 0, 4 do
+        local lastBag = math.max(4, tonumber(NUM_TOTAL_EQUIPPED_BAG_SLOTS) or 4)   -- (the reagent bag too)
+        for bag = 0, lastBag do
             local okN, n = pcall(C.GetContainerNumSlots, bag)
             for slot = 1, (okN and tonumber(Plain0(n)) or 0) do
                 local id, name, count = ns.SlotItem(bag, slot)
@@ -7170,10 +7291,12 @@ do (function()
                     if e then e.count = (e.count or 0) + (count or 1)
                     else
                         name = type(name) == "string" and name or (ns.ItemName and ns.ItemName(id, nil))
-                        if type(name) == "string" and IsWeaponItem(id, bag, slot) then
+                        if type(name) == "string" and IsWeaponItem(id, bag, slot, name) then
                             ns.weaponItemByName = ns.weaponItemByName or {}
-                            ns.weaponItemByName[name:lower()] = id
-                            e = { id = id, name = name, count = count or 1 }
+                            local known = ns.weaponItemByName[name:lower()]
+                            e = { id = id, name = name, count = count or 1, level = ItemLevelOf(id) }
+                            -- (the icon for what's on: the highest of that name)
+                            if not known or (ItemLevelOf(known) or 0) < (e.level or 0) then ns.weaponItemByName[name:lower()] = id end
                             byID[id] = e
                             bagWeapon[#bagWeapon + 1] = e
                         end
@@ -7181,7 +7304,14 @@ do (function()
                 end
             end
         end
-        table.sort(bagWeapon, function(a, b) return a.name < b.name end)
+        table.sort(bagWeapon, function(a, b)
+            if a.name ~= b.name then return a.name < b.name end
+            return (a.level or 0) > (b.level or 0) or ((a.level or 0) == (b.level or 0) and a.id > b.id)
+        end)
+        -- the level it needs after the name: ranks with the same name told apart (highest first)
+        for _, e in ipairs(bagWeapon) do
+            e.label = e.level and (e.name .. " |cffaaaaaa(lvl " .. e.level .. ")|r") or e.name
+        end
         if unread and C_Timer then   -- some text not loaded yet: again in 2 s
             C_Timer.After(2, function() bagWeaponDirty = true; ns.Safe("rebuff icons", ns.RefreshRebuff) end)
         end
@@ -7215,10 +7345,12 @@ do (function()
         end
         return ((mh and not oh) and "Off hand: " or "Main hand: ") .. table.concat(names, " / "), tostring(text)   -- (the rank you typed is the pick)
     end
-    function ns.RebuffPick(line, base)
+    function ns.RebuffPick(line, base, id)
         local d = db()
         if type(d.rebuffPick) ~= "table" then d.rebuffPick = {} end
+        if type(d.rebuffPickID) ~= "table" then d.rebuffPickID = {} end
         d.rebuffPick[line] = base
+        d.rebuffPickID[line] = id
     end
     -- What a weapon line could use: spells in it you know (a shaman's imbues), and every poison / oil / stone in your
     -- bags. The one it uses: the one you picked (right-click); that one gone, the same kind in another rank; else
@@ -7227,15 +7359,22 @@ do (function()
         local _, what = WeaponLine(line)
         local opts = {}
         for _, n in ipairs(Names(what or "")) do if Known(n) then opts[#opts + 1] = { name = n, cast = n } end end
-        for _, it in ipairs(BagWeaponItems()) do opts[#opts + 1] = { name = it.name, item = it.id, count = it.count } end
+        for _, it in ipairs(BagWeaponItems()) do
+            opts[#opts + 1] = { name = it.name, label = it.label, item = it.id, count = it.count, level = it.level }
+        end
         local pick = type(db().rebuffPick) == "table" and db().rebuffPick[line] or nil
+        local pickID = type(db().rebuffPickID) == "table" and db().rebuffPickID[line] or nil
         local use
-        if pick then
-            for _, o in ipairs(opts) do if o.name == pick then use = o end end
+        if pickID then   -- the very one you picked (that rank)
+            for _, o in ipairs(opts) do if o.item == pickID then use = o end end
+        end
+        if pick and not use then   -- else that name (the highest you have: the list is highest first)
+            for _, o in ipairs(opts) do if not use and o.name == pick then use = o end end
             if not use then
                 local base = NoRank(pick):lower()
                 for _, o in ipairs(opts) do
-                    if NoRank(o.name):lower() == base and (not use or (o.item or 0) > (use.item or 0)) then use = o end
+                    if NoRank(o.name):lower() == base and (not use or (o.level or 0) > (use.level or 0)
+                        or ((o.level or 0) == (use.level or 0) and (o.item or 0) > (use.item or 0))) then use = o end
                 end
             end
         end
@@ -7255,16 +7394,16 @@ do (function()
         local opts, use = WeaponOptions(line)
         local _, what = WeaponLine(line)
         local p = type(db().rebuffPick) == "table" and db().rebuffPick[line]
-        return (use and use.name) or p or Names(what or line)[1], opts
+        return (use and (use.label or use.name)) or p or Names(what or line)[1], opts
     end
     -- Right-click a weapon icon (or the v in the settings): what to use by default – what you have, with how many
     function ns.RebuffChoose(anchor, line)
         local opts, use = WeaponOptions(line)
         local items = {}
         for _, o in ipairs(opts) do
-            local label = o.name .. (o.count and ("  |cffaaaaaax" .. o.count .. "|r") or "")
-            items[#items + 1] = { (use and o.name == use.name) and ("|cffffd100> " .. label .. "|r") or ("   " .. label), function()
-                ns.RebuffPick(line, o.name)
+            local label = (o.label or o.name) .. (o.count and ("  |cffaaaaaax" .. o.count .. "|r") or "")
+            items[#items + 1] = { (use and o == use) and ("|cffffd100> " .. label .. "|r") or ("   " .. label), function()
+                ns.RebuffPick(line, o.name, o.item)
                 ns.Safe("rebuff icons", ns.RefreshRebuff)
                 if ns.RebuffSettingsRefresh then ns.RebuffSettingsRefresh() end
             end }
@@ -7461,7 +7600,7 @@ do (function()
             b.charges:SetText(r.charges and tostring(r.charges) or "")
             if r.item then   -- a poison / oil from your bags onto that weapon
                 b:SetAttribute("type1", "macro")
-                b:SetAttribute("macrotext1", "/use " .. r.itemName .. "\n/use " .. r.slot)
+                b:SetAttribute("macrotext1", "/use item:" .. r.item .. "\n/use " .. r.slot)   -- (by ID: that rank)
                 b:SetAttribute("spell1", nil)
             else
                 b:SetAttribute("type1", "spell")
@@ -7502,6 +7641,7 @@ do (function()
         end
     end
     function ns.RebuffMove() ns.RefreshRebuff() end
+    function ns.RebuffFrame() return f end
 
     -- your buffs changed (a moment later: one look for a burst), a fight ended, you came into the world
     local ev, waiting = CreateFrame("Frame"), false
