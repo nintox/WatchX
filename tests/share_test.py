@@ -43,6 +43,15 @@ check("Kill on sight – [Kessa Shade]" in str(ev('said()')), "a new KOS player:
 # a battleground: nothing
 ex('tick(5, 1); local ii = IsInInstance; IsInInstance = function() return true, "pvp" end; NS.ShareSpot({ key = "A-X", name = "Aldric Brightmane", level = 37, class = "PALADIN" }, "kos"); IsInInstance = ii')
 check(ev('said()') == "", "in a battleground: nothing")
+# the guild has its own ticks (until you tick them, it follows the party's)
+ex('NS.db.shareParty = true; NS.db.shareGuild = true; NS.db.shareGuildStealth = false; tick(70, 1)')
+ex('NS.ShareSpot({ key = "Nyx-X", name = "Nyx Shadeveil", class = "ROGUE", level = 44 }, "stealth", "Stealth")')
+out = str(ev('said()'))
+check("PARTY|WatchX: Stealth" in out and "GUILD|" not in out, "stealth off for the guild: only the party hears it")
+ex('NS.db.shareGuildAll = true; tick(15, 1); NS.ShareSpot({ key = "Pip-X", name = "Pip Ashgrove", class = "MAGE", level = 30 }, "enemy")')
+out = str(ev('said()'))
+check("GUILD|WatchX: Enemy" in out and "PARTY|" not in out, "every enemy just for the guild: only the guild hears it")
+ex('NS.db.shareGuildStealth, NS.db.shareGuildAll = nil, nil')
 # from the player's menu: said where you ask, whatever the ticks
 ex('NS.db.shareParty = false; NS.db.shareGuild = false; tick(2, 1)')
 ex('NS.db.enemies["Bram-X"] = { name = "Bram Stonefist", class = "WARRIOR", level = 58, guild = "Stormborn", kos = true }')

@@ -2391,16 +2391,40 @@ function ns.BuildNearbySettings()
     end
 
     heading("TELL YOUR GROUP")
-    check("Tell my party / raid", "a line in party chat when you spot one of the ticked below",
-        function() return db().shareParty == true end, function(v) db().shareParty = v end)
-    check("Tell my guild", "the same in guild chat",
-        function() return db().shareGuild == true end, function(v) db().shareGuild = v end)
-    L = L + 26   -- (what to tell: indented under them)
-    check("Stealth", nil, function() return db().shareStealth ~= false end, function(v) db().shareStealth = v end)
-    check("Kill on sight", nil, function() return db().shareKOS ~= false end, function(v) db().shareKOS = v end)
-    check("WANTED", "with the reward", function() return db().shareWanted ~= false end, function(v) db().shareWanted = v end)
-    check("Every new enemy", "at most one line every 10 s", function() return db().shareAll == true end, function(v) db().shareAll = v end)
-    L = L - 26
+    -- two columns: what your party / raid hears, and what your guild hears
+    do
+        local COLP, COLG = L + 330, L + 450
+        local function colHead(text, x)
+            local h = o:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+            h:SetPoint("TOP", o, "TOPLEFT", x + 9, y)
+            h:SetText(text)
+        end
+        colHead("Party / raid", COLP)
+        colHead("Guild", COLG)
+        y = y - 20
+        local function box(x, get, set)
+            local cb = ns.CheckBox(o)
+            cb:SetSize(26, 26)
+            cb:SetPoint("TOPLEFT", o, "TOPLEFT", x - 4, y + 2)
+            cb.get = get
+            cb:SetScript("OnClick", function(self) set(self:GetChecked() and true or false); self:SetChecked(get()); ns.RefreshUI() end)
+            checks[#checks + 1] = cb
+        end
+        local function row(label, hint, pkey, gkey, on, own)
+            local name = o:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+            name:SetPoint("TOPLEFT", o, "TOPLEFT", L + 4, y - 3)
+            name:SetText(label .. (hint and ("  |cff808080" .. hint .. "|r") or ""))
+            box(COLP, function() return ns.ShareWants(pkey, false, on) end, function(v) db()[pkey] = v end)
+            box(COLG, function() return own and db()[gkey] == true or (not own and ns.ShareWants(pkey, gkey, on)) end,
+                function(v) db()[gkey] = v end)
+            y = y - 27
+        end
+        row("|cffffd100Tell them|r", "a line in chat when you spot one of these", "shareParty", "shareGuild", false, true)
+        row("Stealth", nil, "shareStealth", "shareGuildStealth", true)
+        row("Kill on sight", nil, "shareKOS", "shareGuildKOS", true)
+        row("WANTED", "with the reward", "shareWanted", "shareGuildWanted", true)
+        row("Every new enemy", "at most one line every 10 s", "shareAll", "shareGuildAll", false)
+    end
     note("Right-click a row in the list to announce one player by hand: say, party, raid or guild.")
     y = y - 20
 
@@ -4291,6 +4315,17 @@ ns.spotSaid = {}   -- lower-case name .. ":" .. kind -> when it was said (by you
 ns.SPOT_HEAD = { stealth = "Stealth", kos = "Kill on sight", wanted = "WANTED", enemy = "Enemy" }
 -- force = "say" / "party" / "guild": you asked for it (the player's menu) – said there, whatever the ticks. (Say
 -- outdoors needs a click on this client: the menu is one.)
+-- what's ticked: the party's key, or the guild's (which follows the party's until you tick it yourself); on = the default
+function ns.ShareWants(pkey, gkey, on)
+    local d = db()
+    local v
+    if gkey then v = d[gkey] end
+    if v == nil then v = d[pkey] end
+    if v == nil then return on and true or false end
+    return v and true or false
+end
+local SHARE_KEYS = { stealth = { "shareStealth", "shareGuildStealth", true }, kos = { "shareKOS", "shareGuildKOS", true },
+    wanted = { "shareWanted", "shareGuildWanted", true }, enemy = { "shareAll", "shareGuildAll", false } }
 function ns.ShareSpot(e, kind, extra, force)
     local d = db()
     if not (d and e and type(e.name) == "string") then return end
@@ -4299,10 +4334,11 @@ function ns.ShareSpot(e, kind, extra, force)
     if force then
         if now - (ns.spotLast or -99) < 1 then return end   -- (a double click)
     else
-        if not (d.shareParty or d.shareGuild) then return end
-        local want = (kind == "stealth" and d.shareStealth ~= false) or (kind == "kos" and d.shareKOS ~= false)
-            or (kind == "wanted" and d.shareWanted ~= false) or (kind == "enemy" and d.shareAll == true)
-        if not want then return end
+        local sk = SHARE_KEYS[kind]
+        if not sk then return end
+        local wantP = d.shareParty == true and ns.ShareWants(sk[1], false, sk[3])
+        local wantG = d.shareGuild == true and ns.ShareWants(sk[1], sk[2], sk[3])
+        if not (wantP or wantG) then return end
         if IsInInstance then
             local _, it = IsInInstance()
             if it == "pvp" or it == "arena" then return end
@@ -4332,8 +4368,9 @@ function ns.ShareSpot(e, kind, extra, force)
         .. (e.guild and (" <" .. e.guild .. ">") or "") .. more .. (where and where ~= "" and (" · " .. where) or "")
     local sent = false
     if force == "say" then sent = (ns.SendChat and ns.SendChat(msg:sub(1, 255), "SAY")) or sent end
-    local toParty = (force == "party") or (not force and d.shareParty)
-    local toGuild = (force == "guild") or (not force and d.shareGuild)
+    local sk = SHARE_KEYS[kind] or {}
+    local toParty = (force == "party") or (not force and d.shareParty == true and ns.ShareWants(sk[1], false, sk[3]))
+    local toGuild = (force == "guild") or (not force and d.shareGuild == true and ns.ShareWants(sk[1], sk[2], sk[3]))
     if toParty and IsInGroup and IsInGroup() then
         local chan = (IsInRaid and IsInRaid()) and "RAID" or "PARTY"
         if LE_PARTY_CATEGORY_INSTANCE and IsInGroup(LE_PARTY_CATEGORY_INSTANCE) and not IsInGroup(LE_PARTY_CATEGORY_HOME) then chan = "INSTANCE_CHAT" end
