@@ -35,6 +35,12 @@ ex('NS.db.nearbyShowEmpty = false; NS.RefreshPvPOptions()')
 ex('''for _, f in ipairs(FRAMES) do
   if f.__kind == "CheckButton" and f.get and f.__parent == nil then end
 end''')
+# the window's own Unlock / Lock button: the window stays open
+ex('NS.OpenSettings(); WatchXSettings.lock:GetScript("OnClick")(WatchXSettings.lock)')
+check(ev('NS.IsMoving()') and ev('WatchXSettings:IsShown()'), "Unlock in the window: unlocked, the window stays")
+check("Lock" in str(ev('WatchXSettings.lock:GetText()')), "  and the button says Lock bars")
+ex('WatchXSettings.lock:GetScript("OnClick")(WatchXSettings.lock)')
+check(not ev('NS.IsMoving()'), "click again: locked")
 # unlocking the bars closes the window (it would be in the way)
 ex('NS.StartMove()')
 check(not ev('WatchXSettings:IsShown()'), "Unlock bars: the window steps aside")

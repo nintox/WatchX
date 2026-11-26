@@ -872,6 +872,22 @@ do
                 .. "history, KOS and bounties – for all your characters. Keep it, or move it to another PC.")
         end)
         win.exp:SetScript("OnLeave", GameTooltip_Hide)
+        -- Unlock / Lock the bars, right here (the window stays open)
+        win.lock = Button(win, "Unlock bars", 130, 22, function()
+            if ns.IsMoving and ns.IsMoving() then ns.StopMove() else ns.StartMove(true) end
+        end)
+        win.lock:SetPoint("RIGHT", win.exp, "LEFT", -8, 0)
+        win.lock:SetScript("OnEnter", function(self)
+            Tip(self, (ns.IsMoving and ns.IsMoving()) and "Lock bars" or "Unlock bars",
+                "Unlocked, you can drag the bars and icons, and size them by their bottom edge or the wheel. "
+                .. "Drag this window aside if it's in the way.")
+        end)
+        win.lock:SetScript("OnLeave", GameTooltip_Hide)
+        function ns.PaintLockButton()
+            local on = ns.IsMoving and ns.IsMoving()
+            SetButtonText(win.lock, on and "|cff40ff40Lock bars|r" or "Unlock bars")
+        end
+        ns.PaintLockButton()
         CloseX(win)
         local line = win:CreateTexture(nil, "ARTWORK")
         line:SetColorTexture(EDGE[1], EDGE[2], EDGE[3], 0.45)
@@ -3508,11 +3524,14 @@ local function LockBar()
     return f
 end
 
-function ns.StartMove()
+function ns.IsMoving() return moving end
+-- keepWindow: from the settings window's own Unlock button (it stays open, its button says Lock)
+function ns.StartMove(keepWindow)
     if not mini then return end
     if InCombatLockdown() then ns.Print("Not in combat – unlock the bars when the fight is over.") return end
     moving = true
-    if ns.CloseWindow then ns.CloseWindow() end   -- (the settings window would be in the way)
+    if ns.CloseWindow and not keepWindow then ns.CloseWindow() end   -- (the settings window would be in the way)
+    if ns.PaintLockButton then ns.PaintLockButton() end
     if ns.ShowGrid then ns.ShowGrid(true) end
     mini:SetFrameStrata("DIALOG")
     mini:EnableMouseWheel(true)
@@ -3546,6 +3565,7 @@ end
 function ns.StopMove(why)
     if not moving then return end
     moving = false
+    if ns.PaintLockButton then ns.PaintLockButton() end
     for _, f in ipairs({ mini, alertSpot or false, ns.levelFrame or false, WatchXRebuff or false }) do   -- (the list and card: NearbyMove)
         if f and f.dragging then f.dragging = nil; f:StopMovingOrSizing() end   -- a drag still going (a fight starts)
     end
