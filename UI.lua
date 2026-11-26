@@ -1,9 +1,9 @@
 -- WatchX – Made by Rikerud
--- UI: panel (/wx), mini bar, settings page (Esc > Options > AddOns > WatchX), guide, minimap button,
+-- UI: panel (/wx), mini bar, the settings window (/wx settings; Options > AddOns > WatchX opens it), guide, minimap button,
 -- the secure chat log bar and the "held back" send bar.
 -- Look: Blizzard's own. Windows (panel, History, guide) get the dark stone frame with a gold trim and a
--- header plate; the small bars (mini bar, Nearby, XP, alerts, menus) the tooltip edge. Red Blizzard buttons,
--- gold headings.
+-- header plate; the small bars (mini bar, Nearby, XP, alerts, menus) and the settings window the tooltip edge.
+-- Flat dark buttons with a gold edge, gold headings.
 
 local _, ns = ...
 
@@ -118,21 +118,96 @@ local function SetButtonText(button, text)
     end
 end
 
+-- WatchX's own buttons: dark and flat with a thin gold edge and gold text – the look of the Enemies list
+-- (not Blizzard's red ones). Lit up under the mouse; grey text when switched off.
+function ns.StyleButton(b)
+    if Backdrop(b, { bgFile = "Interface\\Buttons\\WHITE8X8", edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+            edgeSize = 10, insets = { left = 2, right = 2, top = 2, bottom = 2 } }) then
+        b:SetBackdropColor(0.12, 0.10, 0.07, 0.96)
+        b:SetBackdropBorderColor(EDGE[1], EDGE[2], EDGE[3], 0.9)
+    else
+        Flat(b, 0.96)
+    end
+    local hl = b:CreateTexture(nil, "HIGHLIGHT")
+    hl:SetPoint("TOPLEFT", b, "TOPLEFT", 2, -2)
+    hl:SetPoint("BOTTOMRIGHT", b, "BOTTOMRIGHT", -2, 2)
+    hl:SetColorTexture(1, 0.82, 0.25, 0.14)
+    if b.SetPushedTextOffset then b:SetPushedTextOffset(1, -1) end
+    return b
+end
 local function Button(parent, text, w, h, onClick)
-    local b = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
+    local b = ns.StyleButton(CreateFrame("Button", nil, parent))
     b:SetSize(w, h or 24)
     SetButtonText(b, text)
     b:SetScript("OnClick", onClick)
     return b
 end
 
--- The small buttons: Blizzard's red ones (the name stays for the old call sites).
+-- The small buttons: the same look (the name stays for the old call sites).
 local function FlatButton(parent, text, w, h, onClick)
-    local b = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
-    b:SetSize(w, h or 22)
-    SetButtonText(b, text)
-    b:SetScript("OnClick", onClick)
-    return b
+    return Button(parent, text, w, h or 22, onClick)
+end
+
+-- A check box in the same look: a small dark box with a gold edge and Blizzard's gold tick. The frame (what you
+-- click) is as big as the caller makes it; the box stays 16 px in its middle.
+function ns.CheckBox(parent)
+    local cb = CreateFrame("CheckButton", nil, parent)
+    cb:SetSize(24, 24)
+    local box = cb:CreateTexture(nil, "BACKGROUND")
+    box:SetSize(16, 16)
+    box:SetPoint("CENTER", cb, "CENTER", 0, 0)
+    box:SetColorTexture(0.05, 0.045, 0.04, 0.95)
+    for _, side in ipairs({ { "TOPLEFT", "TOPRIGHT", true }, { "BOTTOMLEFT", "BOTTOMRIGHT", true },
+                            { "TOPLEFT", "BOTTOMLEFT", false }, { "TOPRIGHT", "BOTTOMRIGHT", false } }) do
+        local line = cb:CreateTexture(nil, "BORDER")
+        line:SetColorTexture(EDGE[1], EDGE[2], EDGE[3], 0.85)
+        line:SetPoint(side[1], box, side[1], 0, 0)
+        line:SetPoint(side[2], box, side[2], 0, 0)
+        if side[3] then line:SetHeight(1) else line:SetWidth(1) end
+    end
+    local hl = cb:CreateTexture(nil, "HIGHLIGHT")
+    hl:SetSize(16, 16)
+    hl:SetPoint("CENTER", cb, "CENTER", 0, 0)
+    hl:SetColorTexture(1, 0.82, 0.25, 0.2)
+    local tick = cb:CreateTexture(nil, "ARTWORK")
+    tick:SetTexture("Interface\\Buttons\\UI-CheckBox-Check")
+    tick:SetSize(22, 22)
+    tick:SetPoint("CENTER", cb, "CENTER", 1, 1)
+    cb:SetCheckedTexture(tick)
+    local off = cb:CreateTexture(nil, "ARTWORK")
+    off:SetTexture("Interface\\Buttons\\UI-CheckBox-Check-Disabled")
+    off:SetSize(22, 22)
+    off:SetPoint("CENTER", cb, "CENTER", 1, 1)
+    cb:SetDisabledCheckedTexture(off)
+    return cb
+end
+
+-- A box around a group of settings on a page: a slightly lighter field with a faint gold edge and its heading at
+-- the top. Drawn on the page itself (textures only, under everything). card:Close(y) sets where it ends.
+function ns.Card(o, x, y, w, title)
+    local c = { top = y }
+    c.bg = o:CreateTexture(nil, "BACKGROUND")
+    c.bg:SetColorTexture(1, 0.9, 0.7, 0.045)
+    c.bg:SetPoint("TOPLEFT", o, "TOPLEFT", x, y)
+    c.bg:SetWidth(w)
+    c.edges = {}
+    for i = 1, 4 do
+        local e = o:CreateTexture(nil, "BORDER")
+        e:SetColorTexture(EDGE[1], EDGE[2], EDGE[3], 0.28)
+        c.edges[i] = e
+    end
+    c.edges[1]:SetPoint("TOPLEFT", c.bg, "TOPLEFT"); c.edges[1]:SetPoint("TOPRIGHT", c.bg, "TOPRIGHT"); c.edges[1]:SetHeight(1)
+    c.edges[2]:SetPoint("BOTTOMLEFT", c.bg, "BOTTOMLEFT"); c.edges[2]:SetPoint("BOTTOMRIGHT", c.bg, "BOTTOMRIGHT"); c.edges[2]:SetHeight(1)
+    c.edges[3]:SetPoint("TOPLEFT", c.bg, "TOPLEFT"); c.edges[3]:SetPoint("BOTTOMLEFT", c.bg, "BOTTOMLEFT"); c.edges[3]:SetWidth(1)
+    c.edges[4]:SetPoint("TOPRIGHT", c.bg, "TOPRIGHT"); c.edges[4]:SetPoint("BOTTOMRIGHT", c.bg, "BOTTOMRIGHT"); c.edges[4]:SetWidth(1)
+    if title then
+        c.title = o:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        c.title:SetPoint("TOPLEFT", o, "TOPLEFT", x + 10, y - 8)
+        c.title:SetText(title)
+        c.title:SetTextColor(ACCENT[1], ACCENT[2], ACCENT[3])
+    end
+    function c:Close(bottom) self.bg:SetHeight(math.max(20, self.top - bottom + 6)) end
+    return c
 end
 
 -- A line in a drop-down menu: plain text that lights up under the mouse, like Blizzard's menus.
@@ -603,7 +678,7 @@ do
         local kl = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
         kl:SetPoint("LEFT", f.kills, "RIGHT", 8, 0)
         kl:SetText("|cff808080the reward is paid for each kill, up to this many|r")
-        f.forever = CreateFrame("CheckButton", nil, f, "UICheckButtonTemplate")
+        f.forever = ns.CheckBox(f)
         f.forever:SetSize(22, 22)
         f.forever:SetPoint("TOPLEFT", f, "TOPLEFT", BX, -158)
         local fl = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
@@ -719,26 +794,8 @@ function ns.AddTarget()
     return ok
 end
 
-function ns.OpenAlertSettings()
-    local cat = settingsPage and settingsPage.alertsCat
-    if cat and Settings and Settings.OpenToCategory then
-        pcall(Settings.OpenToCategory, cat:GetID())
-    elseif settingsPage and settingsPage.alerts and InterfaceOptionsFrame_OpenToCategory then
-        pcall(InterfaceOptionsFrame_OpenToCategory, settingsPage.alerts)
-        pcall(InterfaceOptionsFrame_OpenToCategory, settingsPage.alerts)
-    else
-        ns.OpenSettings()
-    end
-end
-
-function ns.OpenSettings()
-    if settingsCategory and Settings and Settings.OpenToCategory then
-        pcall(Settings.OpenToCategory, settingsCategory:GetID())
-    elseif settingsPage and InterfaceOptionsFrame_OpenToCategory then
-        pcall(InterfaceOptionsFrame_OpenToCategory, settingsPage)
-        pcall(InterfaceOptionsFrame_OpenToCategory, settingsPage)
-    end
-end
+function ns.OpenAlertSettings() ns.OpenWindow("alerts") end
+function ns.OpenSettings() ns.OpenWindow("main") end
 
 -- Never close Blizzard's windows from addon code: HideUIPanel/ShowUIPanel from an addon taints the
 -- game's window system, and then Character, Spellbook and the menu buttons can stop working. WatchX's
@@ -753,14 +810,187 @@ local function HideBlizzardMenus()
 end
 
 
+
+-- ---------------------------------------------------------------- WatchX's own settings window
+-- One window in WatchX's look (dark, a gold edge – like the Enemies list): the pages in a list on the left, grouped
+-- (General, PvP, Leveling), the page on the right. Esc closes it. The game's Options > AddOns > WatchX only has a
+-- button that opens it. Each page is built once (BuildSettings & co.) and moved into the window when it's shown.
+do
+    local win, content
+    local tabs = {}
+    local NAV = {
+        { group = "GENERAL" }, { "main", "WatchX" }, { "alerts", "Alerts & scan" },
+        { group = "PVP" }, { "enemies", "Enemies list" }, { "plates", "Nameplates" }, { "kos", "KOS & bounties" },
+        { "avoid", "Avoid list" },
+        { group = "LEVELING" }, { "level", "XP boosts" }, { "buffs", "Buff warnings" }, { "rebuff", "Rebuff icons" },
+    }
+    function ns.AddTab(key, page) tabs[key] = page end
+    local function Build()
+        win = CreateFrame("Frame", "WatchXSettings", UIParent)
+        win:SetSize(900, 660)
+        win:SetFrameStrata("HIGH")   -- (popups, menus and WatchX's other windows open above it)
+        win:SetToplevel(true)
+        win:SetClampedToScreen(true)
+        win:SetMovable(true)
+        win:EnableMouse(true)
+        win:RegisterForDrag("LeftButton")
+        win:SetScript("OnDragStart", win.StartMoving)
+        win:SetScript("OnDragStop", function(self) self:StopMovingOrSizing(); SavePoint(self, "settingsPoint") end)
+        LoadPoint(win, "settingsPoint", { "CENTER", "CENTER", 0, 20 })
+        Flat(win, 0.97)
+        tinsert(UISpecialFrames, "WatchXSettings")
+        local logo = win:CreateTexture(nil, "OVERLAY")
+        logo:SetSize(30, 30)
+        logo:SetPoint("TOPLEFT", win, "TOPLEFT", 14, -9)
+        logo:SetTexture(LOGO)
+        local title = win:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+        title:SetPoint("LEFT", logo, "RIGHT", 8, 1)
+        title:SetText("WatchX")
+        local by = win:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+        by:SetPoint("LEFT", title, "RIGHT", 10, -1)
+        by:SetText("Made by " .. ns.AUTHOR .. "  ·  v" .. tostring(ns.GetVersion and ns.GetVersion() or "?"))
+        win.prof = Button(win, "Profile", 190, 22, function(self) ns.ToggleProfileMenu(self) end)
+        win.prof:SetPoint("TOPRIGHT", win, "TOPRIGHT", -40, -13)
+        win.prof:SetScript("OnEnter", function(self)
+            Tip(self, "Profiles", "Switch between sets of choices – e.g. Camping, Leveling, PvP. Each character "
+                .. "remembers its own. Export / import is in this menu too.")
+        end)
+        win.prof:SetScript("OnLeave", GameTooltip_Hide)
+        profileLabels[#profileLabels + 1] = function(name) SetButtonText(win.prof, "Profile: " .. name) end
+        SetButtonText(win.prof, "Profile: " .. tostring(db().profile or "?"))
+        CloseX(win)
+        local line = win:CreateTexture(nil, "ARTWORK")
+        line:SetColorTexture(EDGE[1], EDGE[2], EDGE[3], 0.45)
+        line:SetHeight(1)
+        line:SetPoint("TOPLEFT", win, "TOPLEFT", 6, -48)
+        line:SetPoint("TOPRIGHT", win, "TOPRIGHT", -6, -48)
+        -- the list of pages
+        local nav = CreateFrame("Frame", nil, win)
+        nav:SetPoint("TOPLEFT", win, "TOPLEFT", 6, -49)
+        nav:SetPoint("BOTTOMLEFT", win, "BOTTOMLEFT", 6, 6)
+        nav:SetWidth(176)
+        local nbg = nav:CreateTexture(nil, "BACKGROUND")
+        nbg:SetAllPoints()
+        nbg:SetColorTexture(0, 0, 0, 0.3)
+        local vline = nav:CreateTexture(nil, "ARTWORK")
+        vline:SetColorTexture(EDGE[1], EDGE[2], EDGE[3], 0.3)
+        vline:SetWidth(1)
+        vline:SetPoint("TOPRIGHT", nav, "TOPRIGHT", 0, 0)
+        vline:SetPoint("BOTTOMRIGHT", nav, "BOTTOMRIGHT", 0, 0)
+        win.navButtons = {}
+        local y = -6
+        for _, it in ipairs(NAV) do
+            if it.group then
+                y = y - 8
+                local h = nav:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+                h:SetPoint("TOPLEFT", nav, "TOPLEFT", 12, y)
+                h:SetText(it.group)
+                h:SetTextColor(EDGE[1], EDGE[2], EDGE[3])
+                y = y - 18
+            else
+                local b = CreateFrame("Button", nil, nav)
+                b:SetSize(174, 24)
+                b:SetPoint("TOPLEFT", nav, "TOPLEFT", 0, y)
+                b.sel = b:CreateTexture(nil, "BACKGROUND")
+                b.sel:SetAllPoints()
+                b.sel:SetColorTexture(1, 0.82, 0.25, 0.13)
+                b.bar = b:CreateTexture(nil, "ARTWORK")
+                b.bar:SetPoint("TOPLEFT"); b.bar:SetPoint("BOTTOMLEFT")
+                b.bar:SetWidth(3)
+                b.bar:SetColorTexture(ACCENT[1], ACCENT[2], ACCENT[3], 1)
+                local hl = b:CreateTexture(nil, "HIGHLIGHT")
+                hl:SetAllPoints()
+                hl:SetColorTexture(1, 1, 1, 0.06)
+                b.text = b:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+                b.text:SetPoint("LEFT", b, "LEFT", 20, 0)
+                b.text:SetText(it[2])
+                b.key = it[1]
+                b:SetScript("OnClick", function() ns.OpenWindow(it[1]) end)
+                win.navButtons[#win.navButtons + 1] = b
+                y = y - 25
+            end
+        end
+        local made = nav:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+        made:SetPoint("BOTTOMLEFT", nav, "BOTTOMLEFT", 12, 10)
+        made:SetText("/wx · /wx help")
+        content = CreateFrame("Frame", nil, win)
+        content:SetPoint("TOPLEFT", nav, "TOPRIGHT", 6, -2)
+        content:SetPoint("BOTTOMRIGHT", win, "BOTTOMRIGHT", -8, 8)
+        win:Hide()
+    end
+    function ns.OpenWindow(key)
+        if not win then Build() end
+        if not tabs[key] then key = "main" end
+        for k, page in pairs(tabs) do
+            if k ~= key then page:Hide() end
+        end
+        local page = tabs[key]
+        if page then
+            if page:GetParent() ~= content then
+                page:SetParent(content)
+                page:SetFrameStrata(win:GetFrameStrata())
+            end
+            page:ClearAllPoints()
+            page:SetAllPoints(content)
+            page:Hide()
+            page:Show()   -- (its OnShow fills it in)
+        end
+        for _, b in ipairs(win.navButtons) do
+            local on = b.key == key
+            b.sel:SetShown(on)
+            b.bar:SetShown(on)
+            b.text:SetFontObject(on and "GameFontNormal" or "GameFontHighlight")
+        end
+        win.current = key
+        win:Show()
+        if win.Raise then win:Raise() end
+    end
+    function ns.SettingsShown() return win and win:IsShown() and win.current or nil end
+    function ns.CloseWindow() if win then win:Hide() end end
+
+    -- Esc > Options > AddOns > WatchX: what it is, and a button to the window
+    function ns.BuildLanding()
+        local land = CreateFrame("Frame", "WatchXLanding", UIParent)
+        land.name = "WatchX"
+        land:Hide()
+        local logo = land:CreateTexture(nil, "ARTWORK")
+        logo:SetSize(72, 72)
+        logo:SetPoint("TOP", land, "TOP", -110, -40)
+        logo:SetTexture(LOGO)
+        local t = land:CreateFontString(nil, "OVERLAY", "GameFontNormalHuge")
+        t:SetPoint("LEFT", logo, "RIGHT", 14, 4)
+        t:SetText("WatchX")
+        local v = land:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+        v:SetPoint("TOPLEFT", t, "BOTTOMLEFT", 2, -4)
+        v:SetText("Version " .. tostring(ns.GetVersion and ns.GetVersion() or "?") .. "  ·  Made by " .. ns.AUTHOR)
+        local d = land:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+        d:SetPoint("TOP", land, "TOP", 0, -132)
+        d:SetWidth(520)
+        d:SetSpacing(4)
+        d:SetText("PvP: the enemies around you, KOS and bounties, stealth warnings.\n"
+            .. "A rare scan, XP boosts, buff warnings and rebuff icons – and alerts on your phone.")
+        local open = Button(land, "Open WatchX settings", 240, 30, function() ns.OpenWindow("main") end)
+        open:SetPoint("TOP", d, "BOTTOM", 0, -24)
+        local h = land:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+        h:SetPoint("TOP", open, "BOTTOM", 0, -12)
+        h:SetText("or type /wx settings  ·  Esc closes it")
+        return land
+    end
+end
+
 local function BuildSettings()
     -- Two pages here: the main one (the modules – PvP first – phone links, general things) and "Alerts & scan"
     -- (the rare scan and how alerts look). Each scrolls when the window is too small: everything sits on "o",
     -- inside a scroll frame. The helpers below always add to the current "o" and "y".
     local W = 580            -- content width: everything stays inside it
-    local L, COL2 = 20, 310  -- left edge, second column
+    local L, COL2 = 24, 314  -- left edge, second column
     local o, y
+    local card   -- the box around the current section (closed where the next one starts)
+    local function closeCard()
+        if card then card:Close(y); card = nil; y = y - 8 end
+    end
     local function NewPage(globalName, name, titleText, subText)
+        closeCard()
         local pg = CreateFrame("Frame", globalName, UIParent)
         pg.name = name
         pg:Hide()
@@ -781,30 +1011,15 @@ local function BuildSettings()
     end
     local page = NewPage("WatchXOptions", "WatchX", "WatchX", "PvP: the enemies around you, KOS, alerts on your phone  ·  by " .. ns.AUTHOR)
     local mainO = o
-    local prof = Button(o, "Profile", 180, 22, function(self) ns.ToggleProfileMenu(self) end)
-    prof:SetPoint("TOPLEFT", o, "TOPLEFT", 16 + W - 180, -12)
-    prof:SetScript("OnEnter", function(self)
-        Tip(self, "Profiles", "Switch between sets of choices – e.g. Camping, Leveling, PvP. What you watch, "
-            .. "alerts and the bars are saved per profile; phone links are shared.")
-    end)
-    prof:SetScript("OnLeave", GameTooltip_Hide)
-    profileLabels[#profileLabels + 1] = function(name) SetButtonText(prof, "Profile: " .. name) end
 
     local fields, checks = {}, {}
     local chips   -- the watch list's names (Alerts & scan page)
     -- A section: a small accent-colored heading with a thin line after it.
     local function section(label)
-        y = y - 10
-        local h = o:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-        h:SetPoint("TOPLEFT", o, "TOPLEFT", 16, y)
-        h:SetText(label)
-        h:SetTextColor(ACCENT[1], ACCENT[2], ACCENT[3])
-        local line = o:CreateTexture(nil, "ARTWORK")
-        line:SetColorTexture(1, 1, 1, 0.12)
-        line:SetHeight(1)
-        line:SetPoint("LEFT", h, "RIGHT", 8, 0)
-        line:SetPoint("RIGHT", o, "TOPLEFT", 16 + W, 0)
-        y = y - 18
+        closeCard()
+        y = y - 4
+        card = ns.Card(o, 12, y, W + 24, label)
+        y = y - 30
     end
 
     -- A text field: label at the left, the box on the same row. x/labelW/boxW for two per row.
@@ -844,7 +1059,7 @@ local function BuildSettings()
     -- A check box: label with a grey hint on the same line. col2 puts it in the second column.
     local function check(label, hint, get, set, col2, width)
         if col2 then y = y + 26 end
-        local cb = CreateFrame("CheckButton", nil, o, "UICheckButtonTemplate")
+        local cb = ns.CheckBox(o)
         cb:SetSize(26, 26)
         cb:SetPoint("TOPLEFT", o, "TOPLEFT", col2 and COL2 or (L - 4), y + 2)
         local name = o:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
@@ -880,10 +1095,10 @@ local function BuildSettings()
         function() return db().nearby end, function(v) ns.SetNearby(v) end, function() ns.OpenNearbySettings() end)
     module("Class icons on nameplates", "class, healers and KOS over enemy players",
         function() return db().plateIcons == true end, function(v) db().plateIcons = v; ns.UpdatePlates() end,
-        function() ns.OpenNearbySettings() end)
+        function() ns.OpenNearbySettings("plates") end)
     module("WANTED bounties", "shared with your guild and friends – reward and note",
         function() return db().wantedOn ~= false end, function(v) db().wantedOn = v end,
-        function() ns.OpenNearbySettings() end)
+        function() ns.OpenNearbySettings("kos") end)
     module("Alert on any enemy player", "phone + the red bar, outside instances",
         function() return db().enemyPlayers end, function(v) ns.SetEnemyPlayers(v) end, openAlerts)
     module("Attacked while idle or AFK", "phone alert",
@@ -1007,6 +1222,8 @@ local function BuildSettings()
     status:SetJustifyH("LEFT")
     status:SetJustifyV("TOP")
     status:SetSpacing(3)
+    y = y - 52
+    closeCard()
 
     local function OnShow()
         chips:Refresh()
@@ -1202,28 +1419,26 @@ local function BuildSettings()
     reset:SetPoint("LEFT", move, "RIGHT", 8, 0)
     y = y - 34
 
+    closeCard()
     alertsPage:SetScript("OnShow", OnShow)
     o:SetHeight(-y + 70)
     page.alerts = alertsPage
 
     settingsPage = page
+    ns.AddTab("main", page)
+    ns.AddTab("alerts", alertsPage)
+    -- Esc > Options > AddOns > WatchX: just a page with a button to WatchX's own window
+    local land = ns.BuildLanding()
     if Settings and Settings.RegisterCanvasLayoutCategory and Settings.RegisterAddOnCategory then
-        local ok, cat = pcall(Settings.RegisterCanvasLayoutCategory, page, "WatchX")
+        local ok, cat = pcall(Settings.RegisterCanvasLayoutCategory, land, "WatchX")
         if ok and cat then
             settingsCategory = cat
             pcall(Settings.RegisterAddOnCategory, cat)
         end
     elseif InterfaceOptions_AddCategory then
-        InterfaceOptions_AddCategory(page)
+        InterfaceOptions_AddCategory(land)
     end
-    ns.BuildNearbySettings()   -- "PvP" first, then the rest
-    alertsPage.parent = "WatchX"
-    if settingsCategory and Settings and Settings.RegisterCanvasLayoutSubcategory then
-        local ok, cat = pcall(Settings.RegisterCanvasLayoutSubcategory, settingsCategory, alertsPage, "Alerts & scan")
-        if ok and cat then page.alertsCat = cat end
-    elseif InterfaceOptions_AddCategory then
-        InterfaceOptions_AddCategory(alertsPage)
-    end
+    ns.BuildNearbySettings()
     ns.BuildLevelSettings()
     ns.BuildBuffSettings()
     ns.BuildRebuffSettings()
@@ -1397,7 +1612,7 @@ do
         f.search:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
         local x = 236
         for _, opt in ipairs({ { "near", "Near my level" }, { "zoneOnly", "This zone" }, { "watchedOnly", "Watched" } }) do
-            local cb = CreateFrame("CheckButton", nil, f, "UICheckButtonTemplate")
+            local cb = ns.CheckBox(f)
             cb:SetSize(24, 24)
             cb:SetPoint("TOPLEFT", f, "TOPLEFT", x, -34)
             local t = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
@@ -1938,42 +2153,48 @@ end
 
 -- ---------------------------------------------------------------- Nearby settings page (WatchX > Nearby)
 -- The Spy-like list is its own thing: its own page under WatchX.
-local nearbyPage, nearbyCategory
-
-function ns.OpenNearbySettings()
-    if nearbyCategory and Settings and Settings.OpenToCategory then
-        pcall(Settings.OpenToCategory, nearbyCategory:GetID())
-    elseif nearbyPage and InterfaceOptionsFrame_OpenToCategory then
-        pcall(InterfaceOptionsFrame_OpenToCategory, nearbyPage)
-        pcall(InterfaceOptionsFrame_OpenToCategory, nearbyPage)
-    else
-        ns.OpenSettings()
-    end
-end
+-- tab: "enemies" (the list), "plates", "kos" (KOS and bounties) or "avoid"
+function ns.OpenNearbySettings(tab) ns.OpenWindow(tab or "enemies") end
 
 function ns.BuildNearbySettings()
-    local page = CreateFrame("Frame", "WatchXNearbyOptions", UIParent)
-    page.name, page.parent = "PvP", "WatchX"
-    page:Hide()
-    local scroll = CreateFrame("ScrollFrame", nil, page, "UIPanelScrollFrameTemplate")
-    scroll:SetPoint("TOPLEFT", page, "TOPLEFT", 0, -4)
-    scroll:SetPoint("BOTTOMRIGHT", page, "BOTTOMRIGHT", -28, 4)
-    local o = CreateFrame("Frame", nil, scroll)
-    o:SetSize(600, 900)
-    scroll:SetScrollChild(o)
-    local L, W = 20, 560
-
-    local title = o:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-    title:SetPoint("TOPLEFT", o, "TOPLEFT", 16, -16)
-    title:SetText("PvP")
-    local sub = o:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    sub:SetPoint("LEFT", title, "RIGHT", 10, -1)
-    sub:SetText("the Enemies list, KOS, avoid list and nameplate icons")
-
-    local y = -50
-    local checks = {}
+    -- Four pages (PvP in the settings window): the Enemies list, nameplates, KOS & bounties, the avoid list. Each one
+    -- scrolls; its groups sit in boxes. The helpers below add to the current page "o" at "y".
+    local L, W = 26, 590      -- left edge, width (inside the boxes)
+    local CTRL = L + 210      -- where the controls of a value row start (a sound, a number)
+    local o, y, card
+    local checks, P = {}, {}
+    local function closeCard()
+        if card then card:Close(y); card = nil; y = y - 10 end
+    end
+    local function NewSub(key, globalName, titleText, subText)
+        closeCard()
+        if o then o:SetHeight(-y + 30) end
+        local page = CreateFrame("Frame", globalName, UIParent)
+        page:Hide()
+        local scroll = CreateFrame("ScrollFrame", nil, page, "UIPanelScrollFrameTemplate")
+        scroll:SetPoint("TOPLEFT", page, "TOPLEFT", 0, -4)
+        scroll:SetPoint("BOTTOMRIGHT", page, "BOTTOMRIGHT", -28, 4)
+        o = CreateFrame("Frame", nil, scroll)
+        o:SetSize(650, 900)
+        scroll:SetScrollChild(o)
+        local title = o:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+        title:SetPoint("TOPLEFT", o, "TOPLEFT", 16, -16)
+        title:SetText(titleText)
+        local sub = o:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+        sub:SetPoint("LEFT", title, "RIGHT", 10, -1)
+        sub:SetText(subText)
+        y = -46
+        page:SetScript("OnShow", function() ns.RefreshPvPOptions() end)
+        ns.AddTab(key, page)
+        return page
+    end
+    local function heading(text)
+        closeCard()
+        card = ns.Card(o, 12, y, W + 28, text)
+        y = y - 30
+    end
     local function check(label, hint, get, set)
-        local cb = CreateFrame("CheckButton", nil, o, "UICheckButtonTemplate")
+        local cb = ns.CheckBox(o)
         cb:SetSize(26, 26)
         cb:SetPoint("TOPLEFT", o, "TOPLEFT", L - 4, y + 2)
         local name = o:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
@@ -1986,144 +2207,35 @@ function ns.BuildNearbySettings()
             ns.RefreshUI()
         end)
         checks[#checks + 1] = cb
-        y = y - 28
+        y = y - 27
     end
-    check("Show the Enemies list", "the enemy players around you",
-        function() return db().nearby end, function(v) ns.SetNearby(v) end)
-    check("Stealth warning", "a card mid-screen when a player goes into stealth",
-        function() return db().stealthWarn ~= false end, function(v) db().stealthWarn = v end)
-    check("Sounds", "off: no sound for any of the warnings below",
-        function() return db().stealthSound ~= false end, function(v) db().stealthSound = v end)
-    check("New enemy card", "for every new enemy (Stealth and KOS always show)",
-        function() return db().newEnemyCard == true end, function(v) db().newEnemyCard = v end)
-    check("Attach under the mini bar", "they move and grow together",
-        function() return db().nearbyAttach ~= false end, function(v) db().nearbyAttach = v; ns.AttachNearby() end)
-    check("Warnings on top of the list", "off: top of the screen (Unlock to move)",
-        function() return db().warnDock == true end, function(v) db().warnDock = v end)
-    check("Ping and fps in the list's title", "ms and frames a second, coloured green / yellow / red",
-        function() return db().nearbyStats ~= false end, function(v) db().nearbyStats = v end)
-    check("Show the list when it's empty", "off: it only shows when enemies are around",
-        function() return db().nearbyShowEmpty == true end, function(v) db().nearbyShowEmpty = v end)
-    check("KOS alert", "a red card + sound when a KOS player shows up",
-        function() return db().kosAlert ~= false end, function(v) db().kosAlert = v end)
-    -- a sound for each: [ Raid warning v ] [>]  (click: the list to pick from; > plays it)
-    o.soundBtns = {}
-    ns.soundBtns = o.soundBtns   -- (for the tests)
-    for _, k in ipairs(ns.SOUND_KINDS) do
+    -- a row with a name and a value to step: Name ....... [-] 10 [+]  hint
+    local function stepper(label, hint, get, step)
         local lab = o:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-        lab:SetPoint("TOPLEFT", o, "TOPLEFT", L + 2, y - 4)
-        lab:SetText("Sound: " .. k.label)
-        local b = FlatButton(o, "", 140, 20)
-        b:SetPoint("TOPLEFT", o, "TOPLEFT", L + 190, y - 1)
-        function b.Paint()
-            local cur = ns.SoundChoice(k.kind)
-            SetButtonText(b, (cur == "off" and "|cff808080Off|r" or ns.SoundLabel(cur)) .. "  |cff999999v|r")
-        end
-        b:SetScript("OnClick", function(self) ns.ToggleSoundMenu(self, k.kind, b.Paint) end)
-        local play = FlatButton(o, ">", 22, 20, function() ns.TrySound(ns.SoundChoice(k.kind)) end)
-        play:SetPoint("LEFT", b, "RIGHT", 4, 0)
-        if k.hint then
+        lab:SetPoint("TOPLEFT", o, "TOPLEFT", L + 24, y - 4)
+        lab:SetText(label)
+        local val = o:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        local minus = FlatButton(o, "-", 24, 20, function() step(-1); val:SetText(get()) end)
+        minus:SetPoint("TOPLEFT", o, "TOPLEFT", CTRL, y - 1)
+        val:SetPoint("LEFT", minus, "RIGHT", 2, 0)
+        val:SetWidth(34)
+        local plus = FlatButton(o, "+", 24, 20, function() step(1); val:SetText(get()) end)
+        plus:SetPoint("LEFT", val, "RIGHT", 2, 0)
+        if hint then
             local h = o:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-            h:SetPoint("LEFT", play, "RIGHT", 8, 0)
-            h:SetText(k.hint)
+            h:SetPoint("LEFT", plus, "RIGHT", 10, 0)
+            h:SetText(hint)
         end
-        b.Paint()
-        o.soundBtns[#o.soundBtns + 1] = b
-        y = y - 26
-    end
-    y = y - 4
-    -- tell your party / guild what you spot
-    check("Tell my party / raid", "a line in party chat when you spot one of the ticked below",
-        function() return db().shareParty == true end, function(v) db().shareParty = v end)
-    check("Tell my guild", "the same in guild chat",
-        function() return db().shareGuild == true end, function(v) db().shareGuild = v end)
-    L = L + 24   -- (what to tell: indented under them)
-    check("Stealth", nil, function() return db().shareStealth ~= false end, function(v) db().shareStealth = v end)
-    check("Kill on sight", nil, function() return db().shareKOS ~= false end, function(v) db().shareKOS = v end)
-    check("WANTED", "with the reward", function() return db().shareWanted ~= false end, function(v) db().shareWanted = v end)
-    check("Every new enemy", "at most one line every 10 s", function() return db().shareAll == true end, function(v) db().shareAll = v end)
-    L = L - 24
-    check("Hide in dungeons", "off: faded",
-        function() return db().nearbyHideDungeon == true end, function(v) db().nearbyHideDungeon = v end)
-    check("Hide in raids", "off: faded",
-        function() return db().nearbyHideRaid == true end, function(v) db().nearbyHideRaid = v end)
-    check("Hide in battlegrounds", "and arenas · off: the list works there",
-        function() return db().nearbyNoBG ~= false end, function(v) db().nearbyNoBG = v end)
-    -- how many players the list shows: [-] 10 [+]
-    local maxLab = o:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    maxLab:SetPoint("TOPLEFT", o, "TOPLEFT", L + 2, y - 4)
-    maxLab:SetText("Max players shown")
-    local minus = FlatButton(o, "-", 22, 20, function()
-        db().nearbyMax = math.max(3, ns.NearbyMax() - 1); ns.RefreshUI(); o.maxVal:SetText(ns.NearbyMax())
-    end)
-    minus:SetPoint("TOPLEFT", o, "TOPLEFT", L + 150, y - 1)
-    o.maxVal = o:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    o.maxVal:SetPoint("LEFT", minus, "RIGHT", 6, 0)
-    o.maxVal:SetWidth(22)
-    local plus = FlatButton(o, "+", 22, 20, function()
-        db().nearbyMax = math.min(ns.NB_ROWS, ns.NearbyMax() + 1); ns.RefreshUI(); o.maxVal:SetText(ns.NearbyMax())
-    end)
-    plus:SetPoint("LEFT", o.maxVal, "RIGHT", 6, 0)
-    local maxHint = o:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    maxHint:SetPoint("LEFT", plus, "RIGHT", 8, 0)
-    maxHint:SetText("3 – 20 · the newest first")
-    y = y - 28
-    -- how long a player stays after he was last seen: [-] 5 [+] min
-    local keepLab = o:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    keepLab:SetPoint("TOPLEFT", o, "TOPLEFT", L + 2, y - 4)
-    keepLab:SetText("Keep players for")
-    local kminus = FlatButton(o, "-", 22, 20, function()
-        db().nearbyKeep = math.max(1, ns.NearbyKeepMin() - 1); ns.RefreshUI(); o.keepVal:SetText(ns.NearbyKeepMin())
-    end)
-    kminus:SetPoint("TOPLEFT", o, "TOPLEFT", L + 150, y - 1)
-    o.keepVal = o:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    o.keepVal:SetPoint("LEFT", kminus, "RIGHT", 6, 0)
-    o.keepVal:SetWidth(22)
-    local kplus = FlatButton(o, "+", 22, 20, function()
-        db().nearbyKeep = math.min(30, ns.NearbyKeepMin() + 1); ns.RefreshUI(); o.keepVal:SetText(ns.NearbyKeepMin())
-    end)
-    kplus:SetPoint("LEFT", o.keepVal, "RIGHT", 6, 0)
-    local keepHint = o:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    keepHint:SetPoint("LEFT", kplus, "RIGHT", 8, 0)
-    keepHint:SetText("minutes after last seen (bright the first 30 s)")
-    y = y - 28
-    y = y - 8
-
-    local ex = Button(o, "Show example", 130, 24, function() HideBlizzardMenus(); ns.NearbyTest() end)
-    ex:SetPoint("TOPLEFT", o, "TOPLEFT", L, y)
-    local mv = Button(o, "Move / resize", 130, 24, function()
-        HideBlizzardMenus()
-        if not db().nearby then ns.SetNearby(true) end
-        ns.StartMove()
-        if panel and not panel:IsShown() then ns.TogglePanel() end   -- its Lock button locks them again
-    end)
-    mv:SetPoint("LEFT", ex, "RIGHT", 8, 0)
-    local clr = Button(o, "Clear list", 110, 24, function() wipe(ns.nearby); ns.RefreshUI() end)
-    clr:SetPoint("LEFT", mv, "RIGHT", 8, 0)
-    local hist = Button(o, "History...", 110, 24, function() HideBlizzardMenus(); ns.ShowHistory() end)
-    hist:SetPoint("LEFT", clr, "RIGHT", 8, 0)
-    y = y - 40
-
-    -- KOS: players and guilds
-    local function heading(text)
-        local h = o:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-        h:SetPoint("TOPLEFT", o, "TOPLEFT", 16, y)
-        h:SetText(text)
-        h:SetTextColor(ACCENT[1], ACCENT[2], ACCENT[3])
-        local line = o:CreateTexture(nil, "ARTWORK")
-        line:SetColorTexture(ACCENT[1], ACCENT[2], ACCENT[3], 0.3)
-        line:SetHeight(1)
-        line:SetPoint("LEFT", h, "RIGHT", 8, 0)
-        line:SetPoint("RIGHT", o, "TOPLEFT", L + W, 0)
-        y = y - 20
+        y = y - 27
+        return function() val:SetText(get()) end
     end
     local function addRow(label, hint, onAdd, targetText, onTarget)
         local lab = o:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-        lab:SetPoint("TOPLEFT", o, "TOPLEFT", L, y - 4)
+        lab:SetPoint("TOPLEFT", o, "TOPLEFT", L + 2, y - 4)
         lab:SetText(label)
         local eb = CreateFrame("EditBox", nil, o, "InputBoxTemplate")
-        eb:SetSize(190, 20)
-        eb:SetPoint("TOPLEFT", o, "TOPLEFT", L + 100, y)
+        eb:SetSize(220, 20)
+        eb:SetPoint("TOPLEFT", o, "TOPLEFT", L + 118, y)
         eb:SetAutoFocus(false)
         eb:SetMaxLetters(48)
         eb.hint = eb:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
@@ -2140,13 +2252,140 @@ function ns.BuildNearbySettings()
         eb:SetScript("OnEditFocusGained", function(self) self.hint:Hide() end)
         eb:SetScript("OnEditFocusLost", function(self) self.hint:SetShown(self:GetText() == "") end)
         local add = Button(o, "Add", 60, 22, go)
-        add:SetPoint("LEFT", eb, "RIGHT", 6, 0)
-        local tb = Button(o, targetText, 130, 22, onTarget)
+        add:SetPoint("LEFT", eb, "RIGHT", 8, 0)
+        local tb = Button(o, targetText, 140, 22, onTarget)
         tb:SetPoint("LEFT", add, "RIGHT", 6, 0)
-        y = y - 28
+        y = y - 30
     end
+    local function note(text, x)
+        local fs = o:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+        fs:SetPoint("TOPLEFT", o, "TOPLEFT", x or (L + 2), y - 2)
+        fs:SetWidth(W - 150)
+        fs:SetJustifyH("LEFT")
+        fs:SetText(text)
+        return fs
+    end
+
+    -- ===== Enemies list
+    NewSub("enemies", "WatchXNearbyOptions", "Enemies list", "the enemy players around you, and the warnings")
+    heading("THE LIST")
+    check("Show the Enemies list", "the enemy players around you",
+        function() return db().nearby end, function(v) ns.SetNearby(v) end)
+    check("Attach under the mini bar", "they move and grow together",
+        function() return db().nearbyAttach ~= false end, function(v) db().nearbyAttach = v; ns.AttachNearby() end)
+    check("Show the list when it's empty", "off: it only shows when enemies are around",
+        function() return db().nearbyShowEmpty == true end, function(v) db().nearbyShowEmpty = v end)
+    check("Ping and fps in the list's title", "green / yellow / red",
+        function() return db().nearbyStats ~= false end, function(v) db().nearbyStats = v end)
+    P.max = stepper("Max players shown", "3 – 20 · the newest first", function() return ns.NearbyMax() end, function(d)
+        db().nearbyMax = math.max(3, math.min(ns.NB_ROWS, ns.NearbyMax() + d)); ns.RefreshUI()
+    end)
+    P.keep = stepper("Keep players for", "minutes after last seen", function() return ns.NearbyKeepMin() end, function(d)
+        db().nearbyKeep = math.max(1, math.min(30, ns.NearbyKeepMin() + d)); ns.RefreshUI()
+    end)
+    y = y - 4
+    local ex = Button(o, "Show example", 130, 24, function() HideBlizzardMenus(); ns.NearbyTest() end)
+    ex:SetPoint("TOPLEFT", o, "TOPLEFT", L, y)
+    local mv = Button(o, "Move / resize", 130, 24, function()
+        HideBlizzardMenus()
+        if not db().nearby then ns.SetNearby(true) end
+        ns.StartMove()
+        if panel and not panel:IsShown() then ns.TogglePanel() end   -- its Lock button locks them again
+    end)
+    mv:SetPoint("LEFT", ex, "RIGHT", 8, 0)
+    local clr = Button(o, "Clear list", 110, 24, function() wipe(ns.nearby); ns.RefreshUI() end)
+    clr:SetPoint("LEFT", mv, "RIGHT", 8, 0)
+    local hist = Button(o, "History...", 110, 24, function() HideBlizzardMenus(); ns.ShowHistory() end)
+    hist:SetPoint("LEFT", clr, "RIGHT", 8, 0)
+    y = y - 34
+
+    heading("WHERE")
+    check("Hide in dungeons", "off: faded",
+        function() return db().nearbyHideDungeon == true end, function(v) db().nearbyHideDungeon = v end)
+    check("Hide in raids", "off: faded",
+        function() return db().nearbyHideRaid == true end, function(v) db().nearbyHideRaid = v end)
+    check("Hide in battlegrounds", "and arenas · off: the list works there",
+        function() return db().nearbyNoBG ~= false end, function(v) db().nearbyNoBG = v end)
+
+    heading("WARNINGS")
+    check("Stealth warning", "a card mid-screen when a player goes into stealth",
+        function() return db().stealthWarn ~= false end, function(v) db().stealthWarn = v end)
+    check("KOS alert", "a red card + sound when a KOS player shows up",
+        function() return db().kosAlert ~= false end, function(v) db().kosAlert = v end)
+    check("New enemy card", "for every new enemy (Stealth and KOS always show)",
+        function() return db().newEnemyCard == true end, function(v) db().newEnemyCard = v end)
+    check("Warnings on top of the list", "off: top of the screen (Unlock to move)",
+        function() return db().warnDock == true end, function(v) db().warnDock = v end)
+
+    heading("SOUNDS")
+    check("Sounds", "off: no sound for any of these",
+        function() return db().stealthSound ~= false end, function(v) db().stealthSound = v end)
+    -- a sound for each: [ Raid warning v ] [>]  (click: the list to pick from; > plays it)
+    P.soundBtns = {}
+    ns.soundBtns = P.soundBtns   -- (for the tests)
+    for _, k in ipairs(ns.SOUND_KINDS) do
+        local lab = o:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+        lab:SetPoint("TOPLEFT", o, "TOPLEFT", L + 24, y - 4)
+        lab:SetText(k.label)
+        local b = FlatButton(o, "", 150, 20)
+        b:SetPoint("TOPLEFT", o, "TOPLEFT", CTRL, y - 1)
+        function b.Paint()
+            local cur = ns.SoundChoice(k.kind)
+            SetButtonText(b, (cur == "off" and "|cff808080Off|r" or ns.SoundLabel(cur)) .. "  |cff999999v|r")
+        end
+        b:SetScript("OnClick", function(self) ns.ToggleSoundMenu(self, k.kind, b.Paint) end)
+        local play = FlatButton(o, ">", 24, 20, function() ns.TrySound(ns.SoundChoice(k.kind)) end)
+        play:SetPoint("LEFT", b, "RIGHT", 4, 0)
+        play:SetScript("OnEnter", function(self) Tip(self, "Play it", k.label) end)
+        play:SetScript("OnLeave", GameTooltip_Hide)
+        if k.hint then
+            local h = o:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+            h:SetPoint("LEFT", play, "RIGHT", 10, 0)
+            h:SetText(k.hint)
+        end
+        b.Paint()
+        P.soundBtns[#P.soundBtns + 1] = b
+        y = y - 27
+    end
+
+    heading("TELL YOUR GROUP")
+    check("Tell my party / raid", "a line in party chat when you spot one of the ticked below",
+        function() return db().shareParty == true end, function(v) db().shareParty = v end)
+    check("Tell my guild", "the same in guild chat",
+        function() return db().shareGuild == true end, function(v) db().shareGuild = v end)
+    L = L + 26   -- (what to tell: indented under them)
+    check("Stealth", nil, function() return db().shareStealth ~= false end, function(v) db().shareStealth = v end)
+    check("Kill on sight", nil, function() return db().shareKOS ~= false end, function(v) db().shareKOS = v end)
+    check("WANTED", "with the reward", function() return db().shareWanted ~= false end, function(v) db().shareWanted = v end)
+    check("Every new enemy", "at most one line every 10 s", function() return db().shareAll == true end, function(v) db().shareAll = v end)
+    L = L - 26
+    note("Right-click a row in the list to announce one player by hand: say, party, raid or guild.")
+    y = y - 20
+
+    heading("HOW IT WORKS")
+    local help = o:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    help:SetPoint("TOPLEFT", o, "TOPLEFT", L, y)
+    help:SetWidth(W)
+    help:SetJustifyH("LEFT")
+    help:SetSpacing(4)
+    help:SetText(table.concat({
+        "|cffaaaaaa•|r  Every enemy player your nameplates, target or mouseover show is listed, newest first.",
+        "|cffaaaaaa•|r  Bright row = near now (last 30 seconds). Dim row = seen in the last few minutes.",
+        "|cffaaaaaa•|r  |cffffd100Click a row|r to target that player.  |cffff5050> you|r = has you targeted.",
+        "|cffaaaaaa•|r  |cff40ff60+|r before a name = proven healer (see Nameplates).",
+        "|cffaaaaaa•|r  |cffd8a0ffSTEALTH|r = went into Stealth, Vanish, Prowl or Shadowmeld – and the warning pops up.",
+        "|cffaaaaaa•|r  Needs |cffffd100enemy nameplates|r (key V). In dungeons and raids it's faded (or hidden, if ticked).",
+        "|cffaaaaaa•|r  |cffffd100Right-click a row|r: KOS, avoid, KOS the guild, announce them, a note.",
+        "|cffaaaaaa•|r  |cffffd100History|r: everyone you've seen, with kills, deaths, last seen and notes.",
+        "|cffaaaaaa•|r  Nothing goes to your phone – that's the WatchX page (Any enemy player).",
+        "|cff808080/wx enemies on · off · test|r",
+    }, "\n"))
+    y = y - (help:GetStringHeight() or 200) - 12
+
+    -- ===== Nameplates
+    NewSub("plates", "WatchXPlateOptions", "Nameplates", "icons over players' heads – works without the list")
     heading("NAMEPLATE ICONS")
-    check("Class icon over enemy players", "on their nameplates · works without the list",
+    check("Class icon over enemy players", "on their nameplates",
         function() return db().plateIcons == true end, function(v) db().plateIcons = v; ns.UpdatePlates() end)
     check("Class icon over friendly players", "needs friendly nameplates (Shift+V)",
         function() return db().plateFriendly == true end, function(v) db().plateFriendly = v; ns.UpdatePlates() end)
@@ -2154,27 +2393,15 @@ function ns.BuildNearbySettings()
         function() return db().plateHealer ~= false end, function(v) db().plateHealer = v; ns.UpdatePlates() end)
     check("KOS mark", "a red ring and a skull on KOS players and guilds",
         function() return db().plateKOS ~= false end, function(v) db().plateKOS = v; ns.UpdatePlates() end)
-    -- the icon's size: [-] 22 [+]
-    local sizeLab = o:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    sizeLab:SetPoint("TOPLEFT", o, "TOPLEFT", L + 2, y - 4)
-    sizeLab:SetText("Icon size")
-    local function setSize(v)
-        db().plateSize = math.max(12, math.min(40, v))
-        o.sizeVal:SetText(ns.PlateSize())
-        ns.UpdatePlates()
-    end
-    local sminus = FlatButton(o, "-", 22, 20, function() setSize(ns.PlateSize() - 2) end)
-    sminus:SetPoint("TOPLEFT", o, "TOPLEFT", L + 150, y - 1)
-    o.sizeVal = o:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    o.sizeVal:SetPoint("LEFT", sminus, "RIGHT", 6, 0)
-    o.sizeVal:SetWidth(22)
-    local splus = FlatButton(o, "+", 22, 20, function() setSize(ns.PlateSize() + 2) end)
-    splus:SetPoint("LEFT", o.sizeVal, "RIGHT", 6, 0)
-    local sizeHint = o:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    sizeHint:SetPoint("LEFT", splus, "RIGHT", 8, 0)
-    sizeHint:SetText("12 – 40 · normal 22")
-    y = y - 28
-    y = y - 10
+    P.size = stepper("Icon size", "12 – 40 · normal 22", function() return ns.PlateSize() end, function(d)
+        db().plateSize = math.max(12, math.min(40, ns.PlateSize() + d * 2)); ns.UpdatePlates()
+    end)
+    heading("HEALERS")
+    note("Friendly players: their talents (inspected). Enemies: a healing-talent spell like Riptide or Wild Growth.")
+    y = y - 22
+
+    -- ===== KOS & bounties
+    local kosPage = NewSub("kos", "WatchXKOSOptions", "KOS & bounties", "kill on sight, and WANTED – shared with your guild and friends")
     heading("KILL ON SIGHT")
     addRow("KOS player", "Name (e.g. Shixa Nightblade)", function(t)
         local key = ns.KeyFromName(t)
@@ -2192,14 +2419,15 @@ function ns.BuildNearbySettings()
         if type(g) == "string" and g ~= "" then ns.SetGuildKOS(g, true) else ns.Print("Target a player in a guild first.") end
     end)
     -- the KOS guilds and players as small chips with an ×
-    local chips, CH, CW = {}, 20, 180
-    local chipTop = y
+    local kosO = o
+    local chips, CH, CW = {}, 22, 190
+    local chipTop = y - 2
     local function chip(i)
         if chips[i] then return chips[i] end
-        local c = CreateFrame("Button", nil, o)
-        c:SetSize(CW, CH - 2)
+        local c = CreateFrame("Button", nil, kosO)
+        c:SetSize(CW, CH - 3)
         local col, row = (i - 1) % 3, math.floor((i - 1) / 3)
-        c:SetPoint("TOPLEFT", o, "TOPLEFT", L + col * (CW + 6), chipTop - row * CH)
+        c:SetPoint("TOPLEFT", kosO, "TOPLEFT", L + col * (CW + 6), chipTop - row * CH)
         local bg = c:CreateTexture(nil, "BACKGROUND")
         bg:SetAllPoints()
         bg:SetColorTexture(0.16, 0.06, 0.06, 0.95)
@@ -2222,8 +2450,8 @@ function ns.BuildNearbySettings()
         return c
     end
     local CHIP_MAX = 18
-    local kosEmpty = o:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    kosEmpty:SetPoint("TOPLEFT", o, "TOPLEFT", L + 2, chipTop - 4)
+    local kosEmpty = kosO:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    kosEmpty:SetPoint("TOPLEFT", kosO, "TOPLEFT", L + 2, chipTop - 4)
     kosEmpty:SetText("No KOS yet – right-click a player in the Enemies list, or add one above.")
     local function RefreshKOS()
         local items = {}
@@ -2260,11 +2488,9 @@ function ns.BuildNearbySettings()
         end
         kosEmpty:SetShown(#items == 0)
     end
-    ns.RefreshKOSChips = function() if page:IsShown() then RefreshKOS() end end
-    y = chipTop - math.ceil(CHIP_MAX / 3) * CH - 12
+    ns.RefreshKOSChips = function() if kosPage:IsShown() then RefreshKOS() end end
+    y = chipTop - math.ceil(CHIP_MAX / 3) * CH - 6
 
-    -- WANTED: bounties shared with the guild and friends
-    y = y - 6
     heading("WANTED – BOUNTIES")
     check("Share with my guild", "send and get bounties in guild",
         function() return db().wantedGuild ~= false end, function(v) db().wantedGuild = v end)
@@ -2272,17 +2498,18 @@ function ns.BuildNearbySettings()
         function() return db().wantedFriends ~= false end, function(v) db().wantedFriends = v end)
     check("Card + sound when one shows up", nil,
         function() return db().wantedAlert ~= false end, function(v) db().wantedAlert = v end)
-    check("Announce my bounties in guild chat", "posted, claimed (by whom, where) and paid – with the reward",
+    check("Announce my bounties in guild chat", "posted, claimed and paid – with the reward",
         function() return db().wantedAnnounce == true end, function(v) db().wantedAnnounce = v end)
+    y = y - 4
     addRow("Bounty", "Name: 1g x10 note", function(t)
         local name, rest = t:match("^([^:]+):%s*(.*)$")
         name = ns.Trim(name or t)
-        local copper, note = ns.ParseMoney(rest or "")
-        local kills = note:match("^[xX](%d+)%s*")   -- "1g x10 ninja": 1g a kill, up to ten kills
-        if kills then note = note:gsub("^[xX]%d+%s*", "") end
+        local copper, noteText = ns.ParseMoney(rest or "")
+        local kills = noteText:match("^[xX](%d+)%s*")   -- "1g x10 ninja": 1g a kill, up to ten kills
+        if kills then noteText = noteText:gsub("^[xX]%d+%s*", "") end
         local key = ns.KeyFromName(name)
         if not key then ns.Print("That isn't a player name: " .. name) return false end
-        return ns.SetWanted(key, name, copper, note, nil, tonumber(kills)) ~= false
+        return ns.SetWanted(key, name, copper, noteText, nil, tonumber(kills)) ~= false
     end, "Bounty on target", function()
         local key, full
         if UnitExists("target") and UnitIsPlayer("target") then key, full = ns.PlayerKey("target") end
@@ -2290,25 +2517,23 @@ function ns.BuildNearbySettings()
         ns.EnemyRecord(key, full)
         ns.ShowBounty(key, full)
     end)
-    local wantedList = Button(o, "Wanted list...", 110, 22, function() ns.ShowHistory("wanted") end)
-    wantedList:SetPoint("TOPLEFT", o, "TOPLEFT", L + W - 110, y)
-    local wantedHelp = o:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    wantedHelp:SetPoint("TOPLEFT", o, "TOPLEFT", L + 2, y - 4)
-    wantedHelp:SetWidth(W - 130)
-    wantedHelp:SetJustifyH("LEFT")
-    wantedHelp:SetText("A kill by you or your group claims it, and everyone hears who did. Pay the gold by hand.")
-    y = y - 34
+    local wantedList = Button(o, "Wanted list...", 120, 22, function() ns.ShowHistory("wanted") end)
+    wantedList:SetPoint("TOPLEFT", o, "TOPLEFT", L + W - 122, y)
+    note("A kill by you or your group claims it, and everyone hears who did. Pay the gold by hand. "
+        .. "Your own bounty can't be claimed by you.")
+    y = y - 36
 
-    -- avoid list: a mark on the same players (and the same notes) as KOS – any player, not just enemies
-    y = y - 6
+    -- ===== Avoid list: a mark on the same players (and the same notes) as KOS – any player, not just enemies
+    NewSub("avoid", "WatchXAvoidOptions", "Avoid list", "players you don't want to group with – any player, not just enemies")
     heading("AVOID LIST")
     check("Warn when they invite you or are in your group", "mid-screen + sound",
         function() return db().avoidGroup ~= false end, function(v) db().avoidGroup = v end)
     check("Mark their chat lines", "a red [Avoid] in front: say, yell, whispers, channels, group, guild",
         function() return db().avoidChat ~= false end, function(v) db().avoidChat = v end)
+    y = y - 4
     addRow("Avoid player", "Name: note (Bob Smith: ninja looter)", function(t)
-        local name, note = t:match("^([^:]+):%s*(.*)$")
-        if not ns.SetAvoid(name or t, true, note) then ns.Print("That isn't a player name: " .. (name or t)) return false end
+        local name, noteText = t:match("^([^:]+):%s*(.*)$")
+        if not ns.SetAvoid(name or t, true, noteText) then ns.Print("That isn't a player name: " .. (name or t)) return false end
         if ns.RefreshAvoidCount then ns.RefreshAvoidCount() end
     end, "Add target", function()
         local key, full
@@ -2319,58 +2544,26 @@ function ns.BuildNearbySettings()
         StaticPopup_Show("WATCHX_NOTE", full, nil, key)   -- type the note right away
         if ns.RefreshAvoidCount then ns.RefreshAvoidCount() end
     end)
-    local avoidCount = o:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    avoidCount:SetPoint("TOPLEFT", o, "TOPLEFT", L + 2, y - 4)
-    local avoidList = Button(o, "Avoid list...", 110, 22, function() ns.ShowHistory("avoid") end)
-    avoidList:SetPoint("TOPLEFT", o, "TOPLEFT", L + W - 110, y)
+    local avoidList = Button(o, "Avoid list...", 120, 22, function() ns.ShowHistory("avoid") end)
+    avoidList:SetPoint("TOPLEFT", o, "TOPLEFT", L + W - 122, y)
+    local avoidCount = note("")
     ns.RefreshAvoidCount = function()
         local n = 0
         for _, r in pairs(db().enemies) do if r.avoid then n = n + 1 end end
         avoidCount:SetText(n == 0 and "Nobody yet – right-click a player in the Enemies list, or add one above."
             or (n .. (n == 1 and " player" or " players") .. " on your avoid list. Their notes are the same notes as in History."))
     end
-    y = y - 34
+    y = y - 36
+    closeCard()
+    o:SetHeight(-y + 30)
 
-    local help = o:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    help:SetPoint("TOPLEFT", o, "TOPLEFT", L, y)
-    help:SetWidth(W)
-    help:SetJustifyH("LEFT")
-    help:SetSpacing(4)
-    help:SetText(table.concat({
-        "|cffffd100HOW IT WORKS|r",
-        "|cffaaaaaa•|r  Every enemy player your nameplates, target or mouseover show is listed, newest first.",
-        "|cffaaaaaa•|r  Bright row = near now (last 30 seconds). Dim row = seen in the last few minutes.",
-        "|cffaaaaaa•|r  |cffffd100Click a row|r to target that player.  |cffff5050> you|r = has you targeted.",
-        "|cffaaaaaa•|r  |cff40ff60+|r before a name = proven healer (see Nameplate icons above).",
-        "|cffaaaaaa•|r  |cffd8a0ffSTEALTH|r = went into Stealth, Vanish, Prowl or Shadowmeld – and the warning pops up.",
-        "|cffaaaaaa•|r  The warnings sit on top of the list: |cffd8a0ffStealthed player|r and |cffff5959Enemy player detected|r.",
-        "|cffaaaaaa•|r  Needs |cffffd100enemy nameplates|r (key V). In dungeons and raids it's faded (or hidden, if ticked).",
-        "|cffaaaaaa•|r  |cffffd100Right-click a row|r: KOS, avoid, KOS the guild, announce them (say, party, guild), a note. |cffff3030KOS|r players get a red card.",
-        "|cffaaaaaa•|r  |cffff8040Avoid|r = people you don't want to play with (any player): tooltip, group warning, [Avoid] in chat.",
-        "|cffaaaaaa•|r  |cffffd100Nameplate icons|r: the class over each player, |cff40ff60+|r = proven healer, |cffff3030red ring + skull|r = KOS.",
-        "|cffaaaaaa•|r  Friendly: their talents (inspected). Enemies: a healing-talent spell like Riptide or Wild Growth.",
-        "|cffaaaaaa•|r  |cffffd100History|r: everyone you've seen, with kills, deaths, last seen and notes.",
-        "|cffaaaaaa•|r  Nothing goes to your phone – that's the WatchX page (Any enemy player).",
-        "",
-        "|cff808080/wx enemies on · off · test|r",
-    }, "\n"))
-
-    page:SetScript("OnShow", function()
+    -- what every PvP page shows is read again when one opens (a profile switch may have changed it)
+    function ns.RefreshPvPOptions()
         for _, cb in ipairs(checks) do cb:SetChecked(cb.get()) end
-        for _, b in ipairs(o.soundBtns) do b.Paint() end   -- (a profile switch may have changed them)
-        o.maxVal:SetText(ns.NearbyMax())
-        o.keepVal:SetText(ns.NearbyKeepMin())
-        o.sizeVal:SetText(ns.PlateSize())
+        for _, b in ipairs(P.soundBtns) do b.Paint() end
+        P.max(); P.keep(); P.size()
         RefreshKOS()
         ns.RefreshAvoidCount()
-    end)
-    o:SetHeight(-y + (help:GetStringHeight() or 300) + 30)   -- the help text in full, for the scroll bar
-    nearbyPage = page
-    if settingsCategory and Settings and Settings.RegisterCanvasLayoutSubcategory then
-        local ok, cat = pcall(Settings.RegisterCanvasLayoutSubcategory, settingsCategory, page, "PvP")
-        if ok and cat then nearbyCategory = cat end
-    elseif InterfaceOptions_AddCategory then
-        InterfaceOptions_AddCategory(page)
     end
 end
 
@@ -3253,6 +3446,7 @@ function ns.StartMove()
     if not mini then return end
     if InCombatLockdown() then ns.Print("Not in combat – unlock the bars when the fight is over.") return end
     moving = true
+    if ns.CloseWindow then ns.CloseWindow() end   -- (the settings window would be in the way)
     if ns.ShowGrid then ns.ShowGrid(true) end
     mini:SetFrameStrata("DIALOG")
     mini:EnableMouseWheel(true)
@@ -4971,7 +5165,7 @@ local function RefreshUIInner()
     if ns.kosDirty then   -- the PvP page's KOS and avoid lists: only when they changed (they scan every player)
         ns.kosDirty = nil
         if ns.RefreshKOSChips then ns.RefreshKOSChips() end
-        if ns.RefreshAvoidCount and nearbyPage and nearbyPage:IsShown() then ns.RefreshAvoidCount() end
+        if ns.RefreshAvoidCount then ns.RefreshAvoidCount() end
     end
     if ns.historyDirty then ns.historyDirty = nil; ns.RefreshHistory() end   -- KOS / avoid / forget changed
     local wasShown = TargetShown()
@@ -6724,17 +6918,8 @@ do (function()
 end)() end
 
 -- Settings > WatchX > XP boosts
-local levelPage, levelCategory
-function ns.OpenLevelSettings()
-    if levelCategory and Settings and Settings.OpenToCategory then
-        pcall(Settings.OpenToCategory, levelCategory:GetID())
-    elseif levelPage and InterfaceOptionsFrame_OpenToCategory then
-        pcall(InterfaceOptionsFrame_OpenToCategory, levelPage)
-        pcall(InterfaceOptionsFrame_OpenToCategory, levelPage)
-    else
-        ns.OpenSettings()
-    end
-end
+local levelPage
+function ns.OpenLevelSettings() ns.OpenWindow("level") end
 
 function ns.BuildLevelSettings()
     local page = CreateFrame("Frame", "WatchXLevelOptions", UIParent)
@@ -6749,7 +6934,7 @@ function ns.BuildLevelSettings()
     sub:SetText("what gives you extra XP, and what you're missing  ·  until level " .. ns.MaxLevel())
     local y, checks = -50, {}
     local function check(label, hint, get, set)
-        local cb = CreateFrame("CheckButton", nil, page, "UICheckButtonTemplate")
+        local cb = ns.CheckBox(page)
         cb:SetSize(26, 26)
         cb:SetPoint("TOPLEFT", page, "TOPLEFT", L - 4, y + 2)
         local name = page:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
@@ -6825,27 +7010,13 @@ function ns.BuildLevelSettings()
     }, "\n"))
     page:SetScript("OnShow", function() for _, cb in ipairs(checks) do cb:SetChecked(cb.get()) end end)
     levelPage = page
-    if settingsCategory and Settings and Settings.RegisterCanvasLayoutSubcategory then
-        local ok, cat = pcall(Settings.RegisterCanvasLayoutSubcategory, settingsCategory, page, "XP boosts")
-        if ok and cat then levelCategory = cat end
-    elseif InterfaceOptions_AddCategory then
-        InterfaceOptions_AddCategory(page)
-    end
+    ns.AddTab("level", page)
 end
 
 do   -- (its own block: UI.lua is near Lua's 200-locals limit)
 -- Settings > WatchX > Buff warnings
-local buffPage, buffCategory
-function ns.OpenBuffSettings()
-    if buffCategory and Settings and Settings.OpenToCategory then
-        pcall(Settings.OpenToCategory, buffCategory:GetID())
-    elseif buffPage and InterfaceOptionsFrame_OpenToCategory then
-        pcall(InterfaceOptionsFrame_OpenToCategory, buffPage)
-        pcall(InterfaceOptionsFrame_OpenToCategory, buffPage)
-    else
-        ns.OpenSettings()
-    end
-end
+local buffPage
+function ns.OpenBuffSettings() ns.OpenWindow("buffs") end
 
 local BUFF_SOON = { 0, 10, 15, 30, 60, 120, 300, 600 }
 local BUFF_LIST_ROWS = 12   -- two columns of 6
@@ -6863,7 +7034,7 @@ function ns.BuildBuffSettings()
     local y, checks = -46, {}
     local Refresh
     local function check(label, hint, get, set)
-        local cb = CreateFrame("CheckButton", nil, page, "UICheckButtonTemplate")
+        local cb = ns.CheckBox(page)
         cb:SetSize(26, 26)
         cb:SetPoint("TOPLEFT", page, "TOPLEFT", L - 4, y + 2)
         local name = page:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
@@ -7101,12 +7272,7 @@ function ns.BuildBuffSettings()
     page:SetScript("OnShow", function() Refresh() end)
     page:SetScript("OnHide", function() if pick then pick:Hide() end end)
     buffPage = page
-    if settingsCategory and Settings and Settings.RegisterCanvasLayoutSubcategory then
-        local ok, cat = pcall(Settings.RegisterCanvasLayoutSubcategory, settingsCategory, page, "Buff warnings")
-        if ok and cat then buffCategory = cat end
-    elseif InterfaceOptions_AddCategory then
-        InterfaceOptions_AddCategory(page)
-    end
+    ns.AddTab("buffs", page)
 end
 end
 
@@ -7669,12 +7835,7 @@ do (function()
 
     -- ---- the settings page
     local page, cat
-    function ns.OpenRebuffSettings()
-        if cat and Settings and Settings.OpenToCategory then pcall(Settings.OpenToCategory, cat:GetID())
-        elseif page and InterfaceOptionsFrame_OpenToCategory then
-            pcall(InterfaceOptionsFrame_OpenToCategory, page); pcall(InterfaceOptionsFrame_OpenToCategory, page)
-        else ns.OpenSettings() end
-    end
+    function ns.OpenRebuffSettings() ns.OpenWindow("rebuff") end
     function ns.AddRebuff(text)
         text = tostring(text or ""):match("^%s*(.-)%s*$")
         if text == "" then return false end
@@ -7732,7 +7893,7 @@ do (function()
         local y, checks = -50, {}
         local Refresh
         local function check(label, hint, get, set)
-            local cb = CreateFrame("CheckButton", nil, page, "UICheckButtonTemplate")
+            local cb = ns.CheckBox(page)
             cb:SetSize(26, 26)
             cb:SetPoint("TOPLEFT", page, "TOPLEFT", L - 4, y + 2)
             local name = page:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
@@ -7892,12 +8053,7 @@ do (function()
         end
         page:SetScript("OnShow", function() Refresh() end)
         ns.RebuffSettingsRefresh = function() if page:IsShown() then Refresh() end end
-        if settingsCategory and Settings and Settings.RegisterCanvasLayoutSubcategory then
-            local ok, c = pcall(Settings.RegisterCanvasLayoutSubcategory, settingsCategory, page, "Rebuff icons")
-            if ok and c then cat = c end
-        elseif InterfaceOptions_AddCategory then
-            InterfaceOptions_AddCategory(page)
-        end
+        ns.AddTab("rebuff", page)
     end
 end)() end
 
@@ -8082,7 +8238,7 @@ do (function()
         win.opts = { settings = true, enemies = true, secrets = false }
         local y = -40
         local function check(key, label, hint)
-            local cb = CreateFrame("CheckButton", nil, win, "UICheckButtonTemplate")
+            local cb = ns.CheckBox(win)
             cb:SetSize(24, 24)
             cb:SetPoint("TOPLEFT", 10, y)
             local t = win:CreateFontString(nil, "OVERLAY", "GameFontHighlight")

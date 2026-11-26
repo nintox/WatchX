@@ -29,6 +29,7 @@ LEVELING
   buff warnings, rebuff icons (click to cast the buff you're missing). Profiles (one per character),
   export / import of everything (/wx export).
 - Sizes: + / - in the settings (SIZE), or /wx size 150 for every bar at once.
+- Settings: WatchX's own window (/wx settings), with pages for General, PvP and Leveling.
 
 INSTALL
 1. CurseForge app: search for WatchX. Or by hand: put the "WatchX" folder in

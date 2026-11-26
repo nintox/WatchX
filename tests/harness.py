@@ -65,7 +65,7 @@ function methods:GetLineHeight() return 12 end
 function methods:GetFont() return "Fonts\\FRIZQT__.TTF", 12, "" end
 function methods:SetAttribute(k,v) self.__attrs[k]=v end function methods:GetAttribute(k) return self.__attrs[k] end
 function methods:GetChecked() return self.__checked end function methods:SetChecked(v) self.__checked=v end
-function methods:GetParent() return self.__parent end
+function methods:GetParent() return self.__parent end function methods:SetParent(p) self.__parent=p end
 function methods:GetName() return self.__name end
 function methods:GetObjectType() return self.__kind end
 function methods:IsMouseOver() return false end

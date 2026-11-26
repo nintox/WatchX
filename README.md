@@ -46,6 +46,8 @@
   it. Per class, with quick-add suggestions; in a row or a column. Rogues: every poison in your bags, each rank shown
   with the level it needs – right-click picks one, left-click puts it on.
 - Sizes: drag a bar's bottom edge while unlocked, or click + / – in the settings (SIZE), or `/wx size 150` for all.
+- Settings in WatchX's own window (`/wx settings`, or Options > AddOns > WatchX): General, PvP (Enemies list,
+  Nameplates, KOS & bounties, Avoid list) and Leveling pages.
 
 ## Install
 
