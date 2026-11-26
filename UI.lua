@@ -7677,36 +7677,136 @@ do (function()
         end
     end
 
-    local function Build()
-        f = CreateFrame("Frame", "WatchXRebuff", UIParent)
-        f:SetFrameStrata("MEDIUM")
-        f:SetClampedToScreen(true)
-        f:SetMovable(true)
-        f:SetSize(ICON + PAD * 2, ICON + PAD * 2)
-        f:SetScale(ClampScale(db().rebuffScale))
-        LoadPoint(f, "rebuffPoint", { "CENTER", "CENTER", 0, -170 })
-        f.bg = f:CreateTexture(nil, "BACKGROUND")   -- only while unlocked: something to grab
-        f.bg:SetAllPoints()
-        f.bg:SetColorTexture(0, 0, 0, 0.45)
-        f.bg:Hide()
-        f.icons = {}
-        f:RegisterForDrag("LeftButton")
-        f:SetScript("OnDragStart", function(self)
+    -- Groups: each icon can be placed on its own (drag it while unlocked); dropped next to another icon it joins
+    -- that one's group. Group 1 is the main frame (WatchXRebuff, "rebuffPoint"); the others are kept per class:
+    -- rebuffSpots[class][line] = group, rebuffGroupPts[class][group] = its spot. One size and one gap for all.
+    local groups = {}   -- [group] = frame
+    local function Spots()
+        local d, k = db(), ClassKey()
+        if type(d.rebuffSpots) ~= "table" then d.rebuffSpots = {} end
+        if type(d.rebuffSpots[k]) ~= "table" then d.rebuffSpots[k] = {} end
+        if type(d.rebuffGroupPts) ~= "table" then d.rebuffGroupPts = {} end
+        if type(d.rebuffGroupPts[k]) ~= "table" then d.rebuffGroupPts[k] = {} end
+        return d.rebuffSpots[k], d.rebuffGroupPts[k]
+    end
+    local function GroupOf(line)
+        local spots, pts = Spots()
+        local g = spots[tostring(line):lower()]
+        if g and g ~= 1 and pts[g] then return g end
+        return 1
+    end
+    local function Gap() return math.max(0, math.min(30, tonumber(db().rebuffGap) or GAP)) end
+    function ns.RebuffGap() return Gap() end
+    local function SaveGroup(g)
+        if g.gid == 1 then SavePoint(g, "rebuffPoint") return end
+        local l, t = g:GetLeft(), g:GetTop()
+        if l and t then
+            local _, pts = Spots()
+            pts[g.gid] = { "TOPLEFT", "BOTTOMLEFT", l, t }
+        end
+    end
+    local function NewGroup(gid)
+        local g = CreateFrame("Frame", gid == 1 and "WatchXRebuff" or ("WatchXRebuffGroup" .. gid), UIParent)
+        g.gid = gid
+        g:SetFrameStrata("MEDIUM")
+        g:SetClampedToScreen(true)
+        g:SetMovable(true)
+        g:SetSize(ICON + PAD * 2, ICON + PAD * 2)
+        g:SetScale(ClampScale(db().rebuffScale))
+        g.bg = g:CreateTexture(nil, "BACKGROUND")   -- only while unlocked: something to grab
+        g.bg:SetAllPoints()
+        g.bg:SetColorTexture(0, 0, 0, 0.45)
+        g.bg:Hide()
+        g.shown = {}
+        g:RegisterForDrag("LeftButton")
+        g:SetScript("OnDragStart", function(self)
             if moving and not InCombatLockdown() then self.dragging = true; self:StartMoving() end
         end)
-        f:SetScript("OnDragStop", function(self)
+        g:SetScript("OnDragStop", function(self)
             if not self.dragging then return end
             self.dragging = nil
             self:StopMovingOrSizing()
             if ns.Snap then ns.Snap(self) end
-            SavePoint(self, "rebuffPoint")
+            SaveGroup(self)
         end)
-        f:SetScript("OnMouseWheel", function(self, delta)
+        g:SetScript("OnMouseWheel", function(_, delta)   -- one size for all of them
             if not moving or InCombatLockdown() then return end
-            Rescale(self, "rebuffScale", delta)
-            SavePoint(self, "rebuffPoint")
+            db().rebuffScale = ClampScale((tonumber(db().rebuffScale) or 1) + (delta > 0 and 0.1 or -0.1))
+            ns.RefreshRebuff()
         end)
-        f:Hide()
+        g:Hide()
+        groups[gid] = g
+        return g
+    end
+    local function Build()
+        f = NewGroup(1)
+        f.icons = {}
+        LoadPoint(f, "rebuffPoint", { "CENTER", "CENTER", 0, -170 })
+    end
+    local function Group(gid)
+        if groups[gid] then return groups[gid] end
+        local g = NewGroup(gid)
+        local _, pts = Spots()
+        local pt = pts[gid]
+        g:ClearAllPoints()
+        if pt then g:SetPoint(pt[1], UIParent, pt[2], pt[3], pt[4]) else g:SetPoint("CENTER", UIParent, "CENTER", 0, -120) end
+        return g
+    end
+    -- an icon let go (unlocked): next to another icon -> into its group, beside it; else a group of its own, there
+    local function Drop(b)
+        local spots, pts = Spots()
+        local list = ns.RebuffList()
+        local cx, cy = b:GetCenter()
+        local gap, best, bestD, after = Gap(), nil, nil, false
+        for _, g in pairs(groups) do
+            for _, o in ipairs(g.shown or {}) do
+                if o ~= b and o.line and not o.example and cx then
+                    local ox, oy = o:GetCenter()
+                    if ox then
+                        local dx, dy = cx - ox, cy - oy
+                        local row = math.abs(dy) < ICON * 0.7 and math.abs(dx) < ICON + gap + 16
+                        local col = math.abs(dx) < ICON * 0.7 and math.abs(dy) < ICON + gap + TIME_H + 16
+                        local dist = dx * dx + dy * dy
+                        if (row or col) and (not bestD or dist < bestD) then
+                            best, bestD, after = o, dist, (row and dx > 0) or (not row and dy < 0)
+                        end
+                    end
+                end
+            end
+        end
+        local key = b.line:lower()
+        if best then
+            local idx
+            for i, l in ipairs(list) do if l == b.line then idx = i end end
+            if idx then table.remove(list, idx) end
+            local t
+            for i, l in ipairs(list) do if l == best.line then t = i end end
+            table.insert(list, t and (after and t + 1 or t) or (#list + 1), b.line)
+            local g = GroupOf(best.line)
+            spots[key] = g ~= 1 and g or nil
+        else
+            local l, t = b:GetLeft(), b:GetTop()
+            if l and t then
+                local gid = 2
+                while pts[gid] do gid = gid + 1 end
+                pts[gid] = { "TOPLEFT", "BOTTOMLEFT", l - PAD, t + PAD }
+                spots[key] = gid
+                if groups[gid] then   -- (a frame from an old group: to its new spot)
+                    groups[gid]:ClearAllPoints()
+                    groups[gid]:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", l - PAD, t + PAD)
+                end
+            end
+        end
+        local used = {}
+        for _, g in pairs(spots) do used[g] = true end
+        for gid in pairs(pts) do if not used[gid] then pts[gid] = nil end end
+        ns.RefreshRebuff()
+    end
+    -- all of them back in the main row
+    function ns.RebuffJoin()
+        local spots, pts = Spots()
+        wipe(spots); wipe(pts)
+        ns.Safe("rebuff icons", ns.RefreshRebuff)
     end
     local function Icon(i)
         local b = CreateFrame("Button", "WatchXRebuffIcon" .. i, f, "SecureActionButtonTemplate")
@@ -7775,8 +7875,31 @@ do (function()
             GameTooltip:Show()
         end)
         b:SetScript("OnLeave", GameTooltip_Hide)
+        -- unlocked: drag it to place it on its own (or next to another one); Shift-drag moves its whole group
+        b:SetMovable(true)
+        b:RegisterForDrag("LeftButton")
+        b:SetScript("OnDragStart", function(self)
+            if not moving or InCombatLockdown() or not self.line or self.example then return end
+            local g = self:GetParent()
+            if IsShiftKeyDown() and g and g.StartMoving then self.groupDrag = g; g.dragging = true; g:StartMoving() return end
+            self.dragging = true
+            self:StartMoving()
+        end)
+        b:SetScript("OnDragStop", function(self)
+            if self.groupDrag then
+                local g = self.groupDrag
+                self.groupDrag = nil
+                local fn = g:GetScript("OnDragStop")
+                if fn then fn(g) end
+                return
+            end
+            if not self.dragging then return end
+            self.dragging = nil
+            self:StopMovingOrSizing()
+            if not InCombatLockdown() then Drop(self) end
+        end)
         b:SetScript("PostClick", function(self, button)
-            if button ~= "RightButton" then return end
+            if button ~= "RightButton" or moving then return end
             if self.slot then GameTooltip_Hide(); ns.RebuffChoose(self, self.line)
             elseif not InCombatLockdown() and ns.OpenRebuffSettings then ns.OpenRebuffSettings() end
         end)
@@ -7810,7 +7933,7 @@ do (function()
                     local on, left, charges = WeaponEnchanted(slot)
                     if on ~= nil and HasWeapon(slot) then
                         local opts, use = WeaponOptions(line)
-                        if not on or d.rebuffAll == true or d.rebuffWeaponAlways ~= false then
+                        if not on or d.rebuffAll == true or d.rebuffWeaponAlways ~= false or moving then
                             -- on: the icon of what's on (from the weapon's tooltip), faded, with its time
                             local onName = on and EnchantName(slot) or nil
                             local onItem = onName and ns.weaponItemByName and ns.weaponItemByName[onName:lower()] or nil
@@ -7825,7 +7948,7 @@ do (function()
                         if have[n:lower()] then got = true end
                         if not cast and Known(n) then cast = n end
                     end
-                    if cast and (not got or d.rebuffAll == true) then
+                    if cast and (not got or d.rebuffAll == true or moving) then
                         rows[#rows + 1] = { line = line, cast = cast, have = got }
                     end
                 end
@@ -7835,12 +7958,18 @@ do (function()
             rows[1] = { line = "Your buff", cast = nil, have = false, example = true }
         end
         if #rows == 0 then
-            if f then f:Hide() end
+            for _, g in pairs(groups) do g:Hide() end
             if label then label:Hide() end
             return
         end
         if not f then Build() end
         local vertical = d.rebuffVertical == true
+        local gap = Gap()
+        -- one size for every group (each keeps its top where it is)
+        local sc = ClampScale(d.rebuffScale)
+        for _, g in pairs(groups) do
+            if math.abs((g:GetScale() or 1) - sc) > 0.001 then SetScaleKeepTop(g, sc); SaveGroup(g) end
+        end
         for i, r in ipairs(rows) do
             local b = f.icons[i] or Icon(i)
             b.line, b.have, b.noItem = r.line, r.have, r.slot and not r.cast and not r.item
@@ -7858,6 +7987,8 @@ do (function()
                 b:SetAttribute("spell1", r.cast or "")
                 b:SetAttribute("macrotext1", nil)
             end
+            if moving then b:SetAttribute("type1", nil) end   -- (unlocked: a click or a drag doesn't cast)
+            b.example = r.example
             b.icon:SetTexture((r.have and r.onItem and ns.ItemIcon and ns.ItemIcon(r.onItem))
                 or (r.cast and SpellIcon(r.cast)) or (r.item and ns.ItemIcon and ns.ItemIcon(r.item))
                 or (r.slot and "Interface\\Icons\\Trade_BrewPoison") or "Interface\\Icons\\INV_Misc_QuestionMark")
@@ -7871,22 +8002,42 @@ do (function()
                 if not r.have and not moving then if not b.pulse:IsPlaying() then b.pulse:Play() end
                 elseif b.pulse:IsPlaying() then b.pulse:Stop(); b.flash:SetAlpha(0) end
             end
-            b:ClearAllPoints()
-            local off = PAD + (i - 1) * (ICON + GAP + (vertical and TIME_H or 0))
-            if vertical then b:SetPoint("TOPLEFT", f, "TOPLEFT", PAD, -off) else b:SetPoint("TOPLEFT", f, "TOPLEFT", off, -PAD) end
-            b:EnableMouse(not moving)
-            b:Show()
+            b:EnableMouse(true)
+            r.icon = b
         end
         for i = #rows + 1, #f.icons do f.icons[i]:Hide() end
-        local long = PAD * 2 + #rows * ICON + (#rows - 1) * GAP
-        if vertical then f:SetSize(ICON + PAD * 2, long + #rows * TIME_H) else f:SetSize(long, ICON + PAD * 2 + TIME_H) end
-        f:EnableMouse(moving and true or false)
-        f:EnableMouseWheel(moving and true or false)
-        f.bg:SetShown(moving)
-        f:Show()
-        if moving then
+        -- each group: its icons in a row (or a column), in the list's order
+        local per = {}
+        for _, r in ipairs(rows) do
+            local gid = r.example and 1 or GroupOf(r.line)
+            per[gid] = per[gid] or {}
+            per[gid][#per[gid] + 1] = r.icon
+        end
+        local first
+        for gid, icons in pairs(per) do
+            local g = Group(gid)
+            wipe(g.shown)
+            for n, b in ipairs(icons) do
+                if b:GetParent() ~= g then b:SetParent(g) end
+                b:ClearAllPoints()
+                local off = PAD + (n - 1) * (ICON + gap + (vertical and TIME_H or 0))
+                if vertical then b:SetPoint("TOPLEFT", g, "TOPLEFT", PAD, -off) else b:SetPoint("TOPLEFT", g, "TOPLEFT", off, -PAD) end
+                b:Show()
+                g.shown[n] = b
+            end
+            local long = PAD * 2 + #icons * ICON + (#icons - 1) * gap
+            if vertical then g:SetSize(ICON + PAD * 2, long + #icons * TIME_H) else g:SetSize(long, ICON + PAD * 2 + TIME_H) end
+            g:EnableMouse(moving and true or false)
+            g:EnableMouseWheel(moving and true or false)
+            g.bg:SetShown(moving)
+            g:Show()
+            if not first or gid < first.gid then first = g end
+        end
+        for gid, g in pairs(groups) do if not per[gid] then g:Hide() end end
+        if moving and first then
             label = label or MakeLabel("WatchXRebuffLabel")
-            label:Set(f, "|cffffd100Rebuff icons|r · drag to move · wheel: size")
+            label:Set(first, "|cffffd100Rebuff icons|r · drag an icon to place it on its own – drop it next to another to link "
+                .. "them · drag the dark edge (or Shift-drag an icon) to move a group · wheel: size")
         elseif label then
             label:Hide()
         end
@@ -8166,6 +8317,38 @@ do (function()
         check("Also the ones you have", "dimmed, with a green edge", function() return db().rebuffAll == true end, function(v) db().rebuffAll = v end)
         check("Always show the weapon icons", "MH / OH with the poison that's on, faded, and its minutes left",
             function() return db().rebuffWeaponAlways ~= false end, function(v) db().rebuffWeaponAlways = v end)
+        -- size and the gap between the icons; and every icon back in one row
+        local paints = {}
+        local function stepper(x, label, get, step)
+            local lab = page:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+            lab:SetPoint("TOPLEFT", page, "TOPLEFT", x, y - 4)
+            lab:SetText(label)
+            local val = page:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+            local minus = FlatButton(page, "-", 24, 20, function() step(-1); val:SetText(get()) end)
+            minus:SetPoint("TOPLEFT", page, "TOPLEFT", x + 46, y - 1)
+            val:SetPoint("LEFT", minus, "RIGHT", 2, 0)
+            val:SetWidth(46)
+            local plus = FlatButton(page, "+", 24, 20, function() step(1); val:SetText(get()) end)
+            plus:SetPoint("LEFT", val, "RIGHT", 2, 0)
+            paints[#paints + 1] = function() val:SetText(get()) end
+        end
+        y = y - 6
+        stepper(L + 4, "Size", function() return math.floor(ClampScale(db().rebuffScale) * 100 + 0.5) .. "%" end, function(d)
+            if ns.SetSize then ns.SetSize("rebuffScale", ClampScale(db().rebuffScale) + d * 0.1) end
+            ns.Safe("rebuff icons", ns.RefreshRebuff)
+        end)
+        stepper(L + 200, "Gap", function() return ns.RebuffGap() end, function(d)
+            db().rebuffGap = math.max(0, math.min(30, ns.RebuffGap() + d * 2))
+            ns.Safe("rebuff icons", ns.RefreshRebuff)
+        end)
+        local join = Button(page, "Link them all again", 160, 22, function() ns.RebuffJoin() end)
+        join:SetPoint("TOPLEFT", page, "TOPLEFT", L + 400, y)
+        join:SetScript("OnEnter", function(self)
+            Tip(self, "Link them all again", "Every icon you placed on its own goes back into the one row. (To place one on "
+                .. "its own: Move, then drag the icon. Drop it next to another icon and they link.)")
+        end)
+        join:SetScript("OnLeave", GameTooltip_Hide)
+        y = y - 30
         y = y - 8
         -- add one
         local lab = page:CreateFontString(nil, "OVERLAY", "GameFontNormal")
@@ -8262,6 +8445,7 @@ do (function()
             .. "|cff808080/wx rebuff – this page   ·   /wx rebuff <name> – add one|r")
         Refresh = function()
             for _, cb in ipairs(checks) do cb:SetChecked(cb.get()) end
+            for _, fn in ipairs(paints) do fn() end
             local list = ns.RebuffList()
             local _, cls = UnitClass("player")
             head:SetText("YOUR " .. tostring(cls or ""):upper() .. " BUFFS")
