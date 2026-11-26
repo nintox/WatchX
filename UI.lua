@@ -1773,7 +1773,7 @@ local function BuildHistory()
     f:SetClampedToScreen(true)
     f:SetScript("OnDragStart", f.StartMoving)
     f:SetScript("OnDragStop", f.StopMovingOrSizing)
-    Window(f, "Players met", 200)
+    Window(f, "Enemies", 200)
     tinsert(UISpecialFrames, "WatchXHistory")
     CloseX(f)
 
@@ -4692,7 +4692,12 @@ function ns.SetMinimapShown(show)
     end
 end
 
--- the minimap button's click: the Enemies list on or off (on: shown at once, even while it's empty)
+-- the minimap button's click: the Enemies window (everyone you've met: KOS, avoid, wanted, notes) – open or closed
+function ns.ToggleHistory()
+    local h = _G.WatchXHistory
+    if h and h:IsShown() then h:Hide() else ns.ShowHistory() end
+end
+-- the Enemies list on or off (on: shown at once, even while it's empty)
 function ns.ToggleEnemies()
     if db().nearby then ns.SetNearby(false) return end
     ns.SetNearby(true)
@@ -4711,7 +4716,7 @@ local function InitMinimap()
         OnClick = function(_, button)
             if IsShiftKeyDown() then ns.ShowHelp()
             elseif button == "RightButton" then ns.ToggleSettings("main")
-            else ns.ToggleEnemies() end
+            else ns.ToggleHistory() end
         end,
         OnTooltipShow = function(tt)
             tt:AddLine("WatchX")
@@ -4727,7 +4732,7 @@ local function InitMinimap()
             end
             if not any then tt:AddLine("No mobs watched", 0.6, 0.6, 0.6) end
             tt:AddLine(" ")
-            tt:AddLine("|cffffd100Click:|r the Enemies list on / off   |cffffd100Right-click:|r settings", 1, 1, 1)
+            tt:AddLine("|cffffd100Click:|r Enemies (everyone you've met)   |cffffd100Right-click:|r settings", 1, 1, 1)
             tt:AddLine("|cffffd100Shift-click:|r how it works", 1, 1, 1)
         end,
     })
