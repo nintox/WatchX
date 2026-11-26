@@ -3932,15 +3932,11 @@ end
 -- ---------------------------------------------------------------- profiles
 -- A profile = what you watch + alert and display choices. The live settings are the active profile;
 -- switching stores them and loads the other one. Phone links, timers and the log are shared.
-local PROFILE_KEYS = { "enemyPlayers", "friendlyPlayers", "attackAlert", "whisper", "instant", "afkWarn",
-    "notifyDeath", "sound", "show", "miniQuiet", "hideIdle", "alertSame", "miniPoint", "miniScale", "miniWidth",
-    "alertPoint", "alertScale", "alertWidth", "nearby", "nearbyPoint", "nearbyScale", "nearbyWidth", "toastPoint",
-    "stealthWarn", "stealthSound", "nearbyShowEmpty", "nearbyKeep", "newEnemyCard", "warnDock", "nearbyAttach", "nearbyMax", "nearbyNoBG", "nearbyHideDungeon", "nearbyHideRaid",
-    "plateIcons", "plateFriendly", "plateHealer", "plateSize", "plateKOS",
-    "levelHelper", "levelMissing", "levelFlash", "levelWarn", "levelHideCombat", "levelHideInstance", "levelPoint", "levelScale", "levelWidth",
-    "buffWarn", "buffSoon", "buffGone", "buffGroups", "avoidGroup", "avoidChat", "scanOn", "wantedOn", "wantedGuild", "wantedFriends", "wantedAlert", "wantedAnnounce", "sounds",
-    "shareParty", "shareGuild", "shareStealth", "shareKOS", "shareWanted", "shareAll", "xpRateOnBar",
-    "rebuffOn", "rebuffVertical", "rebuffAll", "rebuffPoint", "rebuffScale", "rebuffWeaponAlways" }
+-- An alert profile (WatchX > Alerts & scan) is what you watch and how you're alerted: the watch list, the rare scan,
+-- the alerts and when the mini bar shows. Everything else (bars, PvP, leveling) is the same in every profile.
+-- (Profiles saved before 2.30.4 held more: the rest is simply not read from them any more.)
+local PROFILE_KEYS = { "scanOn", "enemyPlayers", "friendlyPlayers", "attackAlert", "whisper", "instant", "afkWarn",
+    "notifyDeath", "sound", "miniQuiet", "hideIdle" }
 local PROFILE_MAX_NAME = 16
 
 local function Copy(v)
@@ -4019,7 +4015,7 @@ function ns.SwitchProfile(name)
     ApplySnapshot(db.profiles[name])
     db.profile = name
     ns.RememberProfile(name)
-    Print("Profile: |cff38ccad" .. name .. "|r |cffaaaaaa(this character)|r")
+    Print("Alert profile: |cff38ccad" .. name .. "|r |cffaaaaaa(this character)|r")
     AfterProfileChange()
 end
 
@@ -4035,7 +4031,7 @@ function ns.NewProfile(name)
     db.profiles[name] = Snapshot()
     db.profile = name
     ns.RememberProfile(name)
-    Print("New profile |cff38ccad" .. name .. "|r – a copy of your current settings. Change what you like.")
+    Print("New alert profile |cff38ccad" .. name .. "|r – a copy of what you watch now. Change what you like.")
     Refresh()
     return true
 end
@@ -4049,7 +4045,7 @@ function ns.DeleteProfile(name)
     if db.profile == name then
         db.profile = ns.ProfileNames()[1]
         ApplySnapshot(db.profiles[db.profile])
-        Print("Profile: |cff38ccad" .. db.profile .. "|r")
+        Print("Alert profile: |cff38ccad" .. db.profile .. "|r")
         AfterProfileChange()
     else
         Refresh()

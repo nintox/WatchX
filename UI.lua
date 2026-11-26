@@ -330,7 +330,7 @@ local function NewProfileAccept(self)
     if not ok then ns.Print(err) return true end   -- (true: the box stays open with the name to fix)
 end
 StaticPopupDialogs["WATCHX_NEWPROFILE"] = {
-    text = "Name of the new profile (e.g. Leveling, Camping, PvP).\nIt starts as a copy of your current settings:",
+    text = "Name of the new alert profile (e.g. Leveling, Camping, PvP).\nIt starts as a copy of what you watch now:",
     button1 = OKAY, button2 = CANCEL,
     hasEditBox = true,
     OnShow = function(self) local eb = PopupEditBox(self); if eb then eb:SetText(""); eb:SetFocus() end end,
@@ -387,19 +387,18 @@ local function BuildProfileMenu()
     Flat(m)
     m.title = m:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     m.title:SetPoint("TOPLEFT", m, "TOPLEFT", 10, -8)
-    m.title:SetText("PROFILES")
+    m.title:SetText("ALERT PROFILES")
     m.title:SetTextColor(ACCENT[1], ACCENT[2], ACCENT[3])
     m.hint = m:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
     m.hint:SetPoint("TOPLEFT", m.title, "BOTTOMLEFT", 0, -3)
     m.hint:SetWidth(170)
     m.hint:SetJustifyH("LEFT")
-    m.hint:SetText("What you watch, alerts and bars. Phone links are shared.")
+    m.hint:SetText("What you watch and how you're alerted (Alerts & scan). Each character keeps its own.")
     m.rows = {}
     m.new = FlatButton(m, "+ New profile", 170, 20, function()
         m:Hide()
         StaticPopup_Show("WATCHX_NEWPROFILE")
     end)
-    m.exp = FlatButton(m, "Export / import...", 170, 20, function() m:Hide(); ns.ShowExport() end)
     m.del = FlatButton(m, "Delete", 170, 20, function()
         m:Hide()
         local cur = db().profile
@@ -439,11 +438,9 @@ function ns.ToggleProfileMenu(anchor)
     m.del:SetShown(#names > 1)
     m.del:ClearAllPoints(); m.del:SetPoint("TOPLEFT", m, "TOPLEFT", 10, y)
     if #names > 1 then y = y - 23 end
-    m.exp:ClearAllPoints(); m.exp:SetPoint("TOPLEFT", m, "TOPLEFT", 10, y)
-    y = y - 23
     m:SetHeight(-y + 8)
     m:ClearAllPoints()
-    m:SetPoint("TOPRIGHT", anchor, "BOTTOMRIGHT", 0, -2)
+    m:SetPoint("TOPLEFT", anchor, "BOTTOMLEFT", 0, -2)
     m:Show()
 end
 
@@ -824,7 +821,26 @@ do
         { "avoid", "Avoid list" },
         { group = "LEVELING" }, { "level", "XP boosts" }, { "buffs", "Buff warnings" }, { "rebuff", "Rebuff icons" },
     }
-    function ns.AddTab(key, page) tabs[key] = page end
+    -- scrolls: the page has no scroll frame of its own – it's put in one here; page.contentH is how tall it is
+    local holder = {}   -- page -> the scroll frame it sits in (those pages only)
+    function ns.AddTab(key, page, scrolls)
+        tabs[key] = page
+        if scrolls then page.needsScroll = true end
+    end
+    local function Holder(page)
+        if not page.needsScroll then return page end
+        if not holder[page] then
+            local sf = CreateFrame("ScrollFrame", nil, content, "UIPanelScrollFrameTemplate")
+            sf:SetPoint("TOPLEFT", content, "TOPLEFT", 0, -4)
+            sf:SetPoint("BOTTOMRIGHT", content, "BOTTOMRIGHT", -28, 4)
+            page:SetParent(sf)
+            page:SetFrameStrata(win:GetFrameStrata())
+            sf:SetScrollChild(page)
+            holder[page] = sf
+        end
+        page:SetSize(650, math.max(200, tonumber(page.contentH) or 900))
+        return holder[page]
+    end
     local function Build()
         win = CreateFrame("Frame", "WatchXSettings", UIParent)
         win:SetSize(900, 660)
@@ -849,15 +865,13 @@ do
         local by = win:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
         by:SetPoint("LEFT", title, "RIGHT", 10, -1)
         by:SetText("Made by " .. ns.AUTHOR .. "  ·  v" .. tostring(ns.GetVersion and ns.GetVersion() or "?"))
-        win.prof = Button(win, "Profile", 190, 22, function(self) ns.ToggleProfileMenu(self) end)
-        win.prof:SetPoint("TOPRIGHT", win, "TOPRIGHT", -40, -13)
-        win.prof:SetScript("OnEnter", function(self)
-            Tip(self, "Profiles", "Switch between sets of choices – e.g. Camping, Leveling, PvP. Each character "
-                .. "remembers its own. Export / import is in this menu too.")
+        win.exp = Button(win, "Export / import", 150, 22, function() ns.ShowExport() end)
+        win.exp:SetPoint("TOPRIGHT", win, "TOPRIGHT", -40, -13)
+        win.exp:SetScript("OnEnter", function(self)
+            Tip(self, "Export / import", "All of WatchX as one text: every setting, the alert profiles, the Enemies "
+                .. "history, KOS and bounties – for all your characters. Keep it, or move it to another PC.")
         end)
-        win.prof:SetScript("OnLeave", GameTooltip_Hide)
-        profileLabels[#profileLabels + 1] = function(name) SetButtonText(win.prof, "Profile: " .. name) end
-        SetButtonText(win.prof, "Profile: " .. tostring(db().profile or "?"))
+        win.exp:SetScript("OnLeave", GameTooltip_Hide)
         CloseX(win)
         local line = win:CreateTexture(nil, "ARTWORK")
         line:SetColorTexture(EDGE[1], EDGE[2], EDGE[3], 0.45)
@@ -922,16 +936,22 @@ do
         if not win then Build() end
         if not tabs[key] then key = "main" end
         for k, page in pairs(tabs) do
-            if k ~= key then page:Hide() end
+            if k ~= key then page:Hide(); if holder[page] then holder[page]:Hide() end end
         end
         local page = tabs[key]
         if page then
-            if page:GetParent() ~= content then
-                page:SetParent(content)
-                page:SetFrameStrata(win:GetFrameStrata())
+            local h = Holder(page)
+            if h == page then
+                if page:GetParent() ~= content then
+                    page:SetParent(content)
+                    page:SetFrameStrata(win:GetFrameStrata())
+                end
+                page:ClearAllPoints()
+                page:SetAllPoints(content)
+            else
+                h:Show()
+                if h.SetVerticalScroll then h:SetVerticalScroll(0) end
             end
-            page:ClearAllPoints()
-            page:SetAllPoints(content)
             page:Hide()
             page:Show()   -- (its OnShow fills it in)
         end
@@ -1244,6 +1264,28 @@ local function BuildSettings()
 
     -- the second page: the rare scan and how alerts look
     local alertsPage = NewPage(nil, "Alerts & scan", "Alerts & scan", "the rare scan, the mini bar and the red alert")
+    section("MODULE & PROFILE")
+    check("Rare scan", "rare mobs and the names you watch",
+        function() return db().scanOn ~= false end, function(v) ns.SetScan(v) end)
+    do
+        -- alert profiles: what you watch and how you're alerted, one set each – Camping, Leveling, PvP …
+        local plab = o:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        plab:SetPoint("TOPLEFT", o, "TOPLEFT", L, y - 4)
+        plab:SetText("Alert profile")
+        local pb = Button(o, "", 170, 22, function(self) ns.ToggleProfileMenu(self) end)
+        pb:SetPoint("TOPLEFT", o, "TOPLEFT", L + 120, y)
+        pb:SetScript("OnEnter", function(self)
+            Tip(self, "Alert profile", "A set of what you watch and how you're alerted (this page) – e.g. Camping for "
+                .. "a rare, Leveling, PvP. Switch, make a new one or delete one here. Each character keeps its own. "
+                .. "Everything else (bars, PvP, leveling) is the same in every profile.")
+        end)
+        pb:SetScript("OnLeave", GameTooltip_Hide)
+        profileLabels[#profileLabels + 1] = function(name) SetButtonText(pb, name .. "  |cff999999v|r") end
+        local ph = o:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+        ph:SetPoint("LEFT", pb, "RIGHT", 10, 0)
+        ph:SetText("what you watch and how you're alerted")
+        y = y - 30
+    end
     section("RARE SCAN")
     check("Any enemy player", "PvP",
         function() return db().enemyPlayers end, function(v) ns.SetEnemyPlayers(v) end)
@@ -2744,11 +2786,11 @@ local function BuildPanel()
     prof:SetText("Profile")
     prof:SetScript("OnClick", function(self) ns.ToggleProfileMenu(self) end)
     prof:SetScript("OnEnter", function(self)
-        Tip(self, "Profile", "Click to switch profile (e.g. Camping, Leveling, PvP) or make a new one.")
+        Tip(self, "Alert profile", "What you watch and how you're alerted – click to switch (e.g. Camping, Leveling, PvP) or make a new one.")
     end)
     prof:SetScript("OnLeave", GameTooltip_Hide)
     profileLabels[#profileLabels + 1] = function(name)
-        prof:SetText("|cff808080Profile:|r " .. name)
+        prof:SetText("|cff808080Alerts:|r " .. name)
         local fs = prof:GetFontString()
         prof:SetWidth(math.min(120, ((fs and fs:GetStringWidth()) or 80) + 4))
     end
@@ -6995,22 +7037,23 @@ function ns.BuildLevelSettings()
         "",
         "Border: |cff40ff40green|r you have it    |cffff6060red|r missing    |cffffd100yellow|r soon or running out    "
             .. "|cffaaaaaagrey|r worth getting",
-        "The clock under an icon is the time left, the number on it how many you carry. When something runs out",
-        "you get a warning mid-screen. Hover an icon for what it is and how to get it. The numbers come from the",
-        "Forever guides and may change.",
+        "The clock under an icon is the time left, the number on it how many you carry. When something runs out "
+            .. "you get a warning mid-screen. Hover an icon for what it is and how to get it. The numbers come from the "
+            .. "Forever guides and may change.",
         "",
         "|cffffd100CLICKS|r",
-        "|cffaaaaaa•|r  |cffffd100Hover|r an icon: everything you can use for it pops up in a column above it – your XP food,",
-        "    campfires, tent and other camp features. Click one to use it now (right-click: just pick it).",
-        "|cffaaaaaa•|r  |cffffd100Click|r an icon: eat the food or use the sleeping bag. The camp icon puts the campfire down",
-        "    first (unless there's one close by) – click again for your tent or the camp feature you picked.",
+        "|cffaaaaaa•|r  |cffffd100Hover|r an icon: everything you can use for it pops up in a column above it – your XP food, "
+            .. "campfires, tent and other camp features. Click one to use it now (right-click: just pick it).",
+        "|cffaaaaaa•|r  |cffffd100Click|r an icon: eat the food or use the sleeping bag. The camp icon puts the campfire down "
+            .. "first (unless there's one close by) – click again for your tent or the camp feature you picked.",
         "Not in combat: the icons hide just before a fight and come back after it.",
         "",
         "|cff808080/wx xp – the icons on or off|r",
     }, "\n"))
     page:SetScript("OnShow", function() for _, cb in ipairs(checks) do cb:SetChecked(cb.get()) end end)
     levelPage = page
-    ns.AddTab("level", page)
+    page.contentH = -y + (help:GetStringHeight() or 500) + 40
+    ns.AddTab("level", page, true)
 end
 
 do   -- (its own block: UI.lua is near Lua's 200-locals limit)
@@ -7244,9 +7287,9 @@ function ns.BuildBuffSettings()
     help:SetJustifyH("LEFT")
     help:SetSpacing(3)
     help:SetText(table.concat({
-        "|cffaaaaaaThe name as it shows on the buff (any case), or its spell ID. The list is the same for all profiles.",
-        "Your buffs can't be seen in combat on Forever: in a fight it goes by the clock, so a buff renewed mid-fight",
-        "may get a warning it didn't need. A buff you click off or that's dispelled gives no warning.|r",
+        "|cffaaaaaaThe name as it shows on the buff (any case), or its spell ID. The list is the same for all profiles. "
+            .. "Your buffs can't be seen in combat on Forever: in a fight it goes by the clock, so a buff renewed mid-fight "
+            .. "may get a warning it didn't need. A buff you click off or that's dispelled gives no warning.|r",
         "|cff808080/wx buffs – this page   ·   /wx buffs <name> – add one   ·   /wx buffs test – a test warning|r",
     }, "\n"))
 
@@ -7272,7 +7315,8 @@ function ns.BuildBuffSettings()
     page:SetScript("OnShow", function() Refresh() end)
     page:SetScript("OnHide", function() if pick then pick:Hide() end end)
     buffPage = page
-    ns.AddTab("buffs", page)
+    page.contentH = -y + (help:GetStringHeight() or 120) + 40
+    ns.AddTab("buffs", page, true)
 end
 end
 
@@ -7836,9 +7880,22 @@ do (function()
     -- ---- the settings page
     local page, cat
     function ns.OpenRebuffSettings() ns.OpenWindow("rebuff") end
+    -- a spell ID ("10220") or a Wowhead link (".../spell=10220/ice-armor"): the spell's name
+    local function SpellFromID(text)
+        local id = tonumber(text:match("^(%d+)$") or text:match("spell=(%d+)"))
+        if not id then return nil end
+        local name
+        if C_Spell and C_Spell.GetSpellName then local ok, n = pcall(C_Spell.GetSpellName, id); if ok then name = n end end
+        if not name and GetSpellInfo then local ok, n = pcall(GetSpellInfo, id); if ok then name = n end end
+        if issecretvalue and name ~= nil and issecretvalue(name) then name = nil end
+        return type(name) == "string" and name ~= "" and name or false, id
+    end
     function ns.AddRebuff(text)
         text = tostring(text or ""):match("^%s*(.-)%s*$")
         if text == "" then return false end
+        local byID, id = SpellFromID(text)
+        if byID == false then ns.Print("No spell with the ID " .. id .. " in this game.") return false end
+        if byID then text = byID end
         local list = ns.RebuffList()
         local w, base = ns.WeaponLineFor(list, text)
         if w then
@@ -7856,6 +7913,165 @@ do (function()
         ns.Safe("rebuff icons", ns.RefreshRebuff)
         return true
     end
+    -- Every class's buffs to keep up (Browse buffs…): yours first, the rest under "all classes".
+    ns.REBUFF_CATALOG = {
+        MAGE = { "Arcane Intellect", "Arcane Brilliance", "Frost Armor", "Ice Armor", "Mage Armor", "Molten Armor",
+                 "Dampen Magic", "Amplify Magic", "Ice Barrier", "Mana Shield", "Fire Ward", "Frost Ward", "Slow Fall" },
+        PRIEST = { "Power Word: Fortitude", "Prayer of Fortitude", "Inner Fire", "Divine Spirit", "Prayer of Spirit",
+                   "Shadow Protection", "Prayer of Shadow Protection", "Shadowform", "Fear Ward", "Power Word: Shield",
+                   "Renew", "Touch of Weakness", "Shadowguard", "Elune's Grace", "Feedback" },
+        WARRIOR = { "Battle Shout", "Commanding Shout", "Berserker Rage", "Bloodrage" },
+        DRUID = { "Mark of the Wild", "Gift of the Wild", "Thorns", "Omen of Clarity", "Rejuvenation", "Regrowth", "Barkskin" },
+        PALADIN = { "Blessing of Might", "Blessing of Wisdom", "Blessing of Kings", "Blessing of Salvation", "Blessing of Light",
+                    "Blessing of Sanctuary", "Greater Blessing of Might", "Greater Blessing of Wisdom", "Greater Blessing of Kings",
+                    "Greater Blessing of Salvation", "Devotion Aura", "Retribution Aura", "Concentration Aura",
+                    "Shadow Resistance Aura", "Frost Resistance Aura", "Fire Resistance Aura", "Sanctity Aura", "Crusader Aura",
+                    "Righteous Fury", "Seal of Righteousness", "Seal of Command", "Seal of the Crusader", "Seal of Wisdom", "Seal of Light" },
+        WARLOCK = { "Demon Skin", "Demon Armor", "Fel Armor", "Soul Link", "Unending Breath", "Detect Invisibility", "Shadow Ward" },
+        HUNTER = { "Aspect of the Hawk", "Aspect of the Monkey", "Aspect of the Cheetah", "Aspect of the Pack", "Aspect of the Wild",
+                   "Aspect of the Viper", "Aspect of the Dragonhawk", "Trueshot Aura" },
+        SHAMAN = { "Lightning Shield", "Water Shield", "Water Walking", "Water Breathing",
+                   "Main hand: Windfury Weapon / Flametongue Weapon / Rockbiter Weapon / Frostbrand Weapon",
+                   "Off hand: Flametongue Weapon / Windfury Weapon / Frostbrand Weapon / Rockbiter Weapon" },
+        ROGUE = { "Main hand: Instant Poison / Deadly Poison / Wound Poison / Crippling Poison / Mind-numbing Poison",
+                  "Off hand: Deadly Poison / Instant Poison / Crippling Poison / Wound Poison / Mind-numbing Poison" },
+    }
+    local CLASS_ORDER = { "WARRIOR", "PALADIN", "HUNTER", "ROGUE", "PRIEST", "SHAMAN", "MAGE", "WARLOCK", "DRUID" }
+    -- The window: search (a name, a spell ID or a Wowhead link), your class's buffs (known ones bright), "All classes"
+    -- for the rest. Click one to add it.
+    local cat
+    function ns.ShowBuffCatalog()
+        local ROW_H, NROWS = 22, 18
+        if not cat then
+            cat = CreateFrame("Frame", "WatchXBuffCatalog", UIParent)
+            cat:SetSize(380, 108 + NROWS * ROW_H)
+            cat:SetFrameStrata("DIALOG")
+            cat:SetToplevel(true)
+            cat:SetClampedToScreen(true)
+            cat:SetMovable(true)
+            cat:EnableMouse(true)
+            cat:RegisterForDrag("LeftButton")
+            cat:SetScript("OnDragStart", cat.StartMoving)
+            cat:SetScript("OnDragStop", cat.StopMovingOrSizing)
+            Flat(cat, 0.97)
+            tinsert(UISpecialFrames, "WatchXBuffCatalog")
+            local t = cat:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+            t:SetPoint("TOPLEFT", cat, "TOPLEFT", 14, -12)
+            t:SetText("Buffs")
+            local x = CreateFrame("Button", nil, cat)
+            x:SetSize(24, 24)
+            x:SetPoint("TOPRIGHT", cat, "TOPRIGHT", -4, -4)
+            x:SetNormalTexture("Interface\\Buttons\\UI-Panel-MinimizeButton-Up")
+            x:SetPushedTexture("Interface\\Buttons\\UI-Panel-MinimizeButton-Down")
+            x:SetHighlightTexture("Interface\\Buttons\\UI-Panel-MinimizeButton-Highlight", "ADD")
+            x:SetScript("OnClick", function() cat:Hide() end)
+            cat.search = CreateFrame("EditBox", nil, cat, "InputBoxTemplate")
+            cat.search:SetSize(250, 20)
+            cat.search:SetPoint("TOPLEFT", cat, "TOPLEFT", 20, -42)
+            cat.search:SetAutoFocus(false)
+            cat.search.hint = cat.search:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+            cat.search.hint:SetPoint("LEFT", cat.search, "LEFT", 2, 0)
+            cat.search.hint:SetText("Search, a spell ID or a Wowhead link")
+            cat.search:SetScript("OnTextChanged", function(self) self.hint:SetShown(self:GetText() == ""); cat.offset = 0; ns.ShowBuffCatalog() end)
+            cat.search:SetScript("OnEscapePressed", function(self) self:SetText(""); self:ClearFocus() end)
+            cat.search:SetScript("OnEnterPressed", function(self)
+                local txt = self:GetText()
+                if (txt:match("^%s*%d+%s*$") or txt:find("spell=", 1, true)) and ns.AddRebuff(txt) then
+                    self:SetText("")
+                    if ns.RebuffSettingsRefresh then ns.RebuffSettingsRefresh() end
+                end
+                self:ClearFocus()
+            end)
+            cat.all = ns.CheckBox(cat)
+            cat.all:SetPoint("LEFT", cat.search, "RIGHT", 8, 0)
+            local al = cat:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+            al:SetPoint("LEFT", cat.all, "RIGHT", 0, 1)
+            al:SetText("All classes")
+            cat.all:SetScript("OnClick", function() cat.offset = 0; ns.ShowBuffCatalog() end)
+            cat.rows = {}
+            for i = 1, NROWS do
+                local r = CreateFrame("Button", nil, cat)
+                r:SetSize(340, ROW_H - 2)
+                r:SetPoint("TOPLEFT", cat, "TOPLEFT", 18, -72 - (i - 1) * ROW_H)
+                local hl = r:CreateTexture(nil, "HIGHLIGHT")
+                hl:SetAllPoints()
+                hl:SetColorTexture(1, 0.82, 0.25, 0.12)
+                r.icon = r:CreateTexture(nil, "ARTWORK")
+                r.icon:SetSize(18, 18)
+                r.icon:SetPoint("LEFT", r, "LEFT", 2, 0)
+                r.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+                r.text = r:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+                r.text:SetPoint("LEFT", r.icon, "RIGHT", 6, 0)
+                r.text:SetPoint("RIGHT", r, "RIGHT", -70, 0)
+                r.text:SetJustifyH("LEFT")
+                r.text:SetWordWrap(false)
+                r.state = r:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+                r.state:SetPoint("RIGHT", r, "RIGHT", -4, 0)
+                r:SetScript("OnClick", function(self)
+                    if self.line and not self.added and ns.AddRebuff(self.line) then
+                        if ns.RebuffSettingsRefresh then ns.RebuffSettingsRefresh() end
+                        ns.ShowBuffCatalog()
+                    end
+                end)
+                r:EnableMouseWheel(true)
+                r:SetScript("OnMouseWheel", function(_, d) cat.offset = math.max(0, (cat.offset or 0) - d * 3); ns.ShowBuffCatalog() end)
+                cat.rows[i] = r
+            end
+            cat.more = cat:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+            cat.more:SetPoint("BOTTOMLEFT", cat, "BOTTOMLEFT", 20, 12)
+            cat:EnableMouseWheel(true)
+            cat:SetScript("OnMouseWheel", function(_, d) cat.offset = math.max(0, (cat.offset or 0) - d * 3); ns.ShowBuffCatalog() end)
+            local owner = _G.WatchXSettings
+            if owner and owner:IsShown() then cat:SetPoint("TOPLEFT", owner, "TOPRIGHT", 6, 0)
+            else cat:SetPoint("CENTER", UIParent, "CENTER", 0, 0) end
+        end
+        -- the list: (class header), buff …
+        local _, mine = UnitClass("player")
+        local q = (cat.search:GetText() or ""):lower()
+        if q:match("^%s*%d+%s*$") or q:find("spell=", 1, true) then q = "" end
+        local added = {}
+        for _, l in ipairs(ns.RebuffList()) do added[l:lower()] = true end
+        local items = {}
+        local classes = { mine }
+        if cat.all:GetChecked() then for _, c in ipairs(CLASS_ORDER) do if c ~= mine then classes[#classes + 1] = c end end end
+        for _, c in ipairs(classes) do
+            local first = true
+            for _, line in ipairs(ns.REBUFF_CATALOG[c] or {}) do
+                if q == "" or line:lower():find(q, 1, true) then
+                    if first and #classes > 1 then items[#items + 1] = { head = c } end
+                    first = false
+                    items[#items + 1] = { line = line }
+                end
+            end
+        end
+        cat.offset = math.min(cat.offset or 0, math.max(0, #items - NROWS))
+        for i, r in ipairs(cat.rows) do
+            local it = items[i + cat.offset]
+            if it and it.head then
+                r.line, r.added = nil, nil
+                r.icon:SetTexture(nil)
+                r.text:SetText("|cffd8b04c" .. it.head:sub(1, 1) .. it.head:sub(2):lower() .. "|r")
+                r.state:SetText("")
+                r:Show()
+            elseif it then
+                local wslot, wwhat = WeaponLine(it.line)
+                local cast
+                for _, n in ipairs(Names(wwhat or it.line)) do if not cast and Known(n) then cast = n end end
+                r.line, r.added = it.line, added[it.line:lower()]
+                r.icon:SetTexture((cast and SpellIcon(cast)) or (wslot and "Interface\\Icons\\Trade_BrewPoison") or "Interface\\Icons\\INV_Misc_QuestionMark")
+                r.icon:SetDesaturated(not cast and not wslot)
+                local label = wslot and ((wslot == 17 and "Off hand: " or "Main hand: ") .. Names(wwhat)[1] .. " …") or it.line
+                r.text:SetText((cast or wslot) and label or ("|cff909090" .. label .. "|r"))
+                r.state:SetText(r.added and "|cff40ff40added|r" or ((cast or (wslot and mine == "ROGUE")) and "|cffffd100+ add|r" or "not known"))
+                r:Show()
+            else
+                r:Hide()
+            end
+        end
+        cat.more:SetText(#items > NROWS and ("scroll for more · " .. #items .. " in all") or "")
+        cat:Show()
+    end
+
     local ROWS = 10
     -- one click to add: the usual self buffs of each class (a line's alternatives: any of them counts). Shown only
     -- when you know one of them.
@@ -7922,10 +8138,10 @@ do (function()
         eb:SetSize(240, 20)
         eb:SetPoint("TOPLEFT", page, "TOPLEFT", L + 100, y)
         eb:SetAutoFocus(false)
-        eb:SetMaxLetters(80)
+        eb:SetMaxLetters(160)
         eb.hint = eb:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
         eb.hint:SetPoint("LEFT", eb, "LEFT", 2, 0)
-        eb.hint:SetText("e.g. Ice Armor")
+        eb.hint:SetText("Ice Armor, a spell ID or a Wowhead link")
         local function go()
             if ns.AddRebuff(eb:GetText()) then eb:SetText("") end
             eb:ClearFocus()
@@ -7943,6 +8159,8 @@ do (function()
             if not moving then ns.StartMove() end
         end)
         mv:SetPoint("LEFT", add, "RIGHT", 6, 0)
+        local br = Button(page, "Browse buffs...", 130, 22, function() ns.ShowBuffCatalog() end)
+        br:SetPoint("LEFT", mv, "RIGHT", 6, 0)
         y = y - 30
         -- suggestions for your class: "+ Ice Armor …" (filled in when the page shows: your class, what you know)
         local sugLab = page:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
@@ -8053,7 +8271,8 @@ do (function()
         end
         page:SetScript("OnShow", function() Refresh() end)
         ns.RebuffSettingsRefresh = function() if page:IsShown() then Refresh() end end
-        ns.AddTab("rebuff", page)
+        page.contentH = -y + (help:GetStringHeight() or 60) + 40
+        ns.AddTab("rebuff", page, true)
     end
 end)() end
 
