@@ -3050,6 +3050,7 @@ end
     -- A kill claimed: one kill = the earliest wins (then the name), the same on every client; several = each kill
     -- counts once (claimer + time), the earliest ones up to the limit. True when it was new.
     local function AddClaim(w, c)
+        if w.by and Same(c.full or c.by, w.by) then return false end   -- your own bounty can't be claimed by you
         if Limit(w) == 1 and not w.claims then
             local o = w.claimed
             if o and ((o.t or 0) < c.t or ((o.t or 0) == c.t and Norm(o.full or o.by) <= Norm(c.full or c.by))) then return false end
@@ -3362,9 +3363,12 @@ end
         local sub = Plain(GetSubZoneText and GetSubZoneText())
         zone = type(zone) == "string" and zone ~= "" and zone or nil
         if zone and type(sub) == "string" and sub ~= "" and sub ~= zone then zone = sub .. ", " .. zone end
+        if ns.WantedMine(w) then   -- your own bounty: no claim (it stays up for someone else to earn)
+            Print("You killed |cffffd100" .. (r.name or key) .. "|r – your own bounty, so nothing is claimed; it stays up.")
+            return
+        end
         local c = { by = MyFull(), full = MyFull(), t = time(), zone = Clean(zone, 40) }
         if not AddClaim(w, c) then return end
-        if ns.WantedMine(w) then PayClaims(w, MyFull()) end   -- your own kill on your own bounty: nothing to pay
         Send({ VER, "C", key, c.by, c.t, w.t or 0, c.full, c.zone or "" })
         local mine = ns.WantedMine(w)
         if mine then Announce("BOUNTY CLAIMED: " .. (r.name or key) .. " was killed by " .. Show(c.by) .. (zone and (" in " .. zone) or "")
@@ -3616,6 +3620,15 @@ end
         local gone = Gone("")
         for key, r in pairs(db.enemies) do
             local w = r.wanted
+            -- claims by the one who put it up (allowed before 2.30.3): taken off, so the bounty is open again
+            if w and w.by then
+                if w.claimed and Same(w.claimed.full or w.claimed.by, w.by) then w.claimed, w.paid = nil, nil end
+                for i = #(w.claims or {}), 1, -1 do
+                    local c = w.claims[i]
+                    if Same(c.full or c.by, w.by) then table.remove(w.claims, i) end
+                end
+                if w.claims and #w.claims == 0 then w.claims = nil end
+            end
             local last = w and Last(w)
             local debts = w and #Debts(w) or 0
             if w and ((Settled(w) and now - (w.paid or (last and last.t) or 0) > CLAIMED_DAYS * 86400)
