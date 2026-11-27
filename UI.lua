@@ -9751,7 +9751,7 @@ do
         local bg = holder:CreateTexture(nil, "BACKGROUND")
         bg:SetPoint("TOPLEFT", holder, "TOPLEFT", 2, -2)
         bg:SetPoint("BOTTOMRIGHT", holder, "BOTTOMRIGHT", -2, 2)
-        bg:SetColorTexture(0.05, 0.04, 0.03, 0.9)
+        bg:SetColorTexture(0.05, 0.04, 0.03, 1)
         holder.edge = CreateFrame("Frame", nil, holder)
         holder.edge:SetAllPoints()
         if Backdrop(holder.edge, { edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", edgeSize = 8 }) then
@@ -9769,26 +9769,27 @@ do
             b:Hide()
             holder.pips[i] = b
         end
-        -- full: a green shine over the whole strip, pulsing. It's a bar too (from max-1 to max): it fills – and shows –
-        -- only when every part is filled, so it works with a hidden number as well.
+        -- full: a green glow round the strip, pulsing – behind it, so only a soft ring shows outside its edge (the
+        -- parts keep their colours). It's a bar too (from max-1 to max): it fills – and shows – only when every part
+        -- is filled, so it works with a hidden number as well.
         holder.shine = CreateFrame("StatusBar", nil, holder)
-        holder.shine:SetPoint("TOPLEFT", holder, "TOPLEFT", -2, 2)
-        holder.shine:SetPoint("BOTTOMRIGHT", holder, "BOTTOMRIGHT", 2, -2)
+        holder.shine:SetPoint("TOPLEFT", holder, "TOPLEFT", -4, 4)
+        holder.shine:SetPoint("BOTTOMRIGHT", holder, "BOTTOMRIGHT", 4, -4)
         holder.shine:SetStatusBarTexture("Interface\\Buttons\\WHITE8X8")
-        holder.shine:SetStatusBarColor(0.45, 1, 0.35, 0.45)
+        holder.shine:SetStatusBarColor(0.4, 1, 0.3, 0.55)
         local tex = holder.shine:GetStatusBarTexture()
         if tex and tex.SetBlendMode then tex:SetBlendMode("ADD") end
         if holder.shine.CreateAnimationGroup then
             local ag = holder.shine:CreateAnimationGroup()
             ag:SetLooping("BOUNCE")
             local a = ag:CreateAnimation("Alpha")
-            a:SetFromAlpha(1); a:SetToAlpha(0.2); a:SetDuration(0.45)
+            a:SetFromAlpha(1); a:SetToAlpha(0.25); a:SetDuration(0.55)
             holder:HookScript("OnShow", function() ag:Play() end)
             holder:HookScript("OnHide", function() ag:Stop() end)
             ag:Play()
         end
         holder.edge:SetFrameLevel(holder:GetFrameLevel() + 2)   -- (the edge over the parts)
-        holder.shine:SetFrameLevel(holder:GetFrameLevel() + 3)
+        holder.shine:SetFrameLevel(math.max(0, holder:GetFrameLevel() - 1))   -- (behind the strip: a ring round it)
         holder:Hide()
     end
     -- each part's own colour, by its place: red at the start, orange in the middle, green at the end (finisher time)
@@ -9830,7 +9831,7 @@ do
             holder:SetParent(plate)
             holder:SetFrameLevel((plate:GetFrameLevel() or 0) + 25)
             holder.edge:SetFrameLevel(holder:GetFrameLevel() + 2)
-            holder.shine:SetFrameLevel(holder:GetFrameLevel() + 3)
+            holder.shine:SetFrameLevel(math.max(0, holder:GetFrameLevel() - 1))
             holder:ClearAllPoints()   -- as wide as the health bar with its edge, just under it
             holder:SetPoint("TOPLEFT", under, "BOTTOMLEFT", -3, -4)
             holder:SetPoint("TOPRIGHT", under, "BOTTOMRIGHT", 3, -4)
