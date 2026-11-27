@@ -2853,8 +2853,21 @@ local function HookHover(e)
     if e.hooked then return end
     e.hooked = true
     local f, t, ok = e.f, e.t, e.ok
-    f:HookScript("OnEnter", function(self) if moving and (not ok or ok(self)) then t:Show() end end)
-    f:HookScript("OnLeave", function() t:Hide() end)
+    f:HookScript("OnEnter", function(self)
+        if not (moving and (not ok or ok(self))) then return end
+        t:Show()
+        -- unlocked: how to move / size it (its label only names it)
+        local hint = self.moveHint
+        if self.moveName and hint and hint ~= "" then
+            GameTooltip:SetOwner(self, "ANCHOR_TOP")
+            GameTooltip:SetText(self.moveName)
+            for part in (hint .. " · "):gmatch("(.-)%s+·%s+") do
+                if part ~= "" then GameTooltip:AddLine(part, 0.9, 0.9, 0.9, true) end
+            end
+            GameTooltip:Show()
+        end
+    end)
+    f:HookScript("OnLeave", function(self) t:Hide(); if GameTooltip:GetOwner() == self and self.moveName then GameTooltip:Hide() end end)
     f:HookScript("OnHide", function() t:Hide() end)
 end
 function ns.MoveHover(f, ok)
@@ -3004,12 +3017,17 @@ local function MakeLabel(name)
     l.text:SetJustifyH("LEFT")
     l.text:SetWordWrap(true)
     l.text:SetSpacing(2)
-    -- never wider than the bar it sits on: a long hint wraps onto more lines instead
+    -- just its name (and its size, while it's being sized) on one line: the how-to is in the tooltip when you
+    -- hover the bar ("drag to move · right edge: width …"), not written over the screen
     l.Set = function(self, anchor, text)
-        local barW = (anchor:GetWidth() or 200) * (anchor:GetEffectiveScale() or 1) / (self:GetEffectiveScale() or 1)
+        local name = text:match("^(.-|r)") or text
+        local rest = text:sub(#name + 1)
+        local size = rest:match("%((%d+%%)%)")
+        anchor.moveName = name
+        anchor.moveHint = rest:gsub("%s*%(%d+%%%)", ""):gsub("^%s*·%s*", ""):gsub("^%s+", "")
         self.text:SetWidth(2000)
-        self.text:SetText(text)
-        local w = math.min(self.text:GetStringWidth() + 2, math.max(120, barW - 12))
+        self.text:SetText(name .. (size and ("  |cffaaaaaa" .. size .. "|r") or ""))
+        local w = self.text:GetStringWidth() + 2
         self.text:SetWidth(w)
         self:SetWidth(w + 12)
         self:SetHeight((self.text:GetStringHeight() or 12) + 6)
