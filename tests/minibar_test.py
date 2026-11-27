@@ -30,7 +30,7 @@ ex('NS.StopMove(); NS.SetScan(true)')
 ex('NS.db.nearby = true; NS.db.nearbyStats = true; NS.db.nearbyShowEmpty = true; NS.RefreshUI(); tick(1.5)')
 ex('WatchXNearby:Show(); WatchXNearby.news:Hide(); tick(1.5)')
 cp = ev('table.concat({ tostring(select(1, WatchXNearby.count:GetPoint(1))), tostring(select(3, WatchXNearby.count:GetPoint(1))), tostring(select(4, WatchXNearby.count:GetPoint(1))) }, " ")')
-check(cp == "RIGHT TOPRIGHT -8", "the count at the very end of the title's line")
+check(cp == "TOPRIGHT TOPRIGHT -8", "the count at the very end of the title's line, the title's top")
 check(ev('select(2, WatchXNearby.stats:GetPoint(1)) == WatchXNearby.title and select(2, WatchXNearby.stats:GetPoint(2)) == WatchXNearby.count'),
       "ms / fps between the title and the count")
 # room for it (the harness's font: 6 px a letter)

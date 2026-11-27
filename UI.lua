@@ -3552,12 +3552,13 @@ local function BuildNearby()
     f.news:SetScript("OnLeave", GameTooltip_Hide)
     f.news:Hide()
     -- the title's line: "Enemies" · ms and fps in the middle · the coin (bounty news) · how many, at the very end
+    -- (all three in the title's font, on the title's line: the same top, so the same baseline)
     f.count = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    f.count:SetPoint("RIGHT", f, "TOPRIGHT", -8, -13)
+    f.count:SetPoint("TOPRIGHT", f, "TOPRIGHT", -8, -6)
     f.count:SetTextColor(ACCENT[1], ACCENT[2], ACCENT[3])
     f.news:SetPoint("RIGHT", f.count, "LEFT", -6, 0)
     -- ms and fps, once a second (two cheap calls): green / yellow / red by how good it is
-    f.stats = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    f.stats = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     f.stats:SetJustifyH("CENTER")   -- (in the middle of the room between the title and the coin / the count)
     if f.stats.SetWordWrap then f.stats:SetWordWrap(false) end
     -- a timer, not a check every frame; nothing to do while the list is hidden
@@ -3575,7 +3576,7 @@ local function BuildNearby()
         if self.statsRight ~= right then
             self.statsRight = right
             self.stats:ClearAllPoints()
-            self.stats:SetPoint("LEFT", self.title, "RIGHT", 6, 0)
+            self.stats:SetPoint("TOPLEFT", self.title, "TOPRIGHT", 6, 0)
             self.stats:SetPoint("RIGHT", right, "LEFT", -6, 0)
         end
         -- not room for it all (a narrow list): shorter, then just the fps, then nothing – never over the title
