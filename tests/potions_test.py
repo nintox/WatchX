@@ -65,6 +65,40 @@ ex('tick(15, 1); NS.RefreshUI(); tick(1)')
 check("SWIFTNESS" not in str(ev('rowText()')) and "FREE ACTION" in str(ev('rowText()')), "Swiftness over (15 s), Free Action still on")
 check(ev('PF.nameplate1.pots[1]:IsShown()') and not ev('PF.nameplate1.pots[2]:IsShown()'), "the plate: one icon left")
 ex('tick(16, 1)')
+# your order: Free Action before Swiftness (default), though Swiftness is over sooner; then your own; how many
+ex('cast("nameplate1", 2379); tick(0.3); cast("nameplate1", 6615); tick(0.3)')
+check(ev('NS.ActivePotions(NS.nearby[key("nameplate1")])[1].label') == "Free Action", "default order: Free Action first")
+ex('NS.SetPotionOrder("swift, free")')
+check(ev('NS.db.potionOrder[1]') == "Swiftness" and ev('NS.db.potionOrder[2]') == "Free Action", "\"swift, free\" -> Swiftness, Free Action")
+check(ev('NS.ActivePotions(NS.nearby[key("nameplate1")])[1].label') == "Swiftness", "now Swiftness first")
+ex('CHATLINES = {}; NS.SetPotionOrder("Free Action, Bananas")')
+check(ev('#NS.db.potionOrder') == 1, "an unknown name left out")
+check("Bananas" in str(ev('table.concat(CHATLINES or {}, " ")')), "and said")
+ex('NS.db.platePotionMax = 1; NS.UpdatePlates()')
+check(ev('PF.nameplate1.pots[1]:IsShown()') and not ev('PF.nameplate1.pots[2]:IsShown()'), "at most 1 on a plate: one icon")
+ex('NS.db.platePotionMax = 4; NS.UpdatePlates(); tick(31, 1)')
+# your own potion: an item's name -> the spell it casts; then it shows like the others
+ex('''
+SPELLS[11405] = "Elixir of the Giants"; SPELLS[17549] = "Arcane Protection"
+C_Item.GetItemSpell = function(n) if n == "Elixir of Giants" then return "Elixir of the Giants", 11405 end end
+CHATLINES = {}
+''')
+check(ev('NS.AddCustomPotion("Elixir of Giants: 60")') == True, "added: Elixir of Giants: 60")
+check(ev('NS.db.customPotions[1].spell') == "Elixir of the Giants" and ev('NS.db.customPotions[1].secs') == 60, "its spell and seconds")
+check("Elixir of Giants 60s" in str(ev('NS.PotionListText()')), "in the list of watched ones")
+check("Free Action 30s" in str(ev('NS.PotionListText()')), "the built-in ones in that list too")
+ex('cast("nameplate1", 11405); tick(0.3)')
+check(ev('NS.ActivePotions(NS.nearby[key("nameplate1")])[1].label') == "Elixir of Giants", "seen when they drink it")
+check(ev('PF.nameplate1.pots[1]:IsShown()'), "on the plate")
+ex('NS.SetPotionOrder("giants, free action")')
+check(ev('NS.db.potionOrder[1]') == "Elixir of Giants", "yours can go in the order")
+check(ev('NS.AddCustomPotion("17549: 20")') == True and ev('NS.db.customPotions[2].label') == "Arcane Protection", "by spell ID")
+check(ev('NS.AddCustomPotion("Elixir of Giants: 45")') and ev('#NS.db.customPotions') == 2 and ev('NS.db.customPotions[2].secs') == 45, "added again: its seconds changed, not twice")
+check(ev('NS.RemoveCustomPotion("elixir of giants")') == True and ev('#NS.db.customPotions') == 1, "removed")
+check(ev('NS.RemoveCustomPotion("Free Action")') == False, "a built-in one can't be removed")
+ex('tick(61, 1); cast("nameplate1", 11405); tick(0.3)')
+check(len(list(ev('NS.ActivePotions(NS.nearby[key("nameplate1")])').values())) == 0, "removed: not watched")
+ex('NS.SetPotionOrder("Free Action, Living Action, Invulnerability, Swiftness, Restorative")')
 # /wx plates test: a made-up potion and stance on your target's plate, a friend's too (friendly icons off)
 ex('''
 NS.db.plateStance = true; NS.db.plateFriendly = false

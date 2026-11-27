@@ -2574,8 +2574,68 @@ function ns.BuildNearbySettings()
     note("Seen when they drink or switch: the potion is a spell they cast. A stance also shows from an ability only it "
         .. "allows (Overpower, Shield Wall, Whirlwind …), and out of combat from the warrior's stance buff.")
     y = y - 34
-    note("|cffffd100/wx plates test|r – a test potion and stance on your target's nameplate (a mob or a friend works).")
+    local potionList   -- (the list itself: last on the page, it grows when you add one)
+    do   -- your own potions
+        local function fill() if potionList then potionList:SetText("|cffaaaaaaWatched:|r " .. ns.PotionListText()) end end
+        local lab = o:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+        lab:SetPoint("TOPLEFT", o, "TOPLEFT", L + 4, y - 6)
+        lab:SetText("Your own potion")
+        local eb = CreateFrame("EditBox", "WatchXPotionAdd", o, "InputBoxTemplate")
+        eb:SetSize(220, 20)
+        eb:SetPoint("TOPLEFT", o, "TOPLEFT", L + 140, y - 2)
+        eb:SetAutoFocus(false)
+        eb:SetMaxLetters(60)
+        local function act(fn)
+            local t = ns.Trim(eb:GetText())
+            if t ~= "" and fn(t) ~= false then eb:SetText("") end
+            eb:ClearFocus()
+        end
+        eb:SetScript("OnEnterPressed", function() act(ns.AddCustomPotion) end)
+        eb:SetScript("OnEscapePressed", function(self) self:SetText(""); self:ClearFocus() end)
+        local add = Button(o, "Add", 60, 22, function() act(ns.AddCustomPotion) end)
+        add:SetPoint("LEFT", eb, "RIGHT", 8, 0)
+        local rem = Button(o, "Remove", 70, 22, function() act(ns.RemoveCustomPotion) end)
+        rem:SetPoint("LEFT", add, "RIGHT", 6, 0)
+        P.potionAdd = eb
+        y = y - 26
+        note("Its name and how long it lasts, e.g. |cffffd100Elixir of Giants: 60|r (or a spell ID). Only what they "
+            .. "drink in sight counts – the game shows it as a spell then.")
+        y = y - 34
+        ns.RefreshPotionList = function()
+            fill()
+            ns.UpdatePlates()
+            if P.potionBox and P.potionBox:IsShown() then P.potionBox:GetScript("OnShow")(P.potionBox) end
+        end
+    end
+    do   -- which potions first (nearest the class icon), and how many on one plate
+        local lab = o:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+        lab:SetPoint("TOPLEFT", o, "TOPLEFT", L + 4, y - 6)
+        lab:SetText("Shown first")
+        local eb = CreateFrame("EditBox", "WatchXPotionOrder", o, "InputBoxTemplate")
+        eb:SetSize(330, 20)
+        eb:SetPoint("TOPLEFT", o, "TOPLEFT", L + 140, y - 2)
+        eb:SetAutoFocus(false)
+        eb:SetMaxLetters(240)
+        local function show() eb:SetText(table.concat(type(db().potionOrder) == "table" and db().potionOrder or {}, ", ")) end
+        local function save() ns.SetPotionOrder(eb:GetText()); show() end
+        eb:SetScript("OnEnterPressed", function(self) save(); self:ClearFocus() end)
+        eb:SetScript("OnEditFocusLost", save)
+        eb:SetScript("OnEscapePressed", function(self) show(); self:ClearFocus() end)
+        eb:SetScript("OnShow", show)
+        P.potionBox = eb
+        y = y - 26
+        note("Potions with a comma between, the most important first – it sits nearest the class icon. "
+            .. "The rest come after, the one over soonest first.")
+        y = y - 34
+        stepper("Potions on a plate", "at most, 1 – 6 · normal 4", function() return ns.PlatePotionMax() end, function(d)
+            db().platePotionMax = math.max(1, math.min(6, ns.PlatePotionMax() + d)); ns.UpdatePlates()
+        end)
+    end
+    note("|cffffd100/wx plates test|r – test potions and a stance on your target's nameplate (a mob or a friend works).")
     y = y - 20
+    potionList = note("")
+    potionList:SetText("|cffaaaaaaWatched:|r " .. ns.PotionListText())
+    y = y - (potionList:GetStringHeight() or 40) - 60   -- (room for a few of yours)
 
     -- ===== KOS & bounties
     local kosPage = NewSub("kos", "WatchXKOSOptions", "KOS & bounties", "kill on sight, and WANTED – shared with your guild and friends")
@@ -9032,7 +9092,7 @@ function ns.PaintPlateExtras(f, unit, hostile)
     f.pots = f.pots or {}
     for i = 1, math.max(#pots, #f.pots) do
         local p, b = pots[i], f.pots[i]
-        if p and i <= 4 then
+        if p and i <= ns.PlatePotionMax() then
             if not b then b = ns.PlatePotIcon(f, i); f.pots[i] = b end
             local ps = math.floor(size * 0.72 + 0.5)
             b:SetSize(ps, ps)
@@ -9087,7 +9147,10 @@ function ns.PlateDemo()
     ns.plateDemo.potions = { [6615] = ns.plateDemo.potion,
         [2379] = { label = "Swiftness", spell = 2379, untilT = now + 12, dur = 12 } }
     ns.UpdatePlates()
-    if C_Timer then C_Timer.After(dur + 0.2, function() ns.plateDemo = nil; ns.Safe("nameplate icons", ns.UpdatePlates) end) end
+    if C_Timer then
+        C_Timer.After(12.2, function() ns.Safe("nameplate icons", ns.UpdatePlates) end)   -- (Swiftness over)
+        C_Timer.After(dur + 0.2, function() ns.plateDemo = nil; ns.Safe("nameplate icons", ns.UpdatePlates) end)
+    end
     local d = db()
     P(("A test on %s's nameplate for %d s: potions (Swiftness 12 s, Free Action) right of the class icon, the stance (Defensive) left of it.")
         :format(ns.plateDemo.name, dur))
@@ -9099,14 +9162,132 @@ function ns.PlateDemo()
     end
 end
 
--- A player's potions still on, the one over soonest first (it sits nearest the class icon).
+-- A player's potions still on: the ones in your order first (Settings > Nameplates), the rest over soonest first.
+-- The first sits nearest the class icon.
 function ns.ActivePotions(e)
     local out, now = {}, GetTime()
     if not e then return out end
     local src = e.potions or (e.potion and { [e.potion.spell] = e.potion }) or {}
     for _, p in pairs(src) do if p.untilT > now then out[#out + 1] = p end end
-    table.sort(out, function(a, b) return a.untilT < b.untilT end)
+    local rank = {}
+    for i, n in ipairs(type(db().potionOrder) == "table" and db().potionOrder or {}) do rank[n:lower()] = i end
+    table.sort(out, function(a, b)
+        local ra, rb = rank[a.label:lower()] or 1000, rank[b.label:lower()] or 1000
+        if ra ~= rb then return ra < rb end
+        return a.untilT < b.untilT
+    end)
     return out
+end
+-- "free action, swift" -> { "Free Action", "Swiftness" } (a name or its start); the unknown ones are said.
+function ns.SetPotionOrder(text)
+    local out, bad, seen = {}, {}, {}
+    for part in tostring(text or ""):gmatch("[^,;]+") do
+        local want = ns.Trim(part):lower()
+        if want ~= "" then
+            local hit
+            local labels = ns.PotionLabels()
+            for _, n in ipairs(labels) do if n:lower() == want then hit = n end end
+            for _, how in ipairs({ "start", "in" }) do   -- its start ("free"), else a word in it ("giants")
+                if hit ~= nil then break end
+                for _, n in ipairs(labels) do
+                    local l = n:lower()
+                    if (how == "start" and l:sub(1, #want) == want) or (how == "in" and l:find(want, 1, true)) then
+                        if hit then hit = false break end   -- (two fit: say which)
+                        hit = n
+                    end
+                end
+            end
+            if hit and not seen[hit] then seen[hit] = true; out[#out + 1] = hit
+            elseif not hit then bad[#bad + 1] = ns.Trim(part) end
+        end
+    end
+    db().potionOrder = out
+    if #bad > 0 then
+        ns.Print("Not a potion WatchX knows: " .. table.concat(bad, ", ") .. ". These are: "
+            .. table.concat(ns.PotionLabels(), ", ") .. ".")
+    end
+    ns.UpdatePlates()
+    return out
+end
+-- The names: the built-in ones and yours.
+function ns.PotionLabels()
+    local out, seen = {}, {}
+    for _, n in ipairs(ns.POTION_LABELS or {}) do out[#out + 1] = n; seen[n:lower()] = true end
+    for _, c in ipairs(ns.db and type(ns.db.customPotions) == "table" and ns.db.customPotions or {}) do
+        if type(c.label) == "string" and not seen[c.label:lower()] then out[#out + 1] = c.label; seen[c.label:lower()] = true end
+    end
+    return out
+end
+-- "Free Action 30s, … · yours: Elixir of Giants 60s" (for Settings and /wx potions)
+function ns.PotionListText()
+    local t = {}
+    for _, v in pairs(ns.POTIONS or {}) do t[#t + 1] = v[1] .. " " .. v[2] .. "s" end
+    table.sort(t)
+    local mine = {}
+    for _, c in ipairs(ns.db and type(ns.db.customPotions) == "table" and ns.db.customPotions or {}) do
+        mine[#mine + 1] = "|cffffd100" .. tostring(c.label) .. " " .. tostring(c.secs) .. "s|r"
+    end
+    return table.concat(t, ", ") .. (#mine > 0 and ("  ·  yours: " .. table.concat(mine, ", ")) or "")
+end
+-- "Elixir of Giants: 60" (or "… 60", or a spell ID): the item's name is turned into the spell it casts when it's
+-- drunk, as that's what the game shows. Without seconds: 30.
+function ns.AddCustomPotion(text)
+    text = ns.Trim(tostring(text or ""))
+    local name, secs = text:match("^(.-)%s*[:=]?%s*(%d+)%s*s?$")
+    if not name then name = text end
+    name = ns.Trim(name)
+    local id
+    if name == "" and secs then id, secs = tonumber(secs), nil end
+    if name:match("^%d+$") then id = tonumber(name) end
+    secs = tonumber(secs)
+    local spell, label = name, name
+    if id then
+        local get = (C_Spell and C_Spell.GetSpellName) or GetSpellInfo
+        local ok, n = pcall(get or function() end, id)
+        n = ok and Readable(n) or nil
+        if type(n) ~= "string" then ns.Print("No spell with ID " .. id .. ".") return false end
+        spell, label = n, n
+    elseif name ~= "" then
+        local getItem = (C_Item and C_Item.GetItemSpell) or GetItemSpell
+        if getItem then   -- an item: the spell it casts (the game knows the item once you've seen it)
+            local ok, sn, sid = pcall(getItem, name)
+            sn, sid = ok and Readable(sn) or nil, ok and Readable(sid) or nil
+            if type(sn) == "string" and sn ~= "" then spell = sn; id = tonumber(sid) end
+        end
+    end
+    if spell == "" then ns.Print("Write a potion's name, e.g. Elixir of Giants: 60") return false end
+    if secs and (secs < 1 or secs > 3600) then ns.Print("Seconds: 1 – 3600.") return false end
+    local d = db()
+    d.customPotions = type(d.customPotions) == "table" and d.customPotions or {}
+    for i = #d.customPotions, 1, -1 do
+        local c = d.customPotions[i]
+        if (type(c.spell) == "string" and c.spell:lower() == spell:lower()) or (type(c.label) == "string" and c.label:lower() == label:lower()) then
+            table.remove(d.customPotions, i)
+        end
+    end
+    table.insert(d.customPotions, { spell = spell, id = id, label = label, secs = secs or 30 })
+    ns.Print(("Watching for %s on enemy players (%d s%s)%s.")
+        :format(label, secs or 30, secs and "" or " – write Name: seconds to change",
+            spell ~= label and (" – it casts " .. spell) or ""))
+    if ns.RefreshPotionList then ns.RefreshPotionList() end
+    return true
+end
+function ns.RemoveCustomPotion(text)
+    local want = ns.Trim(tostring(text or "")):gsub("%s*[:=]?%s*%d+%s*s?$", ""):lower()
+    local d = db()
+    for i, c in ipairs(type(d.customPotions) == "table" and d.customPotions or {}) do
+        if (type(c.label) == "string" and c.label:lower() == want) or (type(c.spell) == "string" and c.spell:lower() == want) then
+            table.remove(d.customPotions, i)
+            ns.Print("Not watching for " .. tostring(c.label) .. " any more.")
+            if ns.RefreshPotionList then ns.RefreshPotionList() end
+            return true
+        end
+    end
+    ns.Print("Not one of yours: " .. tostring(text) .. " (the built-in ones can't be removed).")
+    return false
+end
+function ns.PlatePotionMax()
+    return math.max(1, math.min(6, tonumber(db().platePotionMax) or 4))
 end
 -- One potion's icon on a plate: the i-th right of the class icon, a blue edge, the game's cooldown shade.
 function ns.PlatePotIcon(f, i)

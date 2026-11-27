@@ -71,6 +71,9 @@ local defaults = {
     shareGuild = false,   -- ... and / or in guild chat
     shareFriends = false, -- ... and / or whispered to the friends in shareFriendNames
     shareFriendNames = {},
+    potionOrder = { "Free Action", "Living Action", "Invulnerability", "Swiftness", "Restorative" },   -- shown first
+    platePotionMax = 4,   -- potions on one nameplate at most
+    customPotions = {},   -- your own: { spell = the spell it casts, id, label, secs } (Settings > Nameplates)
     shareStealth = true,  -- ... which: stealth, KOS, WANTED (and every new enemy, at most one every 10 s)
     shareKOS = true,
     shareWanted = true,
@@ -1322,6 +1325,10 @@ do   -- (its own block: the main chunk is at Lua's 200-locals limit)
         ["Nature Protection"] = { "Nature Protection", 60 }, ["Shadow Protection"] = { "Shadow Protection", 60 },
         ["Arcane Protection"] = { "Arcane Protection", 60 },
     }
+    ns.POTIONS = POTIONS
+    ns.POTION_LABELS = {}   -- (the names you can put in the order: Settings > Nameplates)
+    for _, v in pairs(POTIONS) do ns.POTION_LABELS[#ns.POTION_LABELS + 1] = v[1] end
+    table.sort(ns.POTION_LABELS)
     local POTION_IDS = { [6615] = "Free Action", [24364] = "Living Free Action", [3169] = "Invulnerability",
         [11359] = "Restoration", [2379] = "Speed", [17528] = "Mighty Rage" }
     local STANCES = { ["Battle Stance"] = "Battle", ["Defensive Stance"] = "Defensive", ["Berserker Stance"] = "Berserker" }
@@ -1347,6 +1354,14 @@ do   -- (its own block: the main chunk is at Lua's 200-locals limit)
         local name = POTION_IDS[spellID] or SpellName(spellID)
         if type(name) ~= "string" then return end
         local pot, st = POTIONS[name], STANCES[name] or STANCE_OF[name]
+        if not pot and type(db.customPotions) == "table" then   -- one you added yourself
+            local low = name:lower()
+            for _, c in ipairs(db.customPotions) do
+                if c.id == spellID or (type(c.spell) == "string" and c.spell:lower() == low) then
+                    pot = { c.label, tonumber(c.secs) or 30 } break
+                end
+            end
+        end
         if not (pot or st) then return end
         if Plain(UnitIsPlayer(unit)) ~= true or not ns.IsHostilePlayer(unit) then return end
         if st and not IsWarrior(unit) then st = nil end   -- (Charge, Taunt … of a druid's: no stance)
@@ -4668,6 +4683,12 @@ local function OnSlash(input)
         if ns.ShowExport then ns.ShowExport(cmd == "import") end
     elseif (cmd == "plates" or cmd == "plate" or cmd == "nameplates") and rest == "test" and ns.PlateDemo then
         ns.PlateDemo()
+    elseif (cmd == "potion" or cmd == "potions") and ns.AddCustomPotion then
+        -- /wx potions: the list · /wx potion add Name: seconds · /wx potion remove Name
+        local sub, what = rest:match("^(%S+)%s*(.*)$")
+        if sub == "add" and what ~= "" then ns.AddCustomPotion(what)
+        elseif (sub == "remove" or sub == "delete") and what ~= "" then ns.RemoveCustomPotion(what)
+        else Print("Potions watched: " .. ns.PotionListText()) Print("/wx potion add Name: seconds · /wx potion remove Name") end
     elseif cmd == "scroll" or cmd == "scrolls" or cmd == "comprehend" then
         if ns.ScrollDebug then ns.ScrollDebug() else Print("Scrolls.lua isn't loaded – log out and in again (a /reload doesn't load new files).") end
     elseif cmd == "rebuff" then
