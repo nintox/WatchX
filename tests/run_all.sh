@@ -16,6 +16,8 @@ for t in smoke_test combat_test warnings_test eating_test names_news_test announ
     out="$("$PY" "$t.py" 2>&1)"
     if [ $? -eq 0 ]; then echo "pass  $(printf '%s' "$out" | tail -n 1)"; else echo "FAIL  $t"; printf '%s\n' "$out" | grep -v "^ok" | tail -n 15; fail=1; fi
 done
-for f in ../bridge/watchx_bridge.sh "../bridge/Install (Mac).command" "../bridge/Uninstall (Mac).command"; do bash -n "$f" || fail=1; done
+for f in ../bridge/watchx_bridge.sh "../bridge/Install (Mac).command" "../bridge/Uninstall (Mac).command" "../bridge/Cloud sync (Mac).command"; do bash -n "$f" || fail=1; done
+out="$(bash cloudsync_test.sh 2>&1)"
+if [ $? -eq 0 ]; then echo "pass  $(printf '%s' "$out" | tail -n 1)"; else echo "FAIL  cloudsync_test"; printf '%s\n' "$out" | grep -v "^ok"; fail=1; fi
 [ $fail = 0 ] && echo "bash -n ok – all passed"
 exit $fail

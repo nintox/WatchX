@@ -20,6 +20,13 @@ After installing you can delete the zip and this folder.
 Then in game: /wx > Settings, paste your ntfy link and/or Discord webhook, "Save & reload",
 and press "Send test".
 
+CLOUD SYNC (optional – several computers)
+  Double-click  Cloud sync (Mac).command  /  Cloud sync (Windows).bat  and pick a folder your cloud keeps in step
+  (iCloud Drive, Dropbox, OneDrive, Google Drive). Do the same on the other computer, with the same folder.
+  WatchX's settings (all of them: profiles, layouts, enemies, KOS) then follow you: sent up when you log out,
+  fetched before you play. Play on one computer at a time. Before a fetch yours is kept as WatchX.lua.before-sync.
+  Mac: if the log says macOS won't let the bridge use the folder, pick one in your home folder (e.g. ~/Dropbox).
+
 REMOVE
   Double-click "Uninstall" (here, or in the folder above).
 

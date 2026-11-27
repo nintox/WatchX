@@ -335,6 +335,77 @@ check_exit() {   # every 2 seconds (the settings file and the game process)
     fi
 }
 
+# ---------------------------------------------------------------- cloud sync (optional)
+# One folder you pick ("Cloud sync (Mac).command" writes it to cloud_folder.txt): a folder iCloud Drive, Dropbox,
+# OneDrive or Google Drive keeps in step between your computers. WatchX's settings file of each WoW account is kept
+# there as <folder>/WatchX/<account>/WatchX.lua:
+#   * yours changed (you logged out or reloaded): copied up
+#   * the cloud's changed (another computer) and the game isn't running: copied down (the game reads it at login,
+#     and writes over it at logout – so never while it runs). Yours is kept as WatchX.lua.before-sync first.
+#   * the first time on a computer, when the cloud already has one: the cloud's is taken (yours kept as above).
+# What was last in step is remembered per account (sync/<account>.sum), so it's clear which side changed. Both
+# changed (two computers playing at once): yours wins, the cloud's is kept next to it as WatchX.lua.conflict.
+CLOUD_CFG="$DIR/cloud_folder.txt"
+SYNC_DIR="$DIR/sync"
+CLOUD_AT=0 CLOUD_SAID=""
+sum_of() { [ -f "$1" ] && cksum < "$1" 2>/dev/null | awk '{ print $1 "-" $2 }'; }
+settled() {   # <file>: not being written right now (same size twice, half a second apart)
+    local a b
+    a="$(stat -f %z "$1" 2>/dev/null)"; sleep 0.5; b="$(stat -f %z "$1" 2>/dev/null)"
+    [ -n "$a" ] && [ "$a" = "$b" ]
+}
+put() {   # <from> <to>: a whole copy or none (a temp file next to it, then renamed)
+    mkdir -p "$(dirname "$2")" && cp -p "$1" "$2.watchx-tmp" && mv -f "$2.watchx-tmp" "$2"
+}
+cloud_say() { [ "$CLOUD_SAID" = "$1" ] || { CLOUD_SAID="$1"; log "Cloud sync: $1"; }; }
+cloud_sync() {   # every 5 seconds
+    local now cloud acc name L C S base ls cs at
+    now="$(date +%s)"
+    [ $((now - CLOUD_AT)) -lt 5 ] && return
+    CLOUD_AT="$now"
+    cloud="$(head -n 1 "$CLOUD_CFG" 2>/dev/null)"
+    [ -n "$cloud" ] || { CLOUD_SAID=""; return; }
+    if [ ! -d "$cloud" ]; then cloud_say "the folder isn't there: $cloud"; return; fi
+    if ! { mkdir -p "$cloud/WatchX" 2>/dev/null && touch "$cloud/WatchX/.watchx-test" 2>/dev/null; }; then
+        cloud_say "macOS won't let the bridge use $cloud – pick a folder in your home folder (e.g. Dropbox), or give bash Full Disk Access"
+        return
+    fi
+    rm -f "$cloud/WatchX/.watchx-test"
+    cloud_say "on – $cloud/WatchX"
+    mkdir -p "$SYNC_DIR"
+    for acc in "$ROOT"/WTF/Account/*/; do
+        name="$(basename "$acc")"
+        [ "$name" = "SavedVariables" ] && continue
+        L="${acc}SavedVariables/WatchX.lua" C="$cloud/WatchX/$name/WatchX.lua" S="$SYNC_DIR/$name.sum"
+        base="$(cat "$S" 2>/dev/null)" ls="$(sum_of "$L")" cs="$(sum_of "$C")"
+        if [ "$ls" = "$cs" ]; then
+            [ -n "$ls" ] && [ "$base" != "$ls" ] && echo "$ls" > "$S"
+            continue
+        fi
+        if [ -n "$cs" ] && { [ -z "$base" ] || [ "$cs" != "$base" ]; } && { [ -z "$base" ] || [ "$ls" = "$base" ] || [ -z "$ls" ]; }; then
+            # down: the cloud's is new (or this computer is new to it) and yours hasn't changed
+            wow_running && continue
+            settled "$C" || continue
+            [ -f "$L" ] && cp -p "$L" "$L.before-sync"
+            put "$C" "$L" || { log "Cloud sync: couldn't write $L"; continue; }
+            echo "$(sum_of "$L")" > "$S"
+            log "Cloud sync: $name – got the settings from the cloud"
+            # the file changed, but nothing happened here: no "logged out" alert from another computer's logout
+            SV_MTIME="$(stat -f %m "$(sv_file)" 2>/dev/null)"
+            at="$(sv_num "$L" exitAt)"; [ -n "$at" ] && LAST_EXIT="$at"
+        elif [ -n "$ls" ]; then
+            # up: yours changed (a logout, a reload) – or the cloud has none yet
+            settled "$L" || continue
+            if [ -n "$cs" ] && [ -n "$base" ] && [ "$cs" != "$base" ]; then
+                cp -p "$C" "$C.conflict" && log "Cloud sync: $name – both changed; yours kept, the cloud's saved as WatchX.lua.conflict"
+            fi
+            put "$L" "$C" || { log "Cloud sync: couldn't write $C"; continue; }
+            echo "$ls" > "$S"
+            log "Cloud sync: $name – sent your settings to the cloud"
+        fi
+    done
+}
+
 # ---------------------------------------------------------------- slow fallback: chat log
 
 watch_chatlog() {
@@ -375,6 +446,9 @@ watch_chatlog() {
     done < <(exec tail -n 0 -F "$CHATLOG" 2>/dev/null)
 }
 
+# (the tests load the functions above without starting the bridge)
+if [ -n "${WATCHX_LIB:-}" ]; then return 0 2>/dev/null || exit 0; fi
+
 # ---------------------------------------------------------------- main
 
 log "WatchX bridge 2.0 – Made by Rikerud"
@@ -413,5 +487,6 @@ watch_chatlog &
 while true; do
     check_shots
     check_exit
+    cloud_sync
     if [ "$WOW_UP" = 1 ]; then sleep 0.3; else sleep 2; fi
 done

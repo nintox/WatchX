@@ -12,7 +12,7 @@
 # Normally started automatically by "Install (Windows).bat".
 # Manually:  powershell -ExecutionPolicy Bypass -File watchx_bridge.ps1 [-Test] [-Decode <image>]
 
-param([switch]$Test, [string]$Decode = '', [switch]$Install)
+param([switch]$Test, [string]$Decode = '', [switch]$Install, [switch]$Cloud)
 
 $ErrorActionPreference = 'Continue'
 try {
@@ -67,7 +67,7 @@ if ($Install) {
 
     [void](New-Item -ItemType Directory -Force -Path $InstallDir)
     if ([IO.Path]::GetFullPath($Dir).TrimEnd('\') -ne [IO.Path]::GetFullPath($InstallDir).TrimEnd('\')) {
-        foreach ($f in 'watchx_bridge.ps1', 'watchx_decode.js', 'Uninstall (Windows).bat') {
+        foreach ($f in 'watchx_bridge.ps1', 'watchx_decode.js', 'Uninstall (Windows).bat', 'Cloud sync (Windows).bat') {
             $src = Join-Path $Dir $f
             if (Test-Path -LiteralPath $src) { Copy-Item -LiteralPath $src -Destination $InstallDir -Force }
         }
@@ -87,6 +87,33 @@ if ($Install) {
     $s.WindowStyle = 7
     $s.Save()
     Start-Process -FilePath $exe -ArgumentList $args1 -WorkingDirectory $InstallDir -WindowStyle Hidden
+    exit 0
+}
+
+# ---------------------------------------------------------------- pick the cloud folder ("Cloud sync (Windows).bat")
+# A folder OneDrive, Dropbox, Google Drive or iCloud keeps in step between your computers; saved in cloud_folder.txt
+# next to the installed bridge, which picks it up within a few seconds. Cancel = as it was; "Turn off" = no sync.
+if ($Cloud) {
+    $InstallDir = Join-Path $env:LOCALAPPDATA 'WatchX'
+    $cfg = Join-Path $InstallDir 'cloud_folder.txt'
+    [void](New-Item -ItemType Directory -Force -Path $InstallDir)
+    Add-Type -AssemblyName System.Windows.Forms
+    $now = ''
+    if (Test-Path -LiteralPath $cfg) { $now = ([IO.File]::ReadAllText($cfg)).Trim() }
+    if ($now) {
+        $a = [Windows.Forms.MessageBox]::Show("WatchX syncs to:`n$now`n`nYes = pick another folder`nNo = turn sync off`nCancel = keep it",
+            'WatchX cloud sync', 'YesNoCancel', 'Question')
+        if ($a -eq 'Cancel') { exit 0 }
+        if ($a -eq 'No') { Remove-Item -LiteralPath $cfg -Force; Write-Host 'Cloud sync is off.'; exit 0 }
+    }
+    $dlg = New-Object Windows.Forms.FolderBrowserDialog
+    $dlg.Description = 'Pick a folder your cloud keeps in step (OneDrive, Dropbox, Google Drive, iCloud Drive)'
+    $dlg.ShowNewFolderButton = $true
+    if ($env:OneDrive -and (Test-Path -LiteralPath $env:OneDrive)) { $dlg.SelectedPath = $env:OneDrive }
+    if ($dlg.ShowDialog() -ne 'OK' -or -not $dlg.SelectedPath) { Write-Host 'Nothing changed.'; exit 0 }
+    [IO.File]::WriteAllText($cfg, $dlg.SelectedPath)
+    Write-Host "Cloud sync: $($dlg.SelectedPath)\WatchX"
+    Write-Host 'Do the same on your other computer, with the same folder. Play on one computer at a time.'
     exit 0
 }
 
@@ -500,6 +527,93 @@ function Check-Exit {
     }
 }
 
+# ---------------------------------------------------------------- cloud sync (optional)
+# One folder you pick ("Cloud sync (Windows).bat" writes it to cloud_folder.txt): a folder OneDrive, Dropbox, Google
+# Drive or iCloud keeps in step between your computers. WatchX's settings file of each WoW account is kept there as
+# <folder>\WatchX\<account>\WatchX.lua:
+#   * yours changed (you logged out or reloaded): copied up
+#   * the cloud's changed (another computer) and the game isn't running: copied down (the game reads it at login,
+#     and writes over it at logout – so never while it runs). Yours is kept as WatchX.lua.before-sync first.
+#   * the first time on a computer, when the cloud already has one: the cloud's is taken (yours kept as above).
+# What was last in step is remembered per account (sync\<account>.sum), so it's clear which side changed. Both
+# changed (two computers playing at once): yours wins, the cloud's is kept next to it as WatchX.lua.conflict.
+$CloudCfg = Join-Path $Dir 'cloud_folder.txt'
+$SyncDir = Join-Path $Dir 'sync'
+$script:CloudNext = [DateTime]::MinValue; $script:CloudSaid = ''
+function Get-Sum([string]$path) {
+    if (-not (Test-Path -LiteralPath $path)) { return '' }
+    try { return (Get-FileHash -LiteralPath $path -Algorithm SHA1 -ErrorAction Stop).Hash } catch { return '' }
+}
+function Test-Settled([string]$path) {   # not being written right now (same size twice, half a second apart)
+    $a = Size-Of $path; Start-Sleep -Milliseconds 500; $b = Size-Of $path
+    return ($a -ge 0 -and $a -eq $b)
+}
+function Copy-Whole([string]$from, [string]$to) {   # a whole copy or none (a temp file next to it, then renamed)
+    [void](New-Item -ItemType Directory -Force -Path (Split-Path $to -Parent))
+    $tmp = $to + '.watchx-tmp'
+    Copy-Item -LiteralPath $from -Destination $tmp -Force -ErrorAction Stop
+    Move-Item -LiteralPath $tmp -Destination $to -Force -ErrorAction Stop
+}
+function Say-Cloud([string]$msg) { if ($script:CloudSaid -ne $msg) { $script:CloudSaid = $msg; Log "Cloud sync: $msg" } }
+function Sync-Cloud {   # every 5 seconds
+    if ((Get-Date) -lt $script:CloudNext) { return }
+    $script:CloudNext = (Get-Date).AddSeconds(5)
+    if (-not (Test-Path -LiteralPath $CloudCfg)) { $script:CloudSaid = ''; return }
+    $cloud = ''
+    try { $cloud = ([IO.File]::ReadAllText($CloudCfg)).Trim() } catch {}
+    if (-not $cloud) { return }
+    if (-not (Test-Path -LiteralPath $cloud)) { Say-Cloud "the folder isn't there: $cloud"; return }
+    $top = Join-Path $cloud 'WatchX'
+    try {
+        [void](New-Item -ItemType Directory -Force -Path $top -ErrorAction Stop)
+        [IO.File]::WriteAllText((Join-Path $top '.watchx-test'), 'ok')
+        Remove-Item -LiteralPath (Join-Path $top '.watchx-test') -Force
+    } catch { Say-Cloud "can't write to $cloud"; return }
+    Say-Cloud "on – $top"
+    [void](New-Item -ItemType Directory -Force -Path $SyncDir)
+    $accRoot = Join-Path $Root 'WTF\Account'
+    foreach ($acc in @(Get-ChildItem -LiteralPath $accRoot -Directory -ErrorAction SilentlyContinue)) {
+        if ($acc.Name -eq 'SavedVariables') { continue }
+        $L = Join-Path $acc.FullName 'SavedVariables\WatchX.lua'
+        $C = Join-Path (Join-Path $top $acc.Name) 'WatchX.lua'
+        $S = Join-Path $SyncDir ($acc.Name + '.sum')
+        $base = ''
+        if (Test-Path -LiteralPath $S) { try { $base = ([IO.File]::ReadAllText($S)).Trim() } catch {} }
+        $ls = Get-Sum $L; $cs = Get-Sum $C
+        if ($ls -eq $cs) {
+            if ($ls -and $base -ne $ls) { [IO.File]::WriteAllText($S, $ls) }
+            continue
+        }
+        try {
+            if ($cs -and (-not $base -or $cs -ne $base) -and (-not $base -or $ls -eq $base -or -not $ls)) {
+                # down: the cloud's is new (or this computer is new to it) and yours hasn't changed
+                if (Test-WowRunning) { continue }
+                if (-not (Test-Settled $C)) { continue }
+                if ($ls) { Copy-Item -LiteralPath $L -Destination ($L + '.before-sync') -Force }
+                Copy-Whole $C $L
+                [IO.File]::WriteAllText($S, (Get-Sum $L))
+                Log "Cloud sync: $($acc.Name) – got the settings from the cloud"
+                # the file changed, but nothing happened here: no "logged out" alert from another computer's logout
+                $sv = Get-SvFile
+                if ($sv) { $script:SvTime = $sv.LastWriteTimeUtc }
+                $at = Get-SvValue ([IO.File]::ReadAllText($L, [Text.Encoding]::UTF8)) 'exitAt'
+                if ($at) { $script:LastExit = $at }
+            }
+            elseif ($ls) {
+                # up: yours changed (a logout, a reload) – or the cloud has none yet
+                if (-not (Test-Settled $L)) { continue }
+                if ($cs -and $base -and $cs -ne $base) {
+                    Copy-Item -LiteralPath $C -Destination ($C + '.conflict') -Force
+                    Log "Cloud sync: $($acc.Name) – both changed; yours kept, the cloud's saved as WatchX.lua.conflict"
+                }
+                Copy-Whole $L $C
+                [IO.File]::WriteAllText($S, $ls)
+                Log "Cloud sync: $($acc.Name) – sent your settings to the cloud"
+            }
+        } catch { Log "Cloud sync: $($acc.Name) – $($_.Exception.Message)" }
+    }
+}
+
 # ---------------------------------------------------------------- slow fallback: chat log
 
 # Only WatchX's own lines: "<key> [WatchX]#..." with this install's key (in any game language). Other players
@@ -594,5 +708,6 @@ while ($true) {
     Check-Shots
     Check-Exit
     Check-ChatLog
+    Sync-Cloud
     if ($script:WowUp) { Start-Sleep -Milliseconds 300 } else { Start-Sleep -Seconds 2 }   # next to no CPU when not playing
 }

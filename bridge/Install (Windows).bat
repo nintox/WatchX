@@ -32,6 +32,9 @@ echo.
 echo Next step in game: type /wx and press Settings, paste your
 echo ntfy URL and/or Discord webhook and press "Save & reload".
 echo.
+echo Several computers? Double-click "Cloud sync (Windows).bat" to keep WatchX's
+echo settings in step through OneDrive, Dropbox, Google Drive or iCloud.
+echo.
 choice /c YN /m "Send a test alert now"
 if errorlevel 2 goto done
 powershell -NoProfile -ExecutionPolicy Bypass -File "%LOCALAPPDATA%\WatchX\watchx_bridge.ps1" -Test

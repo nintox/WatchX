@@ -42,7 +42,7 @@ if [ "$SRC" != "$DEST" ]; then
         echo "Couldn't copy the bridge to $DEST."
         read -r -p "Press Enter to close."; exit 1
     fi
-    cp -f "$SRC/Uninstall (Mac).command" "$DEST/" 2>/dev/null
+    cp -f "$SRC/Uninstall (Mac).command" "$SRC/Cloud sync (Mac).command" "$DEST/" 2>/dev/null
 fi
 printf '%s\n' "$WOW" > "$DEST/wow_folder.txt"
 DIR="$DEST"
@@ -99,6 +99,9 @@ echo "--------------"
 echo
 echo "Next step in game: type /wx and press Settings, paste your"
 echo "ntfy URL and/or Discord webhook and press \"Save & reload\"."
+echo
+echo "Several computers? Double-click \"Cloud sync (Mac).command\" to keep WatchX's"
+echo "settings in step through iCloud Drive, Dropbox, OneDrive or Google Drive."
 echo
 read -r -p "Send a test alert now? (y/n) " answer
 if [ "$answer" = "y" ] || [ "$answer" = "Y" ]; then
