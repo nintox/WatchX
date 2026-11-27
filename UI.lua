@@ -9123,6 +9123,25 @@ do (function()
         end
         return false
     end
+    -- a weapon's own speed, from its tooltip ("Speed 2.60") – there even when the game hides your attack speed;
+    -- nil: no weapon there (a shield, nothing)
+    local base = {}   -- the weapons' own speeds (your haste: the attack speed read / this)
+    local function WeaponSpeed(slot)
+        local TI = C_TooltipInfo
+        if not (TI and TI.GetInventoryItem) then return nil end
+        local ok, data = pcall(TI.GetInventoryItem, "player", slot)
+        if not ok or type(data) ~= "table" or (issecretvalue and issecretvalue(data)) then return nil end
+        for _, l in ipairs(type(data.lines) == "table" and data.lines or {}) do
+            for _, k in ipairs({ "rightText", "leftText" }) do
+                local t = type(l) == "table" and l[k]
+                if type(t) == "string" and not (issecretvalue and issecretvalue(t)) then
+                    local v = t:match("Speed%s+(%d+[%.,]%d+)")
+                    if v then return tonumber((v:gsub(",", "."))) end
+                end
+            end
+        end
+        return nil
+    end
     local function SpellName(id)
         if not id then return nil end
         local get = (C_Spell and C_Spell.GetSpellName) or GetSpellInfo
@@ -9349,12 +9368,48 @@ do (function()
         Run(bars[3], s, s)
     end
 
+    -- another weapon on (or the off hand's taken off): its speed at once – read from the game, or (hidden in a
+    -- fight) the weapon's own speed with the haste you had; attacking: both hands start a fresh swing
+    local function Rearmed()
+        local okA, mh, oh = pcall(UnitAttackSpeed, "player")
+        local hidden = not okA or (issecretvalue and ((mh ~= nil and issecretvalue(mh)) or (oh ~= nil and issecretvalue(oh))))
+        local bm, bo = WeaponSpeed(16), WeaponSpeed(17)
+        if hidden and bm then
+            local ratio = (known.mh and base.mh and base.mh > 0) and known.mh / base.mh or 1
+            known.mh, known.oh = bm * ratio, bo and bo * ratio or nil
+        end
+        if bm then base.mh, base.oh = bm, bo end
+        local m, o = Speeds()
+        if not (autoOn and SwingOn() and bars) then return end
+        if not OffOn() then o = nil end
+        Names(o)
+        if m then Run(bars[1], m, m) end
+        if o then Run(bars[2], o, o)
+        elseif bars[2]:IsShown() then
+            local b = bars[2]
+            if b.timer then b.timer:Cancel(); b.timer = nil end
+            if b.ag then b.ag:Stop() end
+            b.ends = nil
+            b:Hide()
+            Layout()
+            Tick()
+        end
+    end
+
     local function OnEvent(e, unit, a2, a3)
         if e ~= "UNIT_COMBAT" and (e:find("AUTOREPEAT") or e:find("COMBAT") or unit == "player") then
             local id = a3 ~= nil and (Plain(a3) or "hidden") or ""
             Note(e:gsub("^UNIT_SPELLCAST_", ""):gsub("^PLAYER_", "") .. (id ~= "" and ("  " .. tostring(id) .. " " .. (SpellName(Plain(a3)) or "")) or ""))
         end
         if demo then return end
+        if e == "PLAYER_EQUIPMENT_CHANGED" then
+            if unit == 16 or unit == 17 then Rearmed() end
+            return
+        elseif e == "PLAYER_ENTERING_WORLD" then
+            base.mh, base.oh = WeaponSpeed(16), WeaponSpeed(17)
+            Speeds()
+            return
+        end
         if e == "PLAYER_ENTER_COMBAT" then
             autoOn = true
             StartSwing()
@@ -9399,7 +9454,8 @@ do (function()
         end
     end
     local ev = CreateFrame("Frame")
-    for _, e in ipairs({ "PLAYER_ENTER_COMBAT", "PLAYER_LEAVE_COMBAT", "START_AUTOREPEAT_SPELL", "STOP_AUTOREPEAT_SPELL" }) do
+    for _, e in ipairs({ "PLAYER_ENTER_COMBAT", "PLAYER_LEAVE_COMBAT", "START_AUTOREPEAT_SPELL", "STOP_AUTOREPEAT_SPELL",
+                         "PLAYER_EQUIPMENT_CHANGED", "PLAYER_ENTERING_WORLD" }) do
         pcall(ev.RegisterEvent, ev, e)
     end
     for _, e in ipairs({ "UNIT_ATTACK_SPEED", "UNIT_COMBAT", "UNIT_SPELLCAST_START", "UNIT_SPELLCAST_SUCCEEDED",
@@ -9417,6 +9473,7 @@ do (function()
         P(("Swing timer: %s · wand timer: %s"):format(SwingOn() and "on" or "|cffff6060off|r", WandOn() and "on" or "|cffff6060off|r"))
         P(("Speed now: main hand %s, off hand %s, ranged %s  (kept: %s / %s / %s)"):format(okA and plain(mh) or "?",
             okA and plain(oh) or "?", okR and plain(r) or "?", tostring(known.mh), tostring(known.oh), tostring(known.r)))
+        P(("Weapons' own speed: main hand %s, off hand %s"):format(tostring(WeaponSpeed(16)), tostring(WeaponSpeed(17))))
         P(("Attacking: %s · shooting: %s"):format(tostring(autoOn), tostring(Repeating())))
         P("Lately (newest first):")
         for _, l in ipairs(log) do P("  " .. l) end

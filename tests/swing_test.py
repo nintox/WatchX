@@ -125,6 +125,30 @@ check(not ev('WatchXSwing:IsShown()'), "page closed: the bars go")
 ex('OH = 1.8; NS.db.swingOffhand = false; fire("PLAYER_ENTER_COMBAT")')
 check(ev('shown(1)') and not ev('shown(2)') and ev('B(1).name:GetText()') == "Swing", "two weapons, off-hand bar off: just one bar, named Swing")
 ex('fire("PLAYER_LEAVE_COMBAT"); tick(4, 0.1); OH = nil; NS.db.swingOffhand = nil')
+# another weapon on mid-fight: its speed at once (the tooltip's "Speed", with your haste – the game hides the number)
+ex(r"""
+WEAPONS = { [16] = "2.60" }
+C_TooltipInfo.GetInventoryItem = function(u, slot) local sp = WEAPONS[slot]; if not sp then return { lines = {} } end
+    return { lines = { { leftText = "Some Sword" }, { leftText = "40 - 60 Damage", rightText = "Speed " .. sp } } } end
+MH, OH = 2.6, nil
+fire("PLAYER_EQUIPMENT_CHANGED", 16, true)   -- (out of a fight: the weapon's own speed noted)
+MH = 2.0; NS.SwingBars()   -- 2.0 with haste
+fire("PLAYER_ENTER_COMBAT"); tick(0.5, 0.1)
+issecretvalue = function(v) return v == "SECRET" end; MH, OH = "SECRET", "SECRET"
+WEAPONS = { [16] = "1.80", [17] = "1.40" }
+fire("PLAYER_EQUIPMENT_CHANGED", 17, true)
+""")
+check(ev('shown(2)'), "a second weapon on mid-fight: the off-hand bar at once")
+check(abs(ev('B(1).total') - 1.8 * 2.0 / 2.6) < 0.01 and abs(ev('B(2).total') - 1.4 * 2.0 / 2.6) < 0.01,
+      "hidden attack speed: the weapons' own speed with your haste")
+check(ev('B(1).name:GetText()') == "Main hand", "named Main hand now")
+ex('WEAPONS = { [16] = "3.60" }; fire("PLAYER_EQUIPMENT_CHANGED", 17, false)')
+check(not ev('shown(2)') and ev('B(1).name:GetText()') == "Swing", "off hand off: its bar goes, Swing again")
+check(abs(ev('B(1).total') - 3.6 * 2.0 / 2.6) < 0.01, "a two-hander: its speed")
+ex('issecretvalue = nil; MH, OH = 3.1, nil; fire("PLAYER_EQUIPMENT_CHANGED", 16, true)')
+check(abs(ev('B(1).total') - 3.1) < 0.01, "the number shown: read from the game")
+ex('fire("PLAYER_LEAVE_COMBAT"); tick(5, 0.1); MH = 2.6')
+check(not ev('WatchXSwing:IsShown()'), "after the fight: gone")
 errs = errors(ev)
 check(len(errs) == 0, "no Lua errors " + (str(errs[0])[:300] if errs else ""))
 print("swing timer:", "ALL PASSED" if not fails else "%d FAILED" % len(fails))
