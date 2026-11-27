@@ -10,6 +10,9 @@ def check(cond, what):
     if not cond: fails.append(what)
 
 ex(r'''
+SAFEERRS = {}
+local oAdd = DEFAULT_CHAT_FRAME.AddMessage
+DEFAULT_CHAT_FRAME.AddMessage = function(self, m) if tostring(m):find("error %(") then SAFEERRS[#SAFEERRS + 1] = m end return oAdd(self, m) end
 MH, OH, RS = 2.6, nil, 1.5
 UnitAttackSpeed = function(u) return MH, OH end
 UnitRangedDamage = function(u) return RS, 10, 20 end
@@ -149,6 +152,45 @@ ex('issecretvalue = nil; MH, OH = 3.1, nil; fire("PLAYER_EQUIPMENT_CHANGED", 16,
 check(abs(ev('B(1).total') - 3.1) < 0.01, "the number shown: read from the game")
 ex('fire("PLAYER_LEAVE_COMBAT"); tick(5, 0.1); MH = 2.6')
 check(not ev('WatchXSwing:IsShown()'), "after the fight: gone")
+# the game's own swings (PLAYER_SWING: duration, 0 main hand / 1 off hand / 2 ranged): exact, no guessing after that
+ex('issecretvalue = nil; MH, OH = 2.6, nil; fire("PLAYER_ENTER_COMBAT"); tick(0.3, 0.1)')
+ex('fire("PLAYER_SWING", 2.43, 0)')
+check(abs(ev('left(1)') - 2.43) < 0.01 and abs(ev('B(1).total') - 2.43) < 0.01, "PLAYER_SWING: the game's own time (2.43 s)")
+ex('tick(2.6, 0.1)')
+check(ev('shown(1)') and ev('B(1).ends') is None, "the game's swings: full until the next one (not guessed)")
+ex('fire("PLAYER_SWING", 2.43, 0); fire("PLAYER_SWING", 1.71, 1)')
+check(ev('shown(2)') and abs(ev('left(2)') - 1.71) < 0.01 and ev('B(1).name:GetText()') == "Main hand", "the off hand's own swing: its bar, Main hand / Off hand")
+ex('fire("UNIT_SPELLCAST_SUCCEEDED", "player", "g9", 78); fire("UNIT_COMBAT", "player", "PARRY", "", 0, 1)')
+check(abs(ev('left(1)') - 2.43) < 0.01, "no guessing any more (Heroic Strike, parry): the game's time stands")
+ex('fire("PLAYER_LEAVE_COMBAT"); tick(4, 0.1)')
+check(not ev('shown(1)') and not ev('shown(2)'), "auto-attack off: gone after the last swing")
+ex('fire("START_AUTOREPEAT_SPELL"); fire("UNIT_SPELLCAST_SUCCEEDED", "player", "w9", 5019); fire("PLAYER_SWING", 1.38, 2)')
+check(abs(ev('left(3)') - 1.38) < 0.01 and ev('B(3).name:GetText()') == "Wand", "ranged: the game's time, named Wand")
+ex('tick(3, 0.1)')
+check(ev('shown(3)') and ev('B(3).ends') is None, "shooting: full until the game's next shot")
+ex('fire("STOP_AUTOREPEAT_SPELL"); tick(3, 0.1)')
+check(not ev('shown(3)'), "wand stopped: gone")
+ex('issecretvalue = function(v) return v == "SECRET" end; fire("PLAYER_SWING", "SECRET", 0); issecretvalue = nil')
+check(not ev('shown(1)'), "a hidden PLAYER_SWING: ignored, no error")
+# the game's own swing bar: hidden while WatchX's is on, put back when it's off
+ex(r"""
+CV = { showSwingTimer = "1" }
+local oG = GetCVar
+GetCVar = function(k) if CV[k] ~= nil then return CV[k] end return oG(k) end
+SetCVar = function(k, v) CV[k] = tostring(v) end
+fire("PLAYER_ENTERING_WORLD", false, true)
+""")
+check(ev('CV.showSwingTimer') == "0", "the game's swing bar hidden while WatchX's is on")
+ex('NS.db.swingTimer = false; NS.db.wandTimer = false; NS.RefreshSwing()')
+check(ev('CV.showSwingTimer') == "1", "both WatchX bars off: the game's back")
+ex('NS.db.swingTimer = nil; NS.db.wandTimer = nil; NS.db.swingHideBlizz = false; NS.RefreshSwing()')
+check(ev('CV.showSwingTimer') == "1", "untick 'hide the game's': both kept")
+ex('NS.db.swingHideBlizz = nil; COMBAT = true; NS.RefreshSwing()')
+check(ev('CV.showSwingTimer') == "1", "not in a fight")
+ex('COMBAT = false; fire("PLAYER_REGEN_ENABLED")')
+check(ev('CV.showSwingTimer') == "0", "after the fight: hidden")
+serrs = list(ev('SAFEERRS').values())
+check(len(serrs) == 0, "no errors caught by WatchX either " + (str(serrs[0])[:300] if serrs else ""))
 errs = errors(ev)
 check(len(errs) == 0, "no Lua errors " + (str(errs[0])[:300] if errs else ""))
 print("swing timer:", "ALL PASSED" if not fails else "%d FAILED" % len(fails))

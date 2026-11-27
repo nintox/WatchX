@@ -9042,10 +9042,11 @@ end
 
 -- ---------------------------------------------------------------- swing timer & wand timer (Settings > WatchX > MORE)
 -- Thin bars mid-screen: your melee swing (and the off hand's when you dual-wield), and your wand (Shoot) or a
--- hunter's Auto Shot. Forever keeps the combat log from addons, so a melee swing itself isn't seen: that bar starts
--- with your auto-attack and runs at your attack speed (taking haste as it changes, and a parry's speed-up); Heroic
--- Strike, Cleave, Maul and Raptor Strike land with a swing and set it right again, and a finished cast starts it over
--- (as the game does). Each wand shot / Auto Shot is a cast the game does tell us about: that bar is exact.
+-- hunter's Auto Shot. Forever's client says when each of your swings goes and how long the next takes (PLAYER_SWING:
+-- main hand, off hand, ranged – haste, parries and all): the bars run on that, exact. Until it has said so once (or
+-- on a client without it) they're worked out: the melee bar starts with your auto-attack and runs at your attack
+-- speed (haste, parries; Heroic Strike / Cleave / Maul / Raptor Strike and a finished cast set it right again), and
+-- each wand shot / Auto Shot is a cast the game tells us about. The game's own swing bar can be hidden meanwhile.
 -- The fill slides by the game's own animation (no Lua each frame); the seconds left are written 10 times a second
 -- while a bar runs. Unlocked: drag it, wheel: size. /wx swing: a test.
 do (function()
@@ -9059,9 +9060,10 @@ do (function()
     local box, label, bars, ticker
     local autoOn, repeatOn, demo, previewing = false, false, nil, false
     local casts, nCasts = {}, 0   -- the casts with a cast time (by castGUID): finishing one starts the swing over
-    local Done, Layout, Tick
+    local Done, Layout, Tick, BlizzBar
     local known = {}   -- the last speeds read plainly (in a fight the game may hide them)
-    local shotKind, shotAt = "Wand", 0
+    local shotKind, shotAt = (select(2, UnitClass("player")) == "HUNTER") and "Auto Shot" or "Wand", 0
+    local native = { melee = false, ranged = false }   -- the game has told us a swing (PLAYER_SWING): no guessing
     local log = {}   -- /wx swing why: what the game said lately
     local function Note(text)
         table.insert(log, 1, ("%.1f  %s"):format(GetTime() % 1000, text))
@@ -9304,10 +9306,12 @@ do (function()
         Place(b, 1)
         b.spark:Hide()
         if b.key ~= "r" then
+            if autoOn and SwingOn() and native.melee then Tick() return end   -- full: the game says when it swings
             local mh, oh = Speeds()
             local s = b.key == "mh" and mh or (OffOn() and oh)
             if autoOn and s and SwingOn() then Run(b, s, s) return end   -- still attacking: the next swing
         elseif WandOn() and Repeating() then
+            if native.ranged then Tick() return end
             local s = RangedSpeed()   -- still shooting: the next shot (each shot the game shows sets it right)
             if s then Run(b, s, s) return end
         end
@@ -9326,12 +9330,13 @@ do (function()
         local mh, oh = Speeds()
         if not OffOn() then oh = nil end
         Names(oh)
+        if native.melee then return end   -- (the game's PLAYER_SWING starts the bars)
         if mh and not bars[1].ends then Run(bars[1], mh, mh) end
         if oh and not bars[2].ends then Run(bars[2], oh, oh) end
     end
     -- a swing went now (Heroic Strike …), or a cast finished (both hands start over)
     local function Swung(both)
-        if not (SwingOn() and bars) then return end
+        if not (SwingOn() and bars) or native.melee then return end
         local mh, oh = Speeds()
         if not OffOn() then oh = nil end
         if mh and (autoOn or bars[1].ends) then Names(oh); Run(bars[1], mh, mh) end
@@ -9339,7 +9344,7 @@ do (function()
     end
     -- haste came or went: the rest of the swing at the new speed
     local function Rehaste()
-        if not bars then return end
+        if not bars or native.melee then return end
         local mh, oh = Speeds()
         local now = GetTime()
         for i, s in ipairs({ mh or false, oh or false }) do
@@ -9352,7 +9357,7 @@ do (function()
     -- you parried: your next swing comes sooner (40 % of the swing, but never under 20 % left)
     local function Parried()
         local b = bars and bars[1]
-        if not (b and b.ends and b.total) then return end
+        if not (b and b.ends and b.total) or native.melee then return end
         local left = b.ends - GetTime()
         local cut = math.min(0.4 * b.total, left - 0.2 * b.total)
         if cut > 0 then Run(b, b.total, left - cut) end
@@ -9365,6 +9370,7 @@ do (function()
         Build()
         shotKind, shotAt = kind, GetTime()
         Paint(bars[3], kind, kind)
+        if native.ranged then return end   -- (just its name: the game's PLAYER_SWING runs the bar)
         Run(bars[3], s, s)
     end
 
@@ -9382,9 +9388,11 @@ do (function()
         local m, o = Speeds()
         if not (autoOn and SwingOn() and bars) then return end
         if not OffOn() then o = nil end
+        if native.melee and not bo then o = nil end   -- (no weapon in the off hand any more)
         Names(o)
-        if m then Run(bars[1], m, m) end
-        if o then Run(bars[2], o, o)
+        if m and not native.melee then Run(bars[1], m, m) end
+        if o and not native.melee then Run(bars[2], o, o)
+        elseif o then -- (the game starts its bar with its first swing)
         elseif bars[2]:IsShown() then
             local b = bars[2]
             if b.timer then b.timer:Cancel(); b.timer = nil end
@@ -9402,12 +9410,36 @@ do (function()
             Note(e:gsub("^UNIT_SPELLCAST_", ""):gsub("^PLAYER_", "") .. (id ~= "" and ("  " .. tostring(id) .. " " .. (SpellName(Plain(a3)) or "")) or ""))
         end
         if demo then return end
-        if e == "PLAYER_EQUIPMENT_CHANGED" then
+        if e == "PLAYER_SWING" then
+            -- the game: a swing went, the next in dur seconds (0 main hand, 1 off hand, 2 ranged)
+            local dur, kind = Plain(unit), Plain(a2)
+            Note(("SWING  %s s  %s"):format(tostring(dur or "hidden"), tostring(kind or "hidden")))
+            if type(dur) ~= "number" or dur <= 0 or dur ~= dur or dur == math.huge then return end
+            if kind == 0 or kind == 1 then
+                if not SwingOn() or (kind == 1 and not OffOn()) then return end
+                native.melee = true
+                Build()
+                local _, oh = Speeds()
+                Names((kind == 1 or bars[2].ends or (OffOn() and oh)) and true or nil)
+                Run(bars[kind + 1], dur, dur)
+            elseif kind == 2 then
+                if not WandOn() then return end
+                native.ranged = true
+                Build()
+                shotAt = GetTime()
+                Paint(bars[3], shotKind, shotKind)
+                Run(bars[3], dur, dur)
+            end
+            return
+        elseif e == "WEAPON_SLOT_CHANGED" then
+            Rearmed()
+            return
+        elseif e == "PLAYER_EQUIPMENT_CHANGED" then
             if unit == 16 or unit == 17 then Rearmed() end
             return
-        elseif e == "PLAYER_ENTERING_WORLD" then
-            base.mh, base.oh = WeaponSpeed(16), WeaponSpeed(17)
-            Speeds()
+        elseif e == "PLAYER_ENTERING_WORLD" or e == "PLAYER_REGEN_ENABLED" then
+            if e == "PLAYER_ENTERING_WORLD" then base.mh, base.oh = WeaponSpeed(16), WeaponSpeed(17); Speeds() end
+            BlizzBar()
             return
         end
         if e == "PLAYER_ENTER_COMBAT" then
@@ -9446,7 +9478,7 @@ do (function()
             if shot then Shot(shot)
             elseif name and NEXT_SWING[name] then Swung(false)
             elseif hadCast then Swung(true)
-            elseif id == nil and a3 ~= nil and Repeating() and WandOn() then
+            elseif id == nil and a3 ~= nil and Repeating() and WandOn() and not native.ranged then
                 -- hidden in a fight: while you shoot, a cast that comes about one shot after the last is the next shot
                 local s = RangedSpeed()
                 if s and GetTime() - shotAt > s * 0.6 then Shot(shotKind) end
@@ -9455,7 +9487,8 @@ do (function()
     end
     local ev = CreateFrame("Frame")
     for _, e in ipairs({ "PLAYER_ENTER_COMBAT", "PLAYER_LEAVE_COMBAT", "START_AUTOREPEAT_SPELL", "STOP_AUTOREPEAT_SPELL",
-                         "PLAYER_EQUIPMENT_CHANGED", "PLAYER_ENTERING_WORLD" }) do
+                         "PLAYER_EQUIPMENT_CHANGED", "PLAYER_ENTERING_WORLD", "PLAYER_SWING", "WEAPON_SLOT_CHANGED",
+                         "PLAYER_REGEN_ENABLED" }) do
         pcall(ev.RegisterEvent, ev, e)
     end
     for _, e in ipairs({ "UNIT_ATTACK_SPEED", "UNIT_COMBAT", "UNIT_SPELLCAST_START", "UNIT_SPELLCAST_SUCCEEDED",
@@ -9463,6 +9496,23 @@ do (function()
         if not pcall(ev.RegisterUnitEvent, ev, e, "player") then pcall(ev.RegisterEvent, ev, e) end
     end
     ev:SetScript("OnEvent", function(_, e, ...) ns.Safe("swing timer", OnEvent, e, ...) end)
+
+    -- The game's own swing bar (Options: showSwingTimer): hidden while WatchX's bars are on (if you like – a tick in
+    -- Settings), and put back as it was when you switch WatchX's off. A fight: done after it.
+    function BlizzBar()
+        if not db() or not GetCVar or not SetCVar then return end
+        local cur = GetCVar("showSwingTimer")
+        if cur == nil then return end   -- (a client without it)
+        local d = db()
+        local want = (d.swingTimer ~= false or d.wandTimer ~= false) and d.swingHideBlizz ~= false
+        if InCombatLockdown and InCombatLockdown() then return end
+        if want and cur ~= "0" then
+            if pcall(SetCVar, "showSwingTimer", "0") then d.blizzSwingWas = cur end
+        elseif not want and d.blizzSwingWas then
+            if pcall(SetCVar, "showSwingTimer", d.blizzSwingWas) then d.blizzSwingWas = nil end
+        end
+    end
+    ns.SwingBlizzBar = BlizzBar
 
     -- /wx swing why: what the game told the timer lately
     function ns.SwingWhy()
@@ -9475,6 +9525,9 @@ do (function()
             okA and plain(oh) or "?", okR and plain(r) or "?", tostring(known.mh), tostring(known.oh), tostring(known.r)))
         P(("Weapons' own speed: main hand %s, off hand %s"):format(tostring(WeaponSpeed(16)), tostring(WeaponSpeed(17))))
         P(("Attacking: %s · shooting: %s"):format(tostring(autoOn), tostring(Repeating())))
+        P(("The game's swings (exact): melee %s, ranged %s · its own swing bar: %s"):format(
+            native.melee and "|cff40ff40yes|r" or "not yet", native.ranged and "|cff40ff40yes|r" or "not yet",
+            tostring(GetCVar and GetCVar("showSwingTimer") or "none")))
         P("Lately (newest first):")
         for _, l in ipairs(log) do P("  " .. l) end
         if #log == 0 then P("  nothing yet – attack or shoot something, then /wx swing why") end
@@ -9521,7 +9574,7 @@ do (function()
 
     -- switched off in Settings: its bars go at once
     function ns.RefreshSwing()
-        if not bars then return end
+        if not bars then BlizzBar() return end
         for i, b in ipairs(bars) do
             if not (i == 3 and WandOn() or i == 1 and SwingOn() or i == 2 and SwingOn() and OffOn()) then
                 if b.timer then b.timer:Cancel(); b.timer = nil end
@@ -9531,6 +9584,7 @@ do (function()
             end
         end
         if moving or previewing then ns.SwingExamples(true, previewing) end
+        BlizzBar()
         ns.SwingLook()
         Tick()
     end
@@ -9697,6 +9751,7 @@ do (function()
         check("Swing timer", "your melee swings – one bar with a two-hander", "swingTimer", true)
         check("Off-hand bar", "a weapon in each hand: a second bar for the off hand", "swingOffhand", true)
         check("Wand timer", "your wand shots – a hunter's Auto Shot", "wandTimer", true)
+        check("Hide the game's own swing bar", "while WatchX's is on – put back when you switch WatchX's off", "swingHideBlizz", true)
         heading("LOOK")
         check("Names on the bars", "Swing / Main hand / Off hand / Wand", "swingNames", true)
         check("Seconds left on the bars", nil, "swingTime", true)
@@ -9737,10 +9792,9 @@ do (function()
         help:SetSpacing(4)
         help:SetText(table.concat({
             "|cffffd100HOW IT KNOWS|r",
-            "|cffaaaaaa•|r  |cffffd100Wand / Auto Shot|r – each shot starts the bar; it runs at your ranged speed.",
-            "|cffaaaaaa•|r  |cffffd100Melee|r – WoW Forever keeps the combat log from addons, so a swing itself isn't seen: "
-                .. "the bar starts with your auto-attack and runs at your attack speed (haste and parries count). Heroic Strike, "
-                .. "Cleave, Maul and Raptor Strike land with a swing and set it right again, and so does a finished cast.",
+            "WoW Forever tells addons when each of your swings and shots goes and how long the next one takes "
+                .. "(haste, parries and all) – the bars run on that, exact. The game's own swing bar shows the same: "
+                .. "WatchX hides it while its bars are on (untick above to keep both).",
             "|cff808080/wx swing – a test  ·  /wx swing why – what the game told it lately|r",
         }, "\n"))
         page:SetScript("OnShow", function() for _, fn in ipairs(refresh) do fn() end; ns.SwingPreview(true) end)
