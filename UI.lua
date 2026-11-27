@@ -3569,8 +3569,12 @@ local function BuildNearby()
         local ms = select(4, GetNetStats())
         ms = tonumber(ms) or 0
         local fps = math.floor((tonumber(GetFramerate()) or 0) + 0.5)
-        local mc = ms < 100 and "|cff40ff40" or ms < 250 and "|cffffd100" or "|cffff4040"
-        local fc = fps >= 50 and "|cff40ff40" or fps >= 25 and "|cffffd100" or "|cffff4040"
+        -- each one a single word in one colour (green / yellow / red), its unit a darker shade of it: "42ms · 41fps"
+        local GOOD, OK, BAD = { "40ff40", "2a9a2a" }, { "ffd100", "a88a00" }, { "ff4040", "a83030" }
+        local mcc = ms < 100 and GOOD or ms < 250 and OK or BAD
+        local fcc = fps >= 50 and GOOD or fps >= 25 and OK or BAD
+        local msT = "|cff" .. mcc[1] .. ms .. "|r|cff" .. mcc[2] .. "ms|r"
+        local fpsT = "|cff" .. fcc[1] .. fps .. "|r|cff" .. fcc[2] .. "fps|r"
         -- between the title and the coin (when it shows) or the count, in the middle of that room
         local right = self.news:IsShown() and self.news or self.count
         if self.statsRight ~= right then
@@ -3581,8 +3585,7 @@ local function BuildNearby()
         end
         -- not room for it all (a narrow list): shorter, then just the fps, then nothing – never over the title
         local room = self.stats:GetWidth() or 0
-        for _, t in ipairs({ mc .. ms .. "|r|cff999999ms|r  " .. fc .. fps .. "|r|cff999999fps|r",
-                             mc .. ms .. "|r " .. fc .. fps .. "|r|cff999999fps|r", fc .. fps .. "|r|cff999999fps|r", "" }) do
+        for _, t in ipairs({ msT .. " |cff6a6a6a·|r " .. fpsT, msT .. " " .. fpsT, fpsT, "" }) do
             self.stats:SetText(t)
             local st = self.stats
             local w = (st.GetUnboundedStringWidth and st:GetUnboundedStringWidth()) or st:GetStringWidth() or 0   -- (its whole width)
