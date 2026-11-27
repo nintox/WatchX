@@ -111,8 +111,14 @@ if ($Cloud) {
     $dlg.ShowNewFolderButton = $true
     if ($env:OneDrive -and (Test-Path -LiteralPath $env:OneDrive)) { $dlg.SelectedPath = $env:OneDrive }
     if ($dlg.ShowDialog() -ne 'OK' -or -not $dlg.SelectedPath) { Write-Host 'Nothing changed.'; exit 0 }
-    [IO.File]::WriteAllText($cfg, $dlg.SelectedPath)
-    Write-Host "Cloud sync: $($dlg.SelectedPath)\WatchX"
+    $pick = $dlg.SelectedPath.TrimEnd('\')
+    if ((Split-Path $pick -Leaf) -eq 'WatchX') { $pick = Split-Path $pick -Parent }   # (picked a WatchX folder itself)
+    # WatchX's own folder in it, made now (the bridge keeps each WoW account's settings in there)
+    try { [void](New-Item -ItemType Directory -Force -Path (Join-Path $pick 'WatchX') -ErrorAction Stop) }
+    catch { Write-Host "Couldn't make a folder in $pick - pick another one."; exit 1 }
+    [IO.File]::WriteAllText($cfg, $pick)
+    Write-Host "Cloud sync: $pick\WatchX (made - your settings go in there)"
+    try { Start-Process explorer.exe (Join-Path $pick 'WatchX') } catch {}
     Write-Host 'Do the same on your other computer, with the same folder. Play on one computer at a time.'
     exit 0
 }

@@ -30,8 +30,15 @@ START="$HOME/Library/Mobile Documents/com~apple~CloudDocs"
 PICK="$(osascript -e "POSIX path of (choose folder with prompt \"Pick a folder your cloud keeps in step (iCloud Drive, Dropbox, OneDrive, Google Drive)\" default location POSIX file \"$START\")" 2>/dev/null)"
 PICK="${PICK%/}"
 if [ -z "$PICK" ]; then echo "Nothing changed."; read -r -p "Press Enter to close."; exit 0; fi
+[ "$(basename "$PICK")" = "WatchX" ] && PICK="$(dirname "$PICK")"   # (picked a WatchX folder itself: that one is used)
+# WatchX's own folder in it, made now (the bridge keeps each WoW account's settings in there)
+if ! mkdir -p "$PICK/WatchX"; then
+    echo "Couldn't make a folder in $PICK – pick another one."
+    read -r -p "Press Enter to close."; exit 1
+fi
 printf '%s\n' "$PICK" > "$CFG"
-echo "Cloud sync: $PICK/WatchX"
+echo "Cloud sync: $PICK/WatchX (made – your settings go in there)"
+open "$PICK/WatchX" 2>/dev/null
 echo "Checking that the bridge can use it…"
 sleep 8
 LINE="$(grep "Cloud sync:" "$LOGFILE" 2>/dev/null | tail -n 1)"

@@ -6506,19 +6506,21 @@ do (function()
     -- What you're eating or drinking: the item in your bags whose Use: is this buff's spell – its name, icon, and
     -- whether it makes you Well Fed (its text says "well fed", or XP from kills). Looked up once per buff; not found
     -- (you ate the last one) is tried again in 20 s. The buff's own text is asked too, for "well fed".
-    -- The item you last used (from your bags, an action button or /use): what you're eating when the buff's spell
-    -- doesn't name the item (Forever's own IDs, or every water's "Drink").
+    -- What you just ate or drank: the item that went one down in your bags (however it was used – an action button,
+    -- a macro, a bag click), and the item you used (bag click, action button, /use). The last few, newest first.
     do
+        local recent = {}
+        ns.recentUsed = recent
         local function Rec(id)
             id = N(id)
-            if id then ns.lastUsedItem = { id = id, at = GetTime() } end
+            if not id then return end
+            table.insert(recent, 1, { id = id, at = GetTime() })
+            while #recent > 6 do table.remove(recent) end
         end
+        ns.NoteUsedItem = Rec   -- (tests)
         if hooksecurefunc then
             if C_Container and C_Container.UseContainerItem then
                 hooksecurefunc(C_Container, "UseContainerItem", function(bag, slot) Rec(ns.SlotItem and ns.SlotItem(bag, slot)) end)
-            end
-            if UseContainerItem and UseContainerItem ~= (C_Container and C_Container.UseContainerItem) then
-                hooksecurefunc("UseContainerItem", function(bag, slot) Rec(ns.SlotItem and ns.SlotItem(bag, slot)) end)
             end
             if UseAction and GetActionInfo then
                 hooksecurefunc("UseAction", function(slot)
@@ -6534,6 +6536,35 @@ do (function()
                 end)
             end
         end
+        local counts
+        local function Count()
+            local t = {}
+            local C = C_Container
+            if not (C and C.GetContainerNumSlots and C.GetContainerItemInfo) then return t end
+            for bag = 0, 4 do
+                local okN, n = pcall(C.GetContainerNumSlots, bag)
+                for slot = 1, (okN and N(n) or 0) do
+                    local ok, info = pcall(C.GetContainerItemInfo, bag, slot)
+                    local id = ok and type(info) == "table" and N(info.itemID)
+                    if id then t[id] = (t[id] or 0) + (N(info.stackCount) or 1) end
+                end
+            end
+            return t
+        end
+        function ns.BagCountsChanged()
+            local new = Count()
+            if counts then
+                for id, c in pairs(counts) do if (new[id] or 0) < c then Rec(id) end end
+            end
+            counts = new
+        end
+        local ev = CreateFrame("Frame")
+        pcall(ev.RegisterEvent, ev, "BAG_UPDATE_DELAYED")
+        pcall(ev.RegisterEvent, ev, "PLAYER_ENTERING_WORLD")
+        ev:SetScript("OnEvent", function(_, event)
+            if event == "PLAYER_ENTERING_WORLD" then counts = nil end   -- (bags loading: counted fresh)
+            ns.Safe("eating", ns.BagCountsChanged)
+        end)
     end
     local foodInfo = {}
     local function FoodInfo(a)
@@ -6569,13 +6600,24 @@ do (function()
                 end
             end
         end
-        local lu = ns.lastUsedItem
-        local near = lu and math.abs((started > 0 and started or GetTime()) - lu.at) < 6
-        if near and (bySid[lu.id] or byName[lu.id] or (#bySid == 0 and not next(byName))) then c.id = lu.id
-        else c.id = bySid[1] end
+        -- the item that went down (or was used) as it started, if it casts this buff: that's the one
+        local at = started > 0 and started or GetTime()
+        for _, r in ipairs(ns.recentUsed or {}) do
+            if not c.id and math.abs(at - r.at) < 6 then
+                local okS, sname, spell = pcall(I and I.GetItemSpell or function() end, r.id)
+                sname, spell = okS and N(sname), okS and N(spell)
+                if spell == sid or bySid[r.id] or byName[r.id]
+                        or (want and type(sname) == "string" and sname:lower() == want) then c.id = r.id end
+            end
+        end
+        local sure = c.id ~= nil
+        if not c.id then c.id = bySid[1] end
+        -- not sure yet (the bags tell a moment after it starts): looked at again shortly
+        if not sure and GetTime() - at < 4 then c.unsure = true end
         local text = c.id and ns.ItemTooltipText and ns.ItemTooltipText(c.id)
         -- found, and its text read (or tried 5 times): kept; not loaded yet: again in 2 s
         if c.id then c.read = text ~= nil or c.tries >= 5; if not c.read then c.retry = GetTime() + 2 end end
+        if c.unsure then c.read = false; c.retry = GetTime() + 0.5; c.tries = 0 end
         if c.id then
             c.name = ns.ItemName and ns.ItemName(c.id, nil)
             c.icon = ns.ItemIcon and ns.ItemIcon(c.id)
