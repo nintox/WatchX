@@ -6478,7 +6478,7 @@ do (function()
             end
             if kind then
                 s.list[#s.list + 1] = { kind = kind, index = i, icon = a.icon, ex = N(a.expirationTime), dur = N(a.duration),
-                    sid = N(a.spellId) }
+                    sid = N(a.spellId), name = name }
             end
             -- a Well Fed (any food's, or an XP food's learned buff): when it came
             local xb = db().xpBuffs
@@ -6506,28 +6506,73 @@ do (function()
     -- What you're eating or drinking: the item in your bags whose Use: is this buff's spell – its name, icon, and
     -- whether it makes you Well Fed (its text says "well fed", or XP from kills). Looked up once per buff; not found
     -- (you ate the last one) is tried again in 20 s. The buff's own text is asked too, for "well fed".
+    -- The item you last used (from your bags, an action button or /use): what you're eating when the buff's spell
+    -- doesn't name the item (Forever's own IDs, or every water's "Drink").
+    do
+        local function Rec(id)
+            id = N(id)
+            if id then ns.lastUsedItem = { id = id, at = GetTime() } end
+        end
+        if hooksecurefunc then
+            if C_Container and C_Container.UseContainerItem then
+                hooksecurefunc(C_Container, "UseContainerItem", function(bag, slot) Rec(ns.SlotItem and ns.SlotItem(bag, slot)) end)
+            end
+            if UseContainerItem and UseContainerItem ~= (C_Container and C_Container.UseContainerItem) then
+                hooksecurefunc("UseContainerItem", function(bag, slot) Rec(ns.SlotItem and ns.SlotItem(bag, slot)) end)
+            end
+            if UseAction and GetActionInfo then
+                hooksecurefunc("UseAction", function(slot)
+                    local ok, t, id = pcall(GetActionInfo, slot)
+                    if ok and t == "item" then Rec(id) end
+                end)
+            end
+            if UseItemByName then
+                hooksecurefunc("UseItemByName", function(name)
+                    local get = (C_Item and C_Item.GetItemInfoInstant) or GetItemInfoInstant
+                    local ok, id = pcall(get or function() end, name)
+                    if ok then Rec(id) end
+                end)
+            end
+        end
+    end
     local foodInfo = {}
     local function FoodInfo(a)
         local sid = a and a.src and a.src.sid
         if not sid then return nil end
-        local c = foodInfo[sid]
+        local src = a.src
+        local started = (src.ex and src.dur and src.dur > 0) and math.floor(src.ex - src.dur + 0.5) or 0
+        local key = sid .. "@" .. started   -- (one meal: the same "Drink" can be another water next time)
+        local c = foodInfo[key]
         if c and ((c.id and c.read) or GetTime() < c.retry) then return c end
         c = { retry = GetTime() + 20, tries = (c and c.tries or 0) + 1 }
-        foodInfo[sid] = c
+        if not foodInfo[key] then
+            local n = 0
+            for _ in pairs(foodInfo) do n = n + 1 end
+            if n > 40 then wipe(foodInfo) end
+        end
+        foodInfo[key] = c
         local C, I = C_Container, C_Item
+        local want = type(src.name) == "string" and src.name:lower() or nil
+        -- several items can share one spell (many waters cast the same "Drink"): the item you used just as it
+        -- started wins, if it's one of them (or none is left: you ate the last one); else the first with that spell
+        local bySid, byName = {}, {}
         if C and C.GetContainerNumSlots and I and I.GetItemSpell then
             for bag = 0, 4 do
                 local okN, n = pcall(C.GetContainerNumSlots, bag)
                 for slot = 1, (okN and N(n) or 0) do
                     local id = ns.SlotItem and ns.SlotItem(bag, slot)
-                    if id and not c.id then
-                        local okS, _, spell = pcall(I.GetItemSpell, id)
-                        if okS and N(spell) == sid then c.id = id end
+                    if id and not bySid[id] and not byName[id] then
+                        local okS, sname, spell = pcall(I.GetItemSpell, id)
+                        if okS and N(spell) == sid then bySid[id] = true; bySid[#bySid + 1] = id
+                        elseif okS and want and type(N(sname)) == "string" and N(sname):lower() == want then byName[id] = true end
                     end
                 end
-                if c.id then break end
             end
         end
+        local lu = ns.lastUsedItem
+        local near = lu and math.abs((started > 0 and started or GetTime()) - lu.at) < 6
+        if near and (bySid[lu.id] or byName[lu.id] or (#bySid == 0 and not next(byName))) then c.id = lu.id
+        else c.id = bySid[1] end
         local text = c.id and ns.ItemTooltipText and ns.ItemTooltipText(c.id)
         -- found, and its text read (or tried 5 times): kept; not loaded yet: again in 2 s
         if c.id then c.read = text ~= nil or c.tries >= 5; if not c.read then c.retry = GetTime() + 2 end end
@@ -7935,6 +7980,31 @@ do (function()
         return nil
     end
     ns.RebuffHaveByName = HaveByName
+    -- /wx rebuff why: what each line sees – the buffs WatchX can read, and per name: read, asked by name, known
+    function ns.RebuffWhy()
+        local P = ns.Print or print
+        haveGen = nil   -- (a fresh read)
+        local okRead = ReadHave()
+        local list = ns.ReadBuffs and ns.ReadBuffs() or {}
+        local names = {}
+        for _, a in ipairs(list) do names[#names + 1] = a.name .. (a.sid and ("|cff808080 #" .. a.sid .. "|r") or "") end
+        P("Buffs read: " .. (#names > 0 and table.concat(names, ", ") or "none")
+            .. (list.unreadable and "  |cffff8040+ some hidden|r" or "")
+            .. (okRead and "" or "  |cffff8040(not now: a fight just ended)|r"))
+        for _, line in ipairs(ns.RebuffList()) do
+            if not WeaponLine(line) then
+                local parts = {}
+                for _, n in ipairs(Names(line)) do
+                    local by = HaveByName(n)
+                    parts[#parts + 1] = ("%s: %s%s%s"):format(n,
+                        have[n:lower()] and "|cff40ff40read|r" or "|cff808080not read|r",
+                        by == true and " |cff40ff40by name: yes|r" or by == false and " |cff808080by name: no|r" or " |cffff8040by name: ?|r",
+                        Known(n) and "" or " |cff808080(not known)|r")
+                end
+                P("|cffffd100" .. line .. "|r – " .. table.concat(parts, " · "))
+            end
+        end
+    end
 
     function ns.RefreshRebuff()
         if InCombatLockdown() then return end   -- (secure icons; and your buffs are hidden in a fight)

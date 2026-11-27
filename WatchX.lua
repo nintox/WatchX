@@ -4734,7 +4734,8 @@ local function OnSlash(input)
     elseif cmd == "scroll" or cmd == "scrolls" or cmd == "comprehend" then
         if ns.ScrollDebug then ns.ScrollDebug() else Print("Scrolls.lua isn't loaded – log out and in again (a /reload doesn't load new files).") end
     elseif cmd == "rebuff" then
-        if rest ~= "" and ns.AddRebuff then ns.AddRebuff(rest)
+        if rest == "why" and ns.RebuffWhy then ns.RebuffWhy()
+        elseif rest ~= "" and ns.AddRebuff then ns.AddRebuff(rest)
         elseif ns.OpenRebuffSettings then ns.OpenRebuffSettings() end
     elseif cmd == "buffs" or cmd == "buff" then
         if rest == "test" then ns.BuffTest()

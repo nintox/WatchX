@@ -80,6 +80,25 @@ fire("UNIT_AURA", "player"); NS.RefreshEating(); tick(0.3)
 """)
 food2 = str(ev('R.food.__text'))
 check("Well Fed in 7s" in food2, "next time: Well Fed in 7s from the start: " + food2.replace("\n", " | "))
+# two waters with the same "Drink" spell: the icon of the one you used, not the first in your bags
+ex(r"""
+BAG = { [1] = 159, [2] = 5350 }
+local oGS3, oIc3, oNm3 = C_Item.GetItemSpell, C_Item.GetItemIconByID, C_Item.GetItemNameByID
+C_Item.GetItemSpell = function(id) if id == 159 or id == 5350 then return "Drink", 1137 end return oGS3(id) end
+C_Item.GetItemIconByID = function(id) if id == 159 then return 901 elseif id == 5350 then return 900 end return oIc3(id) end
+C_Item.GetItemNameByID = function(id) if id == 159 then return "Refreshing Spring Water" elseif id == 5350 then return "Conjured Water" end return oNm3(id) end
+NS.lastUsedItem = { id = 5350, at = GetTime() }   -- (what the UseContainerItem hook notes)
+AURAS = { { name = "Drink", spellId = 1137, icon = 1, expirationTime = T + 27, duration = 27 } }
+fire("UNIT_AURA", "player"); NS.RefreshEating(); tick(0.3)
+RW = WatchXEating.rows[1]
+""")
+check(ev('RW.icon.TEX') == 900 or ev('RW.icon:GetTexture()') == 900 or "Conjured Water" in str(ev('RW.food.__text')), "Conjured Water (used) shown, not the Spring Water first in the bags: " + str(ev('RW.food.__text')))
+ex(r"""
+NS.lastUsedItem = nil
+tick(5); AURAS = { { name = "Drink", spellId = 1137, icon = 1, expirationTime = GetTime() + 60, duration = 60 } }
+fire("UNIT_AURA", "player"); NS.RefreshEating(); tick(0.3)
+""")
+check("Refreshing Spring Water" in str(ev('WatchXEating.rows[1].food.__text')), "nothing used noted: the first with that spell, as before")
 errs = errors(ev)
 check(len(errs) == 0, "no Lua errors " + (str(errs[0])[:300] if errs else ""))
 print("food:", "ALL PASSED" if not fails else "%d FAILED" % len(fails))
