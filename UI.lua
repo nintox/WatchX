@@ -6240,6 +6240,25 @@ do (function()
                 s.list[#s.list + 1] = { kind = kind, index = i, icon = a.icon, ex = N(a.expirationTime), dur = N(a.duration),
                     sid = N(a.spellId) }
             end
+            -- a Well Fed (any food's, or an XP food's learned buff): when it came
+            local xb = db().xpBuffs
+            if lower:find("well fed", 1, true) or (type(xb) == "table" and N(a.spellId) and xb[N(a.spellId)]) then
+                local ex, dur = N(a.expirationTime), N(a.duration)
+                if ex and ex > 0 and dur and dur > 0 then s.fedAt = math.max(s.fedAt or 0, ex - dur) end
+            end
+        end
+        -- it came while you ate: that food gives a buff, after that many seconds (learned, kept for next time)
+        if s.fedAt then
+            for _, e in ipairs(s.list) do
+                if (e.kind == "hp" or e.kind == "both") and e.sid and e.ex and e.dur and e.dur > 0 then
+                    local wait = s.fedAt - (e.ex - e.dur)
+                    if wait > 1 and wait <= e.dur + 1 then
+                        local d = db()
+                        d.fedFood = d.fedFood or {}
+                        d.fedFood[e.sid] = math.floor(wait + 0.5)
+                    end
+                end
+            end
         end
         return s
     end
@@ -6252,8 +6271,8 @@ do (function()
         local sid = a and a.src and a.src.sid
         if not sid then return nil end
         local c = foodInfo[sid]
-        if c and (c.id or GetTime() < c.retry) then return c end
-        c = { retry = GetTime() + 20 }
+        if c and ((c.id and c.read) or GetTime() < c.retry) then return c end
+        c = { retry = GetTime() + 20, tries = (c and c.tries or 0) + 1 }
         foodInfo[sid] = c
         local C, I = C_Container, C_Item
         if C and C.GetContainerNumSlots and I and I.GetItemSpell then
@@ -6270,6 +6289,8 @@ do (function()
             end
         end
         local text = c.id and ns.ItemTooltipText and ns.ItemTooltipText(c.id)
+        -- found, and its text read (or tried 5 times): kept; not loaded yet: again in 2 s
+        if c.id then c.read = text ~= nil or c.tries >= 5; if not c.read then c.retry = GetTime() + 2 end end
         if c.id then
             c.name = ns.ItemName and ns.ItemName(c.id, nil)
             c.icon = ns.ItemIcon and ns.ItemIcon(c.id)
@@ -6486,9 +6507,12 @@ do (function()
         local foodLine = ""
         if fi and not (a.kind == "both" and what == "mp") then   -- (food & drink: said once, on the food)
             foodLine = fi.name and ("|cffdddddd" .. fi.name .. "|r") or ""
-            if fi.buff and a.dur and a.left then
-                local wait = 10 - (a.dur - a.left)
-                local wf = wait > 0 and ("|cffffd100Well Fed in " .. math.ceil(wait) .. "s|r") or "|cff40ff40Well Fed!|r"
+            local learned = db().fedFood and a.src.sid and db().fedFood[a.src.sid]
+            if (fi.buff or learned) and a.dur and a.left then
+                local ate = a.dur - a.left
+                local fed = scan and scan.fedAt and scan.fedAt >= GetTime() - ate - 1   -- (it came while you ate this)
+                local wait = (tonumber(learned) or 10) - ate
+                local wf = (fed or wait <= 0) and "|cff40ff40Well Fed!|r" or ("|cffffd100Well Fed in " .. math.ceil(wait) .. "s|r")
                 foodLine = foodLine ~= "" and (foodLine .. "\n" .. wf) or wf
             end
         end
@@ -7636,12 +7660,28 @@ do (function()
         if haveGen == ns.auraGen and GetTime() - haveAt < 10 then return true end
         if ns.AurasUnsure and ns.AurasUnsure() then return false end
         local list = ns.ReadBuffs and ns.ReadBuffs() or {}
-        if list.unreadable then return false end
         wipe(have)
         for _, a in ipairs(list) do if type(a.name) == "string" then have[a.name:lower()] = true end end
+        -- one buff whose name is hidden (dungeons have some) doesn't stop the rest: what's missing is then asked
+        -- for by name (HaveByName), and a line nobody can answer for isn't nagged about
+        have.partial = list.unreadable and true or nil
         haveGen, haveAt = ns.auraGen, GetTime()
         return true
     end
+    -- is a buff of that name on you? true / false, or nil when the game can't say
+    local function HaveByName(name)
+        local C = C_UnitAuras
+        if C and C.GetAuraDataBySpellName then
+            local ok, a = pcall(C.GetAuraDataBySpellName, "player", name, "HELPFUL")
+            if ok then return a ~= nil end
+        end
+        if AuraUtil and AuraUtil.FindAuraByName then
+            local ok, a = pcall(AuraUtil.FindAuraByName, name, "player", "HELPFUL")
+            if ok then return a ~= nil end
+        end
+        return nil
+    end
+    ns.RebuffHaveByName = HaveByName
 
     function ns.RefreshRebuff()
         if InCombatLockdown() then return end   -- (secure icons; and your buffs are hidden in a fight)
@@ -7668,14 +7708,21 @@ do (function()
                         end
                     end
                 else
-                    local names, got, cast = Names(line), false, nil
+                    local names, got, cast, unsure = Names(line), false, nil, false
                     for _, n in ipairs(names) do
                         if have[n:lower()] then got = true end
                         if not cast and Known(n) then cast = n end
                     end
+                    if not got then   -- not among the names WatchX could read: ask the game for each by name
+                        for _, n in ipairs(names) do
+                            local by = HaveByName(n)
+                            if by == true then got = true break end
+                            if by == nil and have.partial then unsure = true end
+                        end
+                    end
                     local pick = #names > 1 and ns.RebuffCastPick(line) or nil
                     if pick and Known(pick) then cast = pick end
-                    if cast and (not got or d.rebuffAll == true or moving) then
+                    if cast and ((not got and not unsure) or d.rebuffAll == true or moving) then
                         rows[#rows + 1] = { line = line, cast = cast, have = got }
                     end
                 end

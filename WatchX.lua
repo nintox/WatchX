@@ -2558,7 +2558,12 @@ local function ReadBuffs()
             break
         end
         name, caster = Plain(name), Plain(caster)
-        if name == nil and Plain(sid) == nil then out.unreadable = true end   -- there, but hidden: an unsure read
+        if name == nil and Plain(sid) ~= nil then   -- the name hidden, the spell ID not: its name from the spell
+            local get = (C_Spell and C_Spell.GetSpellName) or GetSpellInfo
+            local ok, n = pcall(get or function() end, Plain(sid))
+            name = ok and Plain(n) or nil
+        end
+        if name == nil then out.unreadable = true end   -- there, but hidden: an unsure read
         if type(name) == "string" and name ~= "" then
             out[#out + 1] = { name = name, icon = Plain(icon), dur = tonumber(Plain(dur)) or 0,
                 expires = tonumber(Plain(expires)) or 0, caster = type(caster) == "string" and caster or nil,

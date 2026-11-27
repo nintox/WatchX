@@ -38,6 +38,48 @@ check("Well Fed!" in str(ev('R.food.__text')), "after 10 s: Well Fed!")
 # plain food, not in the bags any more (the last one): no name, no countdown, the fork and knife
 ex('AURAS = { { name = "Food", spellId = 999, icon = 1, expirationTime = T + 18, duration = 21 } }; fire("UNIT_AURA", "player"); NS.RefreshEating(); tick(0.2)')
 check(str(ev('R.food.__text')) == "", "unknown food: nothing under the tile")
+# a buff food whose text isn't loaded the first time: asked again (not "no buff" for good)
+ex(r"""
+BAG = { [3] = 21023, [4] = 30001 }
+LOADED = false
+local oldHL = C_TooltipInfo.GetHyperlink
+C_TooltipInfo.GetHyperlink = function(link)
+  if link == "item:30001" then
+    if not LOADED then return { lines = { { leftText = "Retrieving item information" } } } end
+    return { lines = { { leftText = "Hearty Stew" }, { leftText = "Use: Restores 900 health over 27 sec. If you spend at least 10 seconds eating you will become well fed and gain 8 Spirit for 15 min." } } }
+  end
+  return oldHL(link)
+end
+local oldGS = C_Item.GetItemSpell
+C_Item.GetItemSpell = function(id) if id == 30001 then return "Food", 555 end return oldGS(id) end
+AURAS = { { name = "Food", spellId = 555, icon = 1, expirationTime = T + 27, duration = 27 } }
+fire("UNIT_AURA", "player"); NS.RefreshEating(); tick(0.3)
+""")
+check("Well Fed in" not in str(ev('R.food.__text')), "text not loaded yet: no countdown yet")
+ex('LOADED = true; tick(2.5, 0.25)')
+check("Well Fed in" in str(ev('R.food.__text')), "loaded a moment later: Well Fed in … (was 'no' for good): " + str(ev('R.food.__text')).replace("\n", " | "))
+# a food whose text never says it (XP food on Forever): learned the first time it makes you Well Fed, with its own wait
+ex(r"""
+BAG = { [5] = 30002 }
+local oldGS2 = C_Item.GetItemSpell
+C_Item.GetItemSpell = function(id) if id == 30002 then return "Food", 666 end return oldGS2(id) end
+AURAS = { { name = "Food", spellId = 666, icon = 1, expirationTime = T + 30, duration = 30 } }
+fire("UNIT_AURA", "player"); NS.RefreshEating(); tick(0.3)
+""")
+check("Well Fed" not in str(ev('R.food.__text')), "unknown at first: no countdown")
+ex(r"""
+tick(6.7, 0.25)
+AURAS[2] = { name = "Well Fed", spellId = 1248406, icon = 2, expirationTime = T + 900, duration = 900 }
+fire("UNIT_AURA", "player"); NS.RefreshEating(); tick(0.3)
+""")
+check(ev('NS.db.fedFood and NS.db.fedFood[666]') == 7, "learned: that food gives Well Fed after 7 s (%s)" % ev('NS.db.fedFood and NS.db.fedFood[666]'))
+check("Well Fed!" in str(ev('R.food.__text')), "and it says Well Fed! the moment it comes")
+ex(r"""
+AURAS = { { name = "Food", spellId = 666, icon = 1, expirationTime = T + 30, duration = 30 } }
+fire("UNIT_AURA", "player"); NS.RefreshEating(); tick(0.3)
+""")
+food2 = str(ev('R.food.__text'))
+check("Well Fed in 7s" in food2, "next time: Well Fed in 7s from the start: " + food2.replace("\n", " | "))
 errs = errors(ev)
 check(len(errs) == 0, "no Lua errors " + (str(errs[0])[:300] if errs else ""))
 print("food:", "ALL PASSED" if not fails else "%d FAILED" % len(fails))
