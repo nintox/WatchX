@@ -8384,6 +8384,65 @@ do (function()
         ns.Safe("rebuff icons", ns.RefreshRebuff)
         return true
     end
+    -- "or…": one buff in or out of a line's "either one" list – from your class's whole list. One that was a line of
+    -- its own (or in another line) moves into this one. Returns the line as it is now (nil: nothing changed).
+    function ns.RebuffToggleAlt(line, name)
+        local list = ns.RebuffList()
+        local idx
+        for i, l in ipairs(list) do if l == line then idx = i end end
+        if not idx then return nil end
+        local names, has = {}, false
+        for _, n in ipairs(Names(line)) do
+            if n:lower() == name:lower() then has = true else names[#names + 1] = n end
+        end
+        if has then
+            if #names == 0 then return nil end   -- (the last one: remove the line with x instead)
+            list[idx] = table.concat(names, " / ")
+            table.insert(list, idx + 1, name)    -- (out of this line: a line of its own again, not lost)
+        else
+            -- out of wherever it is now
+            for i = #list, 1, -1 do
+                if i ~= idx and not WeaponLine(list[i]) then
+                    local rest, found = {}, false
+                    for _, n in ipairs(Names(list[i])) do
+                        if n:lower() == name:lower() then found = true else rest[#rest + 1] = n end
+                    end
+                    if found then
+                        if #rest == 0 then table.remove(list, i); if i < idx then idx = idx - 1 end
+                        else list[i] = table.concat(rest, " / ") end
+                    end
+                end
+            end
+            names = Names(list[idx])
+            names[#names + 1] = name
+            list[idx] = table.concat(names, " / ")
+        end
+        haveGen = nil
+        ns.Safe("rebuff icons", ns.RefreshRebuff)
+        return list[idx]
+    end
+    -- the "or…" list: your class's buffs (and any you typed in), the ones in this line ticked
+    function ns.RebuffAltMenu(anchor, line, after)
+        local items, seen = {}, {}
+        local cat = ns.REBUFF_CATALOG and ns.REBUFF_CATALOG[ClassKey()] or {}
+        local function add(n)
+            if seen[n:lower()] or WeaponLine(n) then return end
+            seen[n:lower()] = true
+            local on = false
+            for _, x in ipairs(Names(line)) do if x:lower() == n:lower() then on = true end end
+            local label = on and ("|cff40ff40[x]|r |cffffffff" .. n .. "|r") or ("|cff808080[  ]|r " .. n)
+            if not Known(n) then label = label .. " |cff808080(not learned)|r" end
+            items[#items + 1] = { label, function()
+                local now = ns.RebuffToggleAlt(line, n)
+                if after then after() end
+                if now then ns.RebuffAltMenu(anchor, now, after) end   -- (stays open: tick more)
+            end }
+        end
+        for _, n in ipairs(Names(line)) do add(n) end
+        for _, n in ipairs(cat) do add(n) end
+        for _, l in ipairs(ns.RebuffList()) do for _, n in ipairs(Names(l)) do add(n) end end
+        ns.ShowMenu(anchor, "Any of these counts", items)
+    end
     function ns.RebuffSplit(line)
         local list = ns.RebuffList()
         for i, l in ipairs(list) do
@@ -8765,20 +8824,12 @@ do (function()
             r.pick:SetPoint("RIGHT", r.del, "LEFT", -4, 0)
             r.pick:Hide()
             -- "or…": make it and another one "either one"; "split": apart again
-            r.alt = FlatButton(r, "or...", 44, 18, function(self)
-                local items = {}
-                for _, l in ipairs(ns.RebuffList()) do
-                    if l ~= r.line and not WeaponLine(l) then
-                        items[#items + 1] = { l, function() ns.RebuffMerge(r.line, l); Refresh() end }
-                    end
-                end
-                if #items == 0 then items[1] = { "|cff808080Add another buff first|r", nil } end
-                ns.ShowMenu(self, "Either this or …", items)
-            end)
+            r.alt = FlatButton(r, "or...", 44, 18, function(self) ns.RebuffAltMenu(self, r.line, Refresh) end)
             r.alt:SetPoint("RIGHT", r.del, "LEFT", -4, 0)
             r.alt:SetScript("OnEnter", function(self)
-                Tip(self, "Either one", "Pick another buff on the list: the two become one line – any of them counts "
-                    .. "(e.g. Dampen Magic or Amplify Magic). Right-click the icon to pick which a click casts.")
+                Tip(self, "Either one", "All your class's buffs: tick the ones that count as this one (your armors: "
+                    .. "Ice, Frost, Mage, Molten) – any of them up and it's fine. Untick one to take it out again. "
+                    .. "Right-click the icon to pick which a click casts.")
             end)
             r.alt:SetScript("OnLeave", GameTooltip_Hide)
             r.split = FlatButton(r, "split", 44, 18, function() ns.RebuffSplit(r.line); Refresh() end)

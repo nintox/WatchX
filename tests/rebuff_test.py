@@ -198,6 +198,28 @@ menu = ev('(function() local t = {} for _, b in ipairs(WatchXMenu.buttons) do if
 ex('B1:GetScript("PostClick")(B1, "RightButton")')
 menu = ev('(function() local t = {} for _, b in ipairs(WatchXMenu.buttons) do if b:IsShown() then t[#t + 1] = tostring(b:GetText()) end end return table.concat(t, " | ") end)()')
 check("Mind-numbing Poison |cffaaaaaa(lvl 24)" in menu, "and later with its level")
+# "or…": the class's whole list, ticked = in this line; tick to add (it leaves its own line), untick to take out
+ex(r"""
+CLASS = "MAGE"; KNOWN = { ["Ice Armor"] = 101, ["Frost Armor"] = 102, ["Mage Armor"] = 105, ["Arcane Intellect"] = 103 }
+NS.db.rebuff.MAGE = { "Ice Armor / Frost Armor", "Mage Armor", "Arcane Intellect", fixed = true }
+A1 = CreateFrame("Button", nil, UIParent)
+NS.RebuffAltMenu(A1, "Ice Armor / Frost Armor")
+function menuRows() local t = {} for _, b in ipairs(WatchXMenu.buttons) do if b:IsShown() then t[#t + 1] = b end end return t end
+function rowText(b) return tostring(b.__text or (b.GetText and b:GetText()) or "") end
+function clickRow(word) for _, b in ipairs(menuRows()) do if rowText(b):find(word, 1, true) then b:GetScript("OnClick")(b) return true end end end
+""")
+rows = ev('(function() local t = {} for _, b in ipairs(menuRows()) do t[#t + 1] = rowText(b) end return table.concat(t, " | ") end)()')
+print("    or…:", str(rows)[:260])
+check("Molten Armor" in str(rows) and "Dampen Magic" in str(rows) and "Slow Fall" in str(rows), "the whole mage list, not just the other lines")
+check("[x]" in str(rows).split("Ice Armor")[0][-20:] or "[x]|r |cffffffffIce Armor" in str(rows), "Ice Armor ticked (in this line)")
+check("(not learned)" in str(rows), "spells you haven't learned say so")
+ex('clickRow("Mage Armor")')
+check(ev('table.concat(NS.RebuffList(), ";")') == "Ice Armor / Frost Armor / Mage Armor;Arcane Intellect", "ticked Mage Armor: in the armor line, its own line gone")
+check(ev('WatchXMenu:IsShown()'), "the list stays open to tick more")
+ex('clickRow("Molten Armor")')
+check(ev('NS.RebuffList()[1]') == "Ice Armor / Frost Armor / Mage Armor / Molten Armor", "Molten Armor (not yet a line): added")
+ex('clickRow("Frost Armor")')
+check(ev('table.concat(NS.RebuffList(), ";")') == "Ice Armor / Mage Armor / Molten Armor;Frost Armor;Arcane Intellect", "unticked Frost Armor: out, a line of its own again")
 errs = errors(ev)
 check(len(errs) == 0, "no Lua errors " + (str(errs[0])[:300] if errs else ""))
 print("rebuff:", "ALL PASSED" if not fails else "%d FAILED" % len(fails))
