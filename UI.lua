@@ -2878,7 +2878,8 @@ local function MiniLines(all)
     if ns.FriendPlatesMissing() then
         add("|cffff6060Friendly nameplates OFF|r", "|cffaaaaaaShift+V|r", true)
     end
-    for _, mob in ipairs(ns.GetMobList()) do
+    local scanOff = d.scanOn == false   -- the rare scan off: no rares on the bar (none is looked for), no hint
+    for _, mob in ipairs(scanOff and {} or ns.GetMobList()) do
         if mob.enabled then
             local state, short, _, left = ns.GetMobStatus(mob.name)
             if state == "up" then
@@ -2907,7 +2908,9 @@ local function MiniLines(all)
         end
     end
     -- nothing watched: a hint to pick something, or (auto-hide) nothing at all – unlocked it still shows
-    if #lines == 0 and not quiet and (all or not d.hideIdle) then
+    if #lines == 0 and scanOff then
+        if all then add("|cff808080Rare scan off|r") end   -- (unlocked: something to place it by)
+    elseif #lines == 0 and not quiet and (all or not d.hideIdle) then
         add("|cff808080Nothing watched – click to pick|r")
     end
     if #lines > MINI_MAX then
