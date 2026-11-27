@@ -6080,8 +6080,27 @@ end
         return ("|TInterface\\Buttons\\WHITE8X8:10:10:0:0:8:8:0:8:0:8:%d:%d:%d|t "):format(r * 255, g * 255, b * 255)
     end
     -- the lines (the game's own XP bar has its own level and XP lines: only the rest is added there)
+    -- the XP each level takes (classic's – Forever's match it): to see how far into the next level your finished
+    -- quests take you. A level that doesn't match: the next taken as big as this one.
+    local XP_LEVEL = { 400, 900, 1400, 2100, 2800, 3600, 4500, 5400, 6500, 7600, 8800, 10100, 11400, 12900, 14400, 16000,
+        17700, 19400, 21300, 23200, 25200, 27300, 29400, 31700, 34000, 36400, 38900, 41400, 44300, 47400, 50800, 54500,
+        58600, 62800, 67100, 71600, 76100, 80800, 85700, 90700, 95800, 101000, 106300, 111800, 117500, 123200, 129100,
+        135100, 141200, 147500, 153900, 160400, 167100, 173900, 180800, 187900, 195000, 202300, 209800 }
+    -- with the finished quests handed in: "= 95.3%", or past this level "= level 39 · 7.0%"
+    local function WithDone(d, extra)
+        local level, have, max = d.level, d.cur + extra, d.max
+        local trust = XP_LEVEL[level] == d.max
+        local top = ns.MaxLevel and ns.MaxLevel() or 60
+        while have >= max and level < top do
+            have, level = have - max, level + 1
+            if level >= top then return ("= level %d"):format(level) end
+            max = (trust and XP_LEVEL[level]) or max
+        end
+        if level == d.level then return ("= %.1f%%"):format(have / max * 100) end
+        return ("= level %d · %.1f%%"):format(level, have / max * 100)
+    end
+    ns.XPWithDone = WithDone   -- (tests)
     local function XPTipLines(d, short)
-        local withDone = math.min(100, (d.cur + quests.done) / d.max * 100)
         if not short then
             local xc = d.rested > 0 and XP_RESTED or XP_NORMAL
             GameTooltip:AddDoubleLine("Level " .. d.level, ("%.1f%%"):format(d.cur / d.max * 100), 1, 0.82, 0, 1, 1, 1)
@@ -6094,7 +6113,7 @@ end
         else
             GameTooltip:AddDoubleLine(Key(0.25, 0.25, 0.25) .. "Rested", "none", 0.6, 0.6, 0.6, 0.6, 0.6, 0.6)
         end
-        GameTooltip:AddDoubleLine(Key(1, 0.5, 0.05) .. "Ready to hand in", (quests.done > 0 and ("+" .. Num(quests.done) .. ("  |cffaaaaaa= %.1f%%|r"):format(withDone)) or "none"),
+        GameTooltip:AddDoubleLine(Key(1, 0.5, 0.05) .. "Ready to hand in", (quests.done > 0 and ("+" .. Num(quests.done) .. "  |cffaaaaaa" .. WithDone(d, quests.done) .. "|r") or "none"),
             1, 0.6, 0.2, 1, 1, 1)
         GameTooltip:AddDoubleLine(Key(0.55, 0.47, 0.2) .. "Quests in progress", quests.todo > 0 and Num(quests.todo) or "none", 0.8, 0.7, 0.4, 1, 1, 1)
         GameTooltip:AddLine(" ")
