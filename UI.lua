@@ -6713,6 +6713,17 @@ do (function()
                         or (want and type(sname) == "string" and sname:lower() == want) then c.id = r.id end
             end
         end
+        -- none of them casts this buff (a Well Fed food casts a spell of its own, and the "Food" buff comes from it):
+        -- the newest food & drink item that went down (or was used) as it started
+        if not c.id then
+            local get = (I and I.GetItemInfoInstant) or GetItemInfoInstant
+            for _, r in ipairs(ns.recentUsed or {}) do
+                if not c.id and get and math.abs(at - r.at) < 6 then
+                    local okI, _, _, _, _, _, classID, subID = pcall(get, r.id)
+                    if okI and N(classID) == 0 and N(subID) == 5 then c.id = r.id end
+                end
+            end
+        end
         local sure = c.id ~= nil
         if not c.id then c.id = bySid[1] end
         -- not sure yet (the bags tell a moment after it starts): looked at again shortly

@@ -124,6 +124,33 @@ FIRST = tostring(WatchXEating.rows[1].food.__text)
 COUNT[2] = 16; NS.BagCountsChanged(); tick(1.2)
 """)
 check("Morning Glory Dew" in str(ev('WatchXEating.rows[1].food.__text')), "the bag count a moment late: put right (first: %s)" % ev('FIRST'))
+# the food you eat casts another spell than the "Food" buff (a Well Fed food): the fish in your bags casts that very
+# spell – still the one that went down (a food & drink item) is shown, not the fish
+ex(r"""
+tick(30)
+for i = #NS.recentUsed, 1, -1 do table.remove(NS.recentUsed, i) end
+BAG = { [1] = 6290, [2] = 724 }; COUNT = { [1] = 19, [2] = 21 }
+local oGS5, oIc5, oNm5, oII5 = C_Item.GetItemSpell, C_Item.GetItemIconByID, C_Item.GetItemNameByID, C_Item.GetItemInfoInstant
+C_Item.GetItemSpell = function(id) if id == 6290 then return "Food", 433 elseif id == 724 then return "Well Fed Food", 7777 end return oGS5(id) end
+C_Item.GetItemIconByID = function(id) if id == 6290 then return 901 elseif id == 724 then return 902 end return oIc5(id) end
+C_Item.GetItemNameByID = function(id) if id == 6290 then return "Brilliant Smallfish" elseif id == 724 then return "Goretusk Liver Pie" end return oNm5(id) end
+C_Item.GetItemInfoInstant = function(id) if id == 6290 or id == 724 then return id, "Consumable", "Food & Drink", "", 1, 0, 5 end return oII5(id) end
+NS.BagCountsChanged()
+tick(5)
+COUNT[2] = 20; NS.BagCountsChanged()
+AURAS = { { name = "Food", spellId = 433, icon = 1, expirationTime = GetTime() + 21, duration = 21 } }
+fire("UNIT_AURA", "player"); NS.RefreshEating(); tick(0.6)
+""")
+check("Goretusk Liver Pie" in str(ev('WatchXEating.rows[1].food.__text')), "another spell than the buff: the food that went down, not the fish: " + str(ev('WatchXEating.rows[1].food.__text')))
+# a reagent / something else that went down meanwhile: not taken for the food
+ex(r"""
+tick(30)
+for i = #NS.recentUsed, 1, -1 do table.remove(NS.recentUsed, i) end
+NS.NoteUsedItem(17020)   -- (Arcane Powder: a reagent, not food & drink)
+AURAS = { { name = "Food", spellId = 433, icon = 1, expirationTime = GetTime() + 21, duration = 21 } }
+fire("UNIT_AURA", "player"); NS.RefreshEating(); tick(5)
+""")
+check("Brilliant Smallfish" in str(ev('WatchXEating.rows[1].food.__text')), "a reagent used meanwhile: not the food (the fish, by its spell)")
 errs = errors(ev)
 check(len(errs) == 0, "no Lua errors " + (str(errs[0])[:300] if errs else ""))
 print("food:", "ALL PASSED" if not fails else "%d FAILED" % len(fails))
