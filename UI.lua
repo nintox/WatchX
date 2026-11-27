@@ -9495,9 +9495,18 @@ function ns.PlateDemo()
         potion = { label = "Free Action", spell = 6615, untilT = now + dur, dur = dur }, stance = "Defensive" }
     ns.plateDemo.potions = { [6615] = ns.plateDemo.potion,
         [2379] = { label = "Swiftness", spell = 2379, untilT = now + 12, dur = 12 } }
+    ns.plateDemo.cp = 1
     ns.UpdatePlates()
     if ns.UpdateCombo then ns.Safe("combo points", ns.UpdateCombo) end
     if C_Timer then
+        local demoNow = ns.plateDemo
+        for k = 2, 5 do   -- combo points: one more every 2 s, then all 5 (the green shine) to the end
+            C_Timer.After((k - 1) * 2, function()
+                if ns.plateDemo ~= demoNow then return end
+                demoNow.cp = k
+                if ns.UpdateCombo then ns.Safe("combo points", ns.UpdateCombo) end
+            end)
+        end
         C_Timer.After(12.2, function() ns.Safe("nameplate icons", ns.UpdatePlates) end)   -- (Swiftness over)
         C_Timer.After(dur + 0.2, function()
             ns.plateDemo = nil
@@ -9506,7 +9515,7 @@ function ns.PlateDemo()
         end)
     end
     local d = db()
-    P(("A test on %s's nameplate for %d s: potions (Swiftness 12 s, Free Action – it glows) right of the class icon, the stance (Defensive) left of it, 3 combo points under it.")
+    P(("A test on %s's nameplate for %d s: potions (Swiftness 12 s, Free Action – it glows) right of the class icon, the stance (Defensive) left of it, combo points under it (1 to 5).")
         :format(ns.plateDemo.name, dur))
     if d.platePotions == false or d.plateStance == false then
         P("|cffff8040Potions or stances are switched off|r (Settings > Nameplates) – those aren't shown.")
@@ -9799,13 +9808,13 @@ do
         local d = db()
         if not d then return end
         local plate
-        local demo = d.plateCombo ~= false and ns.PlateDemoFor and ns.PlateDemoFor("target")   -- (/wx plates test: 3 of 5)
+        local demo = d.plateCombo ~= false and ns.PlateDemoFor and ns.PlateDemoFor("target")   -- (/wx plates test: 1 … 5)
         if d.plateCombo ~= false and (demo or (Uses() and Readable(UnitExists("target")) == true
                 and Readable(UnitCanAttack("player", "target")) == true)) and C_NamePlate and C_NamePlate.GetNamePlateForUnit then
             local ok, p = pcall(C_NamePlate.GetNamePlateForUnit, "target")
             plate = ok and p or nil
         end
-        local cp = plate and (demo and 3 or UnitPower("player", CP))
+        local cp = plate and (demo and (demo.cp or 5) or UnitPower("player", CP))
         local hidden = cp ~= nil and issecretvalue and issecretvalue(cp)
         local n = not hidden and tonumber(cp) or nil
         local max = demo and 5 or math.min(MAXPIPS, tonumber(Readable(UnitPowerMax("player", CP))) or 5)

@@ -48,6 +48,8 @@ check(not ev('WatchXComboPoints:IsShown()'), "switched off: gone")
 # /wx plates test: 3 combo points on the target's plate – for a mage too
 ex('NS.db.plateCombo = true; issecretvalue = function() return false end; CLASS = "MAGE"; TARGET = true; UnitIsPlayer = function() return true end; UnitName = function(u) return "Gorm", nil end; UnitGUID = function(u) return "Player-1-Gorm" end; SlashCmdList.WATCHX("plates test"); tick(0.3)')
 check(ev('WatchXComboPoints:IsShown()'), "/wx plates test: combo points on the plate, for a mage too")
+ex('WatchXComboPoints.shine.SetValue = function(self, v) SHV = v end; tick(8.5, 0.5)')
+check(ev('NS.plateDemo and NS.plateDemo.cp') == 5 and ev('SHV') == 5, "counted up to 5 in 8 s: all full, the shine lit")
 ex('tick(21, 1)')
 check(not ev('WatchXComboPoints:IsShown()'), "the test over: gone")
 errs = errors(ev)
