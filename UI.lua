@@ -10664,6 +10664,40 @@ do
         c = Readable(c)
         return c == "ROGUE" or c == "DRUID"
     end
+    -- Combo points belong to the one you built them on (classic): your power keeps the number when you target someone
+    -- else, so the target they were built on is noted (they went up, or changed, with it targeted) and they show on
+    -- that one only – back on it, they show again. Built afresh on another: theirs now.
+    -- (kept on ns: UI.lua is at Lua's 200-locals limit) ns.comboOwner: that target's GUID; ns.comboLast: the number
+    function ns.ComboTargetGUID()
+        local ok, g = pcall(UnitGUID, "target")
+        g = ok and g or nil
+        if g ~= nil and issecretvalue and issecretvalue(g) then return nil end
+        return g
+    end
+    function ns.ComboPointsChanged()
+        local cp = UnitPower("player", CP)
+        if cp ~= nil and issecretvalue and issecretvalue(cp) then   -- (hidden: they changed with this one targeted)
+            ns.comboOwner = ns.ComboTargetGUID() or ns.comboOwner
+            return
+        end
+        cp = tonumber(cp) or 0
+        if cp <= 0 then ns.comboOwner = nil
+        elseif cp ~= ns.comboLast or not ns.comboOwner then ns.comboOwner = ns.ComboTargetGUID() or ns.comboOwner end   -- (changed: on this one)
+        ns.comboLast = cp
+    end
+    -- the points on your target: none if the game's own count for it says so, or if yours were built on another
+    function ns.ComboTargetCP()
+        if GetComboPoints then
+            local ok, n = pcall(GetComboPoints, "player", "target")
+            if ok and n ~= nil and not (issecretvalue and issecretvalue(n)) and tonumber(n) and tonumber(n) <= 0 then
+                return 0
+            end
+        end
+        local cp = UnitPower("player", CP)
+        local g = ns.ComboTargetGUID()
+        if ns.comboOwner and g and g ~= ns.comboOwner then return 0 end
+        return cp
+    end
     function ns.UpdateCombo()
         local d = db()
         if not d then return end
@@ -10674,7 +10708,7 @@ do
             local ok, p = pcall(C_NamePlate.GetNamePlateForUnit, "target")
             plate = ok and p or nil
         end
-        local cp = plate and (demo and (demo.cp or 5) or UnitPower("player", CP))
+        local cp = plate and (demo and (demo.cp or 5) or ns.ComboTargetCP())
         local hidden = cp ~= nil and issecretvalue and issecretvalue(cp)
         local n = not hidden and tonumber(cp) or nil
         local max = demo and 5 or math.min(MAXPIPS, tonumber(Readable(UnitPowerMax("player", CP))) or 5)
@@ -10731,6 +10765,7 @@ do
         if not pcall(ev.RegisterUnitEvent, ev, "UNIT_MAXPOWER", "player") then pcall(ev.RegisterEvent, ev, "UNIT_MAXPOWER") end
         ev:SetScript("OnEvent", function(_, event, unit, kind)
             if (event == "UNIT_POWER_UPDATE" or event == "UNIT_MAXPOWER") and (unit ~= "player" or (kind and kind ~= "COMBO_POINTS")) then return end
+            if event == "UNIT_POWER_UPDATE" then ns.Safe("combo points", ns.ComboPointsChanged) end
             ns.Safe("combo points", ns.UpdateCombo)
         end)
     end

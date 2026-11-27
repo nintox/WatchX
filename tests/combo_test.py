@@ -51,6 +51,27 @@ ex('tick(8.5, 0.5)')
 check(ev('NS.plateDemo and NS.plateDemo.cp') == 5, "counted up to 5 in 8 s: all full")
 ex('tick(21, 1)')
 check(not ev('WatchXComboPoints:IsShown()'), "the test over: gone")
+# 5 points on one, out of the fight, another targeted: none on the new one (they're the first one's); back: there again
+ex(r"""
+NS.db.plateCombo = true; NS.PlateDemoFor = function() return nil end
+issecretvalue = function() return false end
+CLASS = "ROGUE"; TARGET = true; TGUID = "Creature-A"
+UnitGUID = function(u) if u == "target" then return TGUID end return "Player-1-0001" end
+CPN = 0; fire("UNIT_POWER_UPDATE", "player", "COMBO_POINTS")
+for i = 1, 5 do CPN = i; fire("UNIT_POWER_UPDATE", "player", "COMBO_POINTS") end
+""")
+check(ev('WatchXComboPoints:IsShown()'), "5 points on the one you built them on")
+ex('TGUID = "Creature-B"; fire("PLAYER_TARGET_CHANGED")')
+check(not ev('WatchXComboPoints:IsShown()'), "another targeted: none on it (still 5 on the first)")
+ex('TGUID = "Creature-A"; fire("PLAYER_TARGET_CHANGED")')
+check(ev('WatchXComboPoints:IsShown()'), "back on the first: its 5 again")
+ex('TGUID = "Creature-B"; fire("PLAYER_TARGET_CHANGED"); CPN = 1; fire("UNIT_POWER_UPDATE", "player", "COMBO_POINTS")')
+check(ev('WatchXComboPoints:IsShown()'), "a point built on the new one: shown there")
+ex('TGUID = "Creature-A"; fire("PLAYER_TARGET_CHANGED")')
+check(not ev('WatchXComboPoints:IsShown()'), "the first one's are gone now")
+ex('TGUID = "Creature-B"; fire("PLAYER_TARGET_CHANGED"); GetComboPoints = function(u, t) return 0 end; fire("PLAYER_TARGET_CHANGED")')
+check(not ev('WatchXComboPoints:IsShown()'), "the game says none on this target: none")
+ex('GetComboPoints = nil; CPN = 0; fire("UNIT_POWER_UPDATE", "player", "COMBO_POINTS")')
 errs = errors(ev)
 check(len(errs) == 0, "no Lua errors " + (str(errs[0])[:300] if errs else ""))
 print("combo points:", "ALL PASSED" if not fails else "%d FAILED" % len(fails))
