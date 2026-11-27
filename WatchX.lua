@@ -73,6 +73,7 @@ local defaults = {
     shareFriendNames = {},
     potionOrder = { "Free Action", "Living Action", "Invulnerability", "Swiftness", "Restorative" },   -- shown first
     platePotionMax = 4,   -- potions on one nameplate at most
+    potionGlow = { "Free Action", "Living Action", "Invulnerability" },   -- the important ones: a glow round them
     customPotions = {},   -- your own: { spell = the spell it casts, id, label, secs } (Settings > Nameplates)
     shareStealth = true,  -- ... which: stealth, KOS, WANTED (and every new enemy, at most one every 10 s)
     shareKOS = true,
@@ -1378,6 +1379,7 @@ do   -- (its own block: the main chunk is at Lua's 200-locals limit)
                 local p = { label = pot[1], spell = spellID, untilT = now + pot[2], dur = pot[2] }
                 e.potions[spellID], e.potion = p, p   -- (e.potion: the latest)
                 Log("potion", e.name, pot[1])
+                if ns.OnEnemyPotion then ns.Safe("potion sound", ns.OnEnemyPotion, e, p) end
             end
         end
         if st then e.stance, e.stanceAt = st, time() end

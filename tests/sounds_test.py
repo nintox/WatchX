@@ -36,7 +36,7 @@ ex('NS.db.stealthSound = false; NS.AlertSound("stealth"); NS.AlertSound("bounty"
 ex('NS.db.stealthSound = true')
 # the settings page: a click picks the next sound and plays it, right-click goes back
 ex('if not WatchXNearbyOptions then NS.BuildNearbySettings() end; SB = NS.soundBtns; PLAYED = {}; NS.db.sounds.kos = "alarm"')
-check(ev('#SB') == 5, "five sound rows")
+check(ev('#SB') == 7, "seven sound rows (six kinds, the glow potion's on Nameplates too)")
 ex('SB[2]:GetScript("OnClick")(SB[2], "LeftButton")')
 check(ev('WatchXSoundMenu and WatchXSoundMenu:IsShown()'), "click: the list of sounds opens")
 rows = ev('(function() local t = {} for _, r in ipairs(WatchXSoundMenu.rows) do if r:IsShown() then t[#t + 1] = r.key end end return table.concat(t, ",") end)()')

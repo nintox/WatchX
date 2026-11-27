@@ -99,6 +99,25 @@ check(ev('NS.RemoveCustomPotion("Free Action")') == False, "a built-in one can't
 ex('tick(61, 1); cast("nameplate1", 11405); tick(0.3)')
 check(len(list(ev('NS.ActivePotions(NS.nearby[key("nameplate1")])').values())) == 0, "removed: not watched")
 ex('NS.SetPotionOrder("Free Action, Living Action, Invulnerability, Swiftness, Restorative")')
+# the important ones: a glow on the plate, gold in the list, a sound when drunk
+ex('''SOUNDS = {}; local oPS = PlaySound; PlaySound = function(id, ch) SOUNDS[#SOUNDS + 1] = id; return true end
+SOUNDKIT = SOUNDKIT or {}; SOUNDKIT.ALARM_CLOCK_WARNING_2 = 12867''')
+ex('tick(31, 1); cast("nameplate1", 2379); tick(0.3)')
+check(ev('#SOUNDS') == 0, "Swiftness (no glow): no sound")
+check(not ev('PF.nameplate1.pots[1].glow:IsShown()'), "and no glow")
+ex('cast("nameplate1", 6615); tick(0.3)')
+check(ev('#SOUNDS') == 1, "Free Action (glow): a sound")
+check(ev('PF.nameplate1.pots[1].glow:IsShown()'), "Free Action's icon (first): a glow")
+check(not ev('PF.nameplate1.pots[2].glow:IsShown()'), "Swiftness's: none")
+ex('NS.RefreshUI(); tick(1.2)')
+check("ffcc33FREE ACTION" in str(ev('rowText()')), "gold in the list")
+ex('cast("nameplate1", 3169); tick(0.3)')
+check(ev('#SOUNDS') == 1, "Invulnerability right after: no second sound (1.5 s)")
+ex('NS.db.sounds = { potion = "off" }; tick(31, 1); cast("nameplate1", 6615); tick(0.3)')
+check(ev('#SOUNDS') == 1, "sound off: none")
+ex('NS.db.sounds = {}; NS.SetPotionGlow("swift"); tick(2); cast("nameplate1", 2379); tick(0.3)')
+check(ev('NS.db.potionGlow[1]') == "Swiftness" and ev('#SOUNDS') == 2, "your own glow list: Swiftness now sounds")
+ex('NS.SetPotionGlow("Free Action, Living Action, Invulnerability"); tick(31, 1)')
 # /wx plates test: a made-up potion and stance on your target's plate, a friend's too (friendly icons off)
 ex('''
 NS.db.plateStance = true; NS.db.plateFriendly = false

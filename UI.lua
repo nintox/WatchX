@@ -2627,6 +2627,25 @@ function ns.BuildNearbySettings()
         note("Potions with a comma between, the most important first – it sits nearest the class icon. "
             .. "The rest come after, the one over soonest first.")
         y = y - 34
+        local lab2 = o:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+        lab2:SetPoint("TOPLEFT", o, "TOPLEFT", L + 4, y - 6)
+        lab2:SetText("Glow on")
+        local gb = CreateFrame("EditBox", "WatchXPotionGlow", o, "InputBoxTemplate")
+        gb:SetSize(330, 20)
+        gb:SetPoint("TOPLEFT", o, "TOPLEFT", L + 140, y - 2)
+        gb:SetAutoFocus(false)
+        gb:SetMaxLetters(240)
+        local function showG() gb:SetText(table.concat(type(db().potionGlow) == "table" and db().potionGlow or {}, ", ")) end
+        local function saveG() ns.SetPotionGlow(gb:GetText()); showG() end
+        gb:SetScript("OnEnterPressed", function(self) saveG(); self:ClearFocus() end)
+        gb:SetScript("OnEditFocusLost", saveG)
+        gb:SetScript("OnEscapePressed", function(self) showG(); self:ClearFocus() end)
+        gb:SetScript("OnShow", showG)
+        P.glowBox = gb
+        y = y - 26
+        note("The important ones: a gold glow round them on the plate, gold in the list too – and a sound:")
+        y = y - 22
+        soundRow("potion", "Sound: glow potion", "when an enemy drinks one")
         stepper("Potions on a plate", "at most, 1 – 6 · normal 4", function() return ns.PlatePotionMax() end, function(d)
             db().platePotionMax = math.max(1, math.min(6, ns.PlatePotionMax() + d)); ns.UpdatePlates()
         end)
@@ -3715,7 +3734,8 @@ local function PaintNearbyRow(r, e, now)
     if ns.db.platePotions ~= false then
         local gt = GetTime()
         for _, pot in ipairs(ns.ActivePotions(e)) do
-            tags = tags .. "|cff40d8ff" .. pot.label:upper() .. " " .. math.ceil(pot.untilT - gt) .. "s|r  "
+            tags = tags .. (ns.PotionGlows(pot.label) and "|cffffcc33" or "|cff40d8ff") .. pot.label:upper() .. " "
+                .. math.ceil(pot.untilT - gt) .. "s|r  "
         end
     end
     if e.stance and ns.db.plateStance ~= false then
@@ -4121,6 +4141,7 @@ ns.SOUND_KINDS = {   -- (in the settings in this order)
     { kind = "wanted",  label = "WANTED nearby",    def = "boss" },
     { kind = "enemy",   label = "New enemy nearby", def = "off", hint = "at most every 5 s" },
     { kind = "bounty",  label = "Bounty news",      def = "coins", hint = "posted, claimed, paid" },
+    { kind = "potion",  label = "Glow potion",      def = "alarm2", hint = "an enemy drinks one (Nameplates)" },
 }
 function ns.SoundChoice(kind)
     local v = type(db().sounds) == "table" and db().sounds[kind]
@@ -4165,6 +4186,9 @@ function ns.AlertSound(kind)
     if kind == "enemy" then
         if GetTime() - (ns.lastEnemySound or -99) < 5 then return end
         ns.lastEnemySound = GetTime()
+    elseif kind == "potion" then   -- (two drinking at once: one sound)
+        if GetTime() - (ns.lastPotionSound or -99) < 1.5 then return end
+        ns.lastPotionSound = GetTime()
     end
     ns.PlayChoice(choice)
 end
@@ -9099,6 +9123,11 @@ function ns.PaintPlateExtras(f, unit, hostile)
             local tex = C_Spell and C_Spell.GetSpellTexture and Readable(C_Spell.GetSpellTexture(p.spell))
             b.icon:SetTexture(tex or "Interface\\Icons\\INV_Potion_51")
             if b.cd and b.key ~= p.untilT then b.key = p.untilT; b.cd:SetCooldown(p.untilT - p.dur, p.dur) end
+            local glow = ns.PotionGlows(p.label)
+            if glow ~= b.glow:IsShown() then
+                b.glow:SetShown(glow)
+                if b.glowAnim then if glow then b.glowAnim:Play() else b.glowAnim:Stop() end end
+            end
             b:Show()
         elseif b then
             b:Hide()
@@ -9178,14 +9207,14 @@ function ns.ActivePotions(e)
     end)
     return out
 end
--- "free action, swift" -> { "Free Action", "Swiftness" } (a name or its start); the unknown ones are said.
-function ns.SetPotionOrder(text)
+-- "free action, swift" -> { "Free Action", "Swiftness" } (a name, its start or a word in it); the unknown ones are said.
+function ns.ParsePotionNames(text)
     local out, bad, seen = {}, {}, {}
+    local labels = ns.PotionLabels()
     for part in tostring(text or ""):gmatch("[^,;]+") do
         local want = ns.Trim(part):lower()
         if want ~= "" then
             local hit
-            local labels = ns.PotionLabels()
             for _, n in ipairs(labels) do if n:lower() == want then hit = n end end
             for _, how in ipairs({ "start", "in" }) do   -- its start ("free"), else a word in it ("giants")
                 if hit ~= nil then break end
@@ -9201,13 +9230,36 @@ function ns.SetPotionOrder(text)
             elseif not hit then bad[#bad + 1] = ns.Trim(part) end
         end
     end
-    db().potionOrder = out
     if #bad > 0 then
         ns.Print("Not a potion WatchX knows: " .. table.concat(bad, ", ") .. ". These are: "
-            .. table.concat(ns.PotionLabels(), ", ") .. ".")
+            .. table.concat(labels, ", ") .. ".")
     end
+    return out
+end
+function ns.SetPotionOrder(text)
+    local out = ns.ParsePotionNames(text)
+    db().potionOrder = out
     ns.UpdatePlates()
     return out
+end
+-- a potion an enemy just drank (WatchX.lua): an important one's sound
+function ns.OnEnemyPotion(e, p)
+    if p and ns.PotionGlows(p.label) and db().platePotions ~= false then ns.AlertSound("potion") end
+end
+-- the important ones: a glow round their icon on the plate (and brighter in the list)
+function ns.SetPotionGlow(text)
+    local out = ns.ParsePotionNames(text)
+    db().potionGlow = out
+    ns.UpdatePlates()
+    if ns.RefreshUI then ns.RefreshUI() end
+    return out
+end
+function ns.PotionGlows(label)
+    if type(label) ~= "string" then return false end
+    for _, n in ipairs(type(db().potionGlow) == "table" and db().potionGlow or {}) do
+        if n:lower() == label:lower() then return true end
+    end
+    return false
 end
 -- The names: the built-in ones and yours.
 function ns.PotionLabels()
@@ -9305,6 +9357,21 @@ function ns.PlatePotIcon(f, i)
         -- the seconds: small, like the game's own debuffs on the plate (not a big number over the icon)
         if cd.SetCountdownFont then pcall(cd.SetCountdownFont, cd, "NumberFontNormalSmall") end
         b.cd = cd
+    end
+    -- an important one: a gold glow round it, gently pulsing (the game's animation, no Lua each frame)
+    b.glow = b:CreateTexture(nil, "BACKGROUND", nil, -1)
+    b.glow:SetTexture("Interface\\Buttons\\UI-ActionButton-Border")
+    b.glow:SetBlendMode("ADD")
+    b.glow:SetVertexColor(1, 0.8, 0.25, 1)
+    b.glow:SetPoint("TOPLEFT", b, "TOPLEFT", -12, 12)
+    b.glow:SetPoint("BOTTOMRIGHT", b, "BOTTOMRIGHT", 12, -12)
+    b.glow:Hide()
+    if b.glow.CreateAnimationGroup then
+        local ag = b.glow:CreateAnimationGroup()
+        ag:SetLooping("BOUNCE")
+        local a = ag:CreateAnimation("Alpha")
+        a:SetFromAlpha(1); a:SetToAlpha(0.4); a:SetDuration(0.7)
+        b.glowAnim = ag
     end
     if i == 1 then b:SetPoint("LEFT", f, "RIGHT", 4, 0) else b:SetPoint("LEFT", f.pots[i - 1], "RIGHT", 3, 0) end
     return b
