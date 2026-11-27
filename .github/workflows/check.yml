@@ -33,8 +33,6 @@ jobs:
       - run: |
           bash -n bridge/watchx_bridge.sh
           bash -n "bridge/Install (Mac).command"
-          bash -n "bridge/Uninstall (Mac).command"
-          bash -n "bridge/Cloud sync (Mac).command"
           bash tests/cloudsync_test.sh
 
   tests:

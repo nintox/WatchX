@@ -10,7 +10,7 @@
 # Needs nothing extra – uses bash, curl, sips and osascript, which ship with macOS.
 # The URLs are set in game (/wx) and read from WTF/Account/*/SavedVariables/WatchX.lua.
 #
-# Normally started automatically by "Install (Mac).command", which copies it to
+# Normally set up by "Install (Mac).command" (alerts, cloud sync or both), which copies it to
 # ~/Library/Application Support/WatchX (so addon updates don't touch it).
 # Manually:  bash watchx_bridge.sh          (watch)
 #            bash watchx_bridge.sh --test   (send a test alert)
@@ -336,7 +336,7 @@ check_exit() {   # every 2 seconds (the settings file and the game process)
 }
 
 # ---------------------------------------------------------------- cloud sync (optional)
-# One folder you pick ("Cloud sync (Mac).command" writes it to cloud_folder.txt): a folder iCloud Drive, Dropbox,
+# One folder you pick ("Install (Mac).command", 2 or 3, writes it to cloud_folder.txt): a folder iCloud Drive, Dropbox,
 # OneDrive or Google Drive keeps in step between your computers. WatchX's settings file of each WoW account is kept
 # there as <folder>/WatchX/<account>/WatchX.lua:
 #   * yours changed (you logged out or reloaded): copied up
@@ -453,7 +453,11 @@ if [ -n "${WATCHX_LIB:-}" ]; then return 0 2>/dev/null || exit 0; fi
 
 log "WatchX bridge 2.0 – Made by Rikerud"
 load_settings
-log "Targets: $(targets)${SV:+  (from ${SV#$ROOT/})}"
+# What it does (chosen in "Install (Mac).command"): alerts, sync or both (no choice saved: as before, alerts)
+MODE="$(head -n 1 "$DIR/mode.txt" 2>/dev/null)"
+case "$MODE" in sync|both) ;; *) MODE=alerts ;; esac
+[ "$MODE" = alerts ] && rm -f "$CLOUD_CFG"   # (chose alerts only: no sync)
+[ "$MODE" = sync ] || log "Targets: $(targets)${SV:+  (from ${SV#$ROOT/})}"
 
 if [ "$1" = "--test" ]; then   # bash watchx_bridge.sh --test [image]
     notify TEST WatchX "Test from the bridge – alerts are working." "$2"
@@ -479,14 +483,19 @@ touch "$WORK/stamp"   # only screenshots from now on
 : > "$SENT_FILE"
 SV_MTIME="$(stat -f %m "$(sv_file)" 2>/dev/null)"
 wow_running && WOW_UP=1 && WOW_SINCE="$(date +%s)"
-log "Watching $SHOTS (instant), the game (logout) and $CHATLOG (fallback)"
-
-watch_chatlog &
+if [ "$MODE" = sync ]; then
+    log "Cloud sync only (no phone alerts)"
+else
+    log "Watching $SHOTS (instant), the game (logout) and $CHATLOG (fallback)"
+    watch_chatlog &
+fi
 
 # Quick while the game runs (alerts within a second); slower when it doesn't (next to no CPU all day).
 while true; do
-    check_shots
-    check_exit
-    cloud_sync
-    if [ "$WOW_UP" = 1 ]; then sleep 0.3; else sleep 2; fi
+    if [ "$MODE" != sync ]; then
+        check_shots
+        check_exit
+    fi
+    [ "$MODE" != alerts ] && cloud_sync
+    if [ "$WOW_UP" = 1 ] && [ "$MODE" != sync ]; then sleep 0.3; else sleep 2; fi
 done

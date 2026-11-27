@@ -1,48 +1,23 @@
 @echo off
 rem WatchX - Made by Rikerud
-rem Double-click to install the alert bridge. It's copied to %LOCALAPPDATA%\WatchX, runs hidden in the
-rem background and starts automatically every time you log in to Windows.
-title WatchX - install
+rem Double-click to set up the WatchX bridge: phone alerts, cloud sync of your settings, or both - or to remove it.
+rem It's copied to %LOCALAPPDATA%\WatchX, runs hidden in the background and starts by itself when you log in to
+rem Windows. Run it again any time to change your choice or the cloud folder.
+title WatchX bridge
 echo ======================================
-echo   WatchX - phone alerts
-echo   Made by Rikerud
+echo   WatchX bridge - Made by Rikerud
 echo ======================================
 echo.
 
 rem Opened straight from the zip, Windows copies only this file somewhere else: the bridge isn't next to it.
-if exist "%~dp0watchx_bridge.ps1" goto install
+if exist "%~dp0watchx_bridge.ps1" goto setup
 echo Extract the zip first: right-click WatchX-Bridge.zip, choose "Extract All...",
 echo then double-click "Install (Windows).bat" in the folder that comes out.
 goto done
 
-:install
+:setup
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0watchx_bridge.ps1" -Install
-if errorlevel 1 goto failed
-timeout /t 3 /nobreak >nul
-
-echo.
-echo The bridge is installed and running in the background (%LOCALAPPDATA%\WatchX).
-echo It starts automatically when you log in to Windows.
-echo.
-echo --- Status ---
-rem the last lines only (the log keeps every alert)
-powershell -NoProfile -Command "Get-Content -LiteralPath (Join-Path $env:LOCALAPPDATA 'WatchX-bridge.log') -Tail 15 -ErrorAction SilentlyContinue"
-echo --------------
-echo.
-echo Next step in game: type /wx and press Settings, paste your
-echo ntfy URL and/or Discord webhook and press "Save & reload".
-echo.
-echo Several computers? Double-click "Cloud sync (Windows).bat" to keep WatchX's
-echo settings in step through OneDrive, Dropbox, Google Drive or iCloud.
-echo.
-choice /c YN /m "Send a test alert now"
-if errorlevel 2 goto done
-powershell -NoProfile -ExecutionPolicy Bypass -File "%LOCALAPPDATA%\WatchX\watchx_bridge.ps1" -Test
-goto done
-
-:failed
-echo.
-echo Something went wrong during installation. See the error above.
+if errorlevel 1 (echo. & echo Something went wrong. See the error above.)
 
 :done
 echo.

@@ -42,7 +42,7 @@ PHONE ALERTS (one-time setup)
 2. In game: /wx (the settings). Paste ntfy.sh/<your-topic> and/or the Discord webhook
    and press "Save & reload".
 3. Download WatchX-Bridge.zip from  https://github.com/nintox/WatchX/releases
-   Unzip it anywhere and double-click:
+   Unzip it anywhere and double-click (it asks: 1 phone alerts, 2 cloud sync, 3 both, 4 remove):
      Mac:      Install (Mac).command
                (if your Mac says it can't be opened: System Settings > Privacy & Security,
                 scroll down, "Open Anyway" – on macOS 14 and older: right-click > Open)

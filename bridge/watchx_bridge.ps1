@@ -9,10 +9,10 @@
 # Needs nothing extra – uses PowerShell, which ships with Windows.
 # The URLs are set in game (/wx) and read from WTF\Account\*\SavedVariables\WatchX.lua.
 #
-# Normally started automatically by "Install (Windows).bat".
+# Normally set up by "Install (Windows).bat" (alerts, cloud sync or both).
 # Manually:  powershell -ExecutionPolicy Bypass -File watchx_bridge.ps1 [-Test] [-Decode <image>]
 
-param([switch]$Test, [string]$Decode = '', [switch]$Install, [switch]$Cloud)
+param([switch]$Test, [string]$Decode = '', [switch]$Install)
 
 $ErrorActionPreference = 'Continue'
 try {
@@ -22,17 +22,62 @@ Add-Type -AssemblyName System.Drawing
 
 $Dir = $PSScriptRoot
 
-# ---------------------------------------------------------------- install (run by "Install (Windows).bat")
-# Finds the game's _forever_ folder, copies the bridge to %LOCALAPPDATA%\WatchX (so addon updates can't break
-# it), remembers the folder in wow_folder.txt, adds it to Startup and starts it.
+# ---------------------------------------------------------------- setup (run by "Install (Windows).bat")
+# One menu: 1 phone alerts, 2 cloud sync, 3 both, 4 remove. Finds the game's _forever_ folder, copies the bridge to
+# %LOCALAPPDATA%\WatchX (so addon updates can't break it), remembers the folder (wow_folder.txt), the choice
+# (mode.txt) and the cloud folder (cloud_folder.txt, a WatchX folder made in it), adds it to Startup and starts it.
 if ($Install) {
     $InstallDir = Join-Path $env:LOCALAPPDATA 'WatchX'
+    $lnk = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Startup\WatchX bridge.lnk'
+    $logPath = Join-Path $env:LOCALAPPDATA 'WatchX-bridge.log'
+    $cfg = Join-Path $InstallDir 'cloud_folder.txt'
+    function Stop-Bridge {
+        Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+            Where-Object { $_.CommandLine -like '*watchx_bridge.ps1*' -and $_.CommandLine -notlike '*-Install*' -and $_.ProcessId -ne $PID } |
+            ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+    }
+    Write-Host 'What do you want?'
+    Write-Host '  1) Phone alerts   - stealth, KOS, rares ... on your phone (ntfy / Discord)'
+    Write-Host '  2) Cloud sync     - the same WatchX settings on all your computers'
+    Write-Host '  3) Both'
+    Write-Host '  4) Remove the WatchX bridge'
+    Write-Host ''
+    $choice = ([string](Read-Host 'Type 1, 2, 3 or 4 and press Enter [3]')).Trim()
+    if (-not $choice) { $choice = '3' }
+    $mode = @{ '1' = 'alerts'; '2' = 'sync'; '3' = 'both'; '4' = 'remove' }[$choice]
+    if (-not $mode) { Write-Host "That isn't 1, 2, 3 or 4 - nothing changed."; exit 0 }
+    Write-Host ''
+
+    # ---- remove
+    if ($mode -eq 'remove') {
+        Remove-Item -LiteralPath $lnk -Force -ErrorAction SilentlyContinue
+        Stop-Bridge
+        $here = [IO.Path]::GetFullPath($Dir).TrimEnd('\') -eq [IO.Path]::GetFullPath($InstallDir).TrimEnd('\')
+        foreach ($f in 'watchx_bridge.ps1', 'watchx_decode.js', 'wow_folder.txt', 'mode.txt', 'cloud_folder.txt',
+                       'Install (Windows).bat', 'Uninstall (Windows).bat', 'Cloud sync (Windows).bat') {
+            if ($here -and $f -eq 'Install (Windows).bat') { continue }   # (running it now: you can delete the folder)
+            Remove-Item -LiteralPath (Join-Path $InstallDir $f) -Force -ErrorAction SilentlyContinue
+        }
+        # (what was last in step; the files in your cloud folder are left as they are)
+        Remove-Item -LiteralPath (Join-Path $InstallDir 'sync') -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath (Join-Path $env:TEMP 'watchx-bridge') -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $logPath, ($logPath + '.old') -Force -ErrorAction SilentlyContinue
+        if (-not (Get-ChildItem -LiteralPath $InstallDir -ErrorAction SilentlyContinue)) {
+            Remove-Item -LiteralPath $InstallDir -Force -ErrorAction SilentlyContinue
+        }
+        Write-Host 'The WatchX bridge has been stopped and removed. (The in-game addon is untouched.)'
+        exit 0
+    }
+
+    # ---- find the game's _forever_ folder
     function Test-WowFolder([string]$p) {
         if (-not $p) { return $false }
         return (Test-Path -LiteralPath (Join-Path $p 'WTF')) -or (Test-Path -LiteralPath (Join-Path $p 'Interface\AddOns'))
     }
     $cands = New-Object System.Collections.Generic.List[string]
     if ($env:NW_ROOT) { $cands.Add($env:NW_ROOT) }
+    $old = Join-Path $InstallDir 'wow_folder.txt'   # (set up before)
+    if (Test-Path -LiteralPath $old) { try { $cands.Add(([IO.File]::ReadAllLines($old)[0]).Trim()) } catch {} }
     try { $cands.Add([IO.Path]::GetFullPath((Join-Path $Dir '..\..\..\..'))) } catch {}   # run from Interface\AddOns\WatchX\bridge
     foreach ($key in 'HKLM:\SOFTWARE\WOW6432Node\Blizzard Entertainment\World of Warcraft', 'HKLM:\SOFTWARE\Blizzard Entertainment\World of Warcraft') {
         try {
@@ -60,25 +105,56 @@ if ($Install) {
     }
     Write-Host "World of Warcraft: $wow"
 
-    # stop any old bridge
-    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
-        Where-Object { $_.CommandLine -like '*watchx_bridge.ps1*' -and $_.ProcessId -ne $PID } |
-        ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+    # ---- the cloud folder (2 and 3): a WatchX folder is made in the one you pick
+    $pick = ''
+    if ($mode -ne 'alerts') {
+        $now = ''
+        if (Test-Path -LiteralPath $cfg) { try { $now = ([IO.File]::ReadAllText($cfg)).Trim() } catch {} }
+        if ($now -and (Test-Path -LiteralPath $now)) {
+            $a = [string](Read-Host "Cloud folder: $now\WatchX - keep it? (Enter = keep, c = choose another)")
+            if ($a.Trim() -ne 'c') { $pick = $now }
+        }
+        if (-not $pick) {
+            Write-Host 'Pick the folder your cloud keeps in step (OneDrive, Dropbox, Google Drive, iCloud Drive)...'
+            Add-Type -AssemblyName System.Windows.Forms
+            $dlg = New-Object Windows.Forms.FolderBrowserDialog
+            $dlg.Description = 'WatchX cloud sync: pick a folder your cloud keeps in step (OneDrive, Dropbox, Google Drive, iCloud Drive)'
+            $dlg.ShowNewFolderButton = $true
+            if ($env:OneDrive -and (Test-Path -LiteralPath $env:OneDrive)) { $dlg.SelectedPath = $env:OneDrive }
+            if ($dlg.ShowDialog() -eq 'OK' -and $dlg.SelectedPath) { $pick = $dlg.SelectedPath.TrimEnd('\') }
+        }
+        if ($pick -and (Split-Path $pick -Leaf) -eq 'WatchX') { $pick = Split-Path $pick -Parent }   # (a WatchX folder itself)
+        $made = $false
+        if ($pick) { try { [void](New-Item -ItemType Directory -Force -Path (Join-Path $pick 'WatchX') -ErrorAction Stop); $made = $true } catch {} }
+        if (-not $made) {
+            if ($mode -eq 'sync') { Write-Host 'No folder (or one WatchX can''t write to) - nothing changed.'; exit 0 }
+            Write-Host 'No cloud folder - phone alerts only for now (run this again to add cloud sync).'
+            $mode = 'alerts'
+        } else { Write-Host "Cloud folder: $pick\WatchX (your settings go in there)" }
+    }
+    Write-Host ''
 
+    # ---- copy the bridge to its own folder; what it does
+    Stop-Bridge
     [void](New-Item -ItemType Directory -Force -Path $InstallDir)
     if ([IO.Path]::GetFullPath($Dir).TrimEnd('\') -ne [IO.Path]::GetFullPath($InstallDir).TrimEnd('\')) {
-        foreach ($f in 'watchx_bridge.ps1', 'watchx_decode.js', 'Uninstall (Windows).bat', 'Cloud sync (Windows).bat') {
+        foreach ($f in 'watchx_bridge.ps1', 'watchx_decode.js', 'Install (Windows).bat') {
             $src = Join-Path $Dir $f
             if (Test-Path -LiteralPath $src) { Copy-Item -LiteralPath $src -Destination $InstallDir -Force }
         }
+        foreach ($f in 'Uninstall (Windows).bat', 'Cloud sync (Windows).bat') {   # (the old separate ones)
+            Remove-Item -LiteralPath (Join-Path $InstallDir $f) -Force -ErrorAction SilentlyContinue
+        }
     }
     [IO.File]::WriteAllText((Join-Path $InstallDir 'wow_folder.txt'), $wow)
+    [IO.File]::WriteAllText((Join-Path $InstallDir 'mode.txt'), $mode)
+    if ($mode -eq 'alerts') { Remove-Item -LiteralPath $cfg -Force -ErrorAction SilentlyContinue }
+    else { [IO.File]::WriteAllText($cfg, $pick) }
     Get-ChildItem -LiteralPath $InstallDir | Unblock-File -ErrorAction SilentlyContinue
 
     $ps1 = Join-Path $InstallDir 'watchx_bridge.ps1'
     $exe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
     $args1 = '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $ps1 + '"'
-    $lnk = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Startup\WatchX bridge.lnk'
     $sh = New-Object -ComObject WScript.Shell
     $s = $sh.CreateShortcut($lnk)
     $s.TargetPath = $exe
@@ -87,39 +163,37 @@ if ($Install) {
     $s.WindowStyle = 7
     $s.Save()
     Start-Process -FilePath $exe -ArgumentList $args1 -WorkingDirectory $InstallDir -WindowStyle Hidden
-    exit 0
-}
 
-# ---------------------------------------------------------------- pick the cloud folder ("Cloud sync (Windows).bat")
-# A folder OneDrive, Dropbox, Google Drive or iCloud keeps in step between your computers; saved in cloud_folder.txt
-# next to the installed bridge, which picks it up within a few seconds. Cancel = as it was; "Turn off" = no sync.
-if ($Cloud) {
-    $InstallDir = Join-Path $env:LOCALAPPDATA 'WatchX'
-    $cfg = Join-Path $InstallDir 'cloud_folder.txt'
-    [void](New-Item -ItemType Directory -Force -Path $InstallDir)
-    Add-Type -AssemblyName System.Windows.Forms
-    $now = ''
-    if (Test-Path -LiteralPath $cfg) { $now = ([IO.File]::ReadAllText($cfg)).Trim() }
-    if ($now) {
-        $a = [Windows.Forms.MessageBox]::Show("WatchX syncs to:`n$now`n`nYes = pick another folder`nNo = turn sync off`nCancel = keep it",
-            'WatchX cloud sync', 'YesNoCancel', 'Question')
-        if ($a -eq 'Cancel') { exit 0 }
-        if ($a -eq 'No') { Remove-Item -LiteralPath $cfg -Force; Write-Host 'Cloud sync is off.'; exit 0 }
+    # ---- how it went
+    Start-Sleep -Seconds 3
+    if ($mode -ne 'alerts') {
+        Write-Host 'Checking that it can use the cloud folder...'
+        for ($i = 0; $i -lt 8; $i++) {
+            if (Select-String -LiteralPath $logPath -Pattern 'Cloud sync:' -Quiet -ErrorAction SilentlyContinue) { break }
+            Start-Sleep -Seconds 1
+        }
     }
-    $dlg = New-Object Windows.Forms.FolderBrowserDialog
-    $dlg.Description = 'Pick a folder your cloud keeps in step (OneDrive, Dropbox, Google Drive, iCloud Drive)'
-    $dlg.ShowNewFolderButton = $true
-    if ($env:OneDrive -and (Test-Path -LiteralPath $env:OneDrive)) { $dlg.SelectedPath = $env:OneDrive }
-    if ($dlg.ShowDialog() -ne 'OK' -or -not $dlg.SelectedPath) { Write-Host 'Nothing changed.'; exit 0 }
-    $pick = $dlg.SelectedPath.TrimEnd('\')
-    if ((Split-Path $pick -Leaf) -eq 'WatchX') { $pick = Split-Path $pick -Parent }   # (picked a WatchX folder itself)
-    # WatchX's own folder in it, made now (the bridge keeps each WoW account's settings in there)
-    try { [void](New-Item -ItemType Directory -Force -Path (Join-Path $pick 'WatchX') -ErrorAction Stop) }
-    catch { Write-Host "Couldn't make a folder in $pick - pick another one."; exit 1 }
-    [IO.File]::WriteAllText($cfg, $pick)
-    Write-Host "Cloud sync: $pick\WatchX (made - your settings go in there)"
-    try { Start-Process explorer.exe (Join-Path $pick 'WatchX') } catch {}
-    Write-Host 'Do the same on your other computer, with the same folder. Play on one computer at a time.'
+    Write-Host ''
+    Write-Host "The bridge is running in the background ($InstallDir). It starts by itself when you log in to Windows."
+    Write-Host ''
+    Write-Host '--- Status ---'
+    Get-Content -LiteralPath $logPath -Tail 15 -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ }
+    Write-Host '--------------'
+    if ($mode -ne 'alerts') {
+        Write-Host ''
+        Write-Host 'Cloud sync: do the same on your other computer (choose 2 or 3, the same folder).'
+        Write-Host 'Your settings go up when you log out, and come down before you play. Play on one computer at a time.'
+    }
+    if ($mode -ne 'sync') {
+        Write-Host ''
+        Write-Host 'Phone alerts - in game: type /wx, press Settings, paste your ntfy link and/or Discord webhook'
+        Write-Host 'and press "Save & reload".'
+        Write-Host ''
+        $t = [string](Read-Host 'Send a test alert now? (y/n)')
+        if ($t.Trim() -eq 'y') { & $exe -NoProfile -ExecutionPolicy Bypass -File $ps1 -Test }
+    }
+    Write-Host ''
+    Write-Host "Run this again any time to change it (or remove it): $InstallDir\Install (Windows).bat"
     exit 0
 }
 
@@ -534,7 +608,7 @@ function Check-Exit {
 }
 
 # ---------------------------------------------------------------- cloud sync (optional)
-# One folder you pick ("Cloud sync (Windows).bat" writes it to cloud_folder.txt): a folder OneDrive, Dropbox, Google
+# One folder you pick ("Install (Windows).bat", 2 or 3, writes it to cloud_folder.txt): a folder OneDrive, Dropbox, Google
 # Drive or iCloud keeps in step between your computers. WatchX's settings file of each WoW account is kept there as
 # <folder>\WatchX\<account>\WatchX.lua:
 #   * yours changed (you logged out or reloaded): copied up
@@ -685,9 +759,15 @@ function Check-ChatLog {
 
 Log 'WatchX bridge 2.0 – Made by Rikerud'
 $settings = Get-Settings
+# What it does (chosen in "Install (Windows).bat"): alerts, sync or both (no choice saved: as before, alerts)
+$Mode = 'alerts'
+$modeFile = Join-Path $Dir 'mode.txt'
+if (Test-Path -LiteralPath $modeFile) { try { $Mode = ([IO.File]::ReadAllText($modeFile)).Trim() } catch {} }
+if ($Mode -ne 'sync' -and $Mode -ne 'both') { $Mode = 'alerts' }
+if ($Mode -eq 'alerts') { Remove-Item -LiteralPath $CloudCfg -Force -ErrorAction SilentlyContinue }   # (alerts only: no sync)
 $from = ''
 if ($settings.file) { $from = "  (from $($settings.file))" }
-Log "Targets: $(Get-Targets $settings)$from"
+if ($Mode -ne 'sync') { Log "Targets: $(Get-Targets $settings)$from" }
 
 if ($Test) {
     Send-Notification 'TEST' 'WatchX' 'Test from the bridge – alerts are working.'
@@ -708,12 +788,15 @@ $sv0 = Get-SvFile
 if ($sv0) { $script:SvTime = $sv0.LastWriteTimeUtc }
 $script:WowUp = Test-WowRunning
 if ($script:WowUp) { $script:WowSince = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() }
-Log "Watching $Shots (instant), the game (logout) and $ChatLog (fallback)"
+if ($Mode -eq 'sync') { Log 'Cloud sync only (no phone alerts)' }
+else { Log "Watching $Shots (instant), the game (logout) and $ChatLog (fallback)" }
 
 while ($true) {
-    Check-Shots
-    Check-Exit
-    Check-ChatLog
-    Sync-Cloud
-    if ($script:WowUp) { Start-Sleep -Milliseconds 300 } else { Start-Sleep -Seconds 2 }   # next to no CPU when not playing
+    if ($Mode -ne 'sync') {
+        Check-Shots
+        Check-Exit
+        Check-ChatLog
+    }
+    if ($Mode -ne 'alerts') { Sync-Cloud }
+    if ($script:WowUp -and $Mode -ne 'sync') { Start-Sleep -Milliseconds 300 } else { Start-Sleep -Seconds 2 }   # next to no CPU when not playing
 }

@@ -47,9 +47,9 @@
 - Buff warnings before and when a buff runs out. Profiles for different setups – each character remembers its own.
 - Export / import (`/wx export`): settings, profiles, the Enemies history, KOS and bounties of all your characters
   as one text to keep or move to another PC (your phone links only if you tick it).
-- Cloud sync (optional, through the bridge): double-click `Cloud sync (Mac).command` / `Cloud sync (Windows).bat` and
-  pick a folder iCloud Drive, Dropbox, OneDrive or Google Drive keeps in step – do the same on your other computer.
-  Your WatchX settings are sent up when you log out and fetched before you play (one computer at a time).
+- Cloud sync (optional, through the bridge – choose it when you set the bridge up): pick a folder iCloud Drive,
+  Dropbox, OneDrive or Google Drive keeps in step – do the same on your other computer. Your WatchX settings are sent
+  up when you log out and fetched before you play (one computer at a time).
 - Rebuff icons: a pulsing icon for each of your own buffs you're missing (Ice Armor, Battle Shout …) – click it to cast
   it. Per class, with quick-add suggestions and a catalogue of every class's buffs (or type a spell ID / Wowhead link); in a row or a column. Unlocked, drag an icon to place it on its own – drop it next to another and they link; size and gap for all. Where they sit, row or column and size are each character's own (an export takes them all to another PC). "Either one" lines (Dampen Magic or Amplify Magic); quiet in cities, hidden in combat if you like. Rogues: every poison in your bags, each rank shown
   with the level it needs – right-click picks one, left-click puts it on.
@@ -69,8 +69,9 @@
 
 WoW addons can't use the internet, so a small helper (the *bridge*) sends the alerts.
 Download **WatchX-Bridge.zip** from [Releases](https://github.com/nintox/WatchX/releases), unzip it and
-double-click `Install (Mac).command` or `Install (Windows).bat`. It finds the game by itself, copies itself out
-of the game folder (so addon updates don't touch it) and starts with your computer. Nothing else to install.
+double-click `Install (Mac).command` or `Install (Windows).bat` and choose: 1 phone alerts, 2 cloud sync, 3 both (4
+removes it). It finds the game by itself, copies itself out of the game folder (so addon updates don't touch it) and
+starts with your computer. Nothing else to install.
 
 Then in game: `/wx` → paste your ntfy link and/or Discord webhook → *Save & reload* → *Send test*.
 
