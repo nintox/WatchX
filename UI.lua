@@ -9041,11 +9041,13 @@ function ns.PaintPlateExtras(f, unit, hostile)
             if ok and cd then
                 cd:SetAllPoints()
                 if cd.SetDrawEdge then cd:SetDrawEdge(false) end
+                -- the seconds: small, like the game's own debuffs on the plate (not a big number over the icon)
+                if cd.SetCountdownFont then pcall(cd.SetCountdownFont, cd, "NumberFontNormalSmall") end
                 f.pot.cd = cd
             end
             f.pot:SetPoint("LEFT", f, "RIGHT", 4, 0)
         end
-        local ps = math.floor(size * 0.85 + 0.5)
+        local ps = math.floor(size * 0.72 + 0.5)
         f.pot:SetSize(ps, ps)
         local tex = C_Spell and C_Spell.GetSpellTexture and Readable(C_Spell.GetSpellTexture(p.spell))
         f.pot.icon:SetTexture(tex or "Interface\\Icons\\INV_Potion_51")
@@ -9056,14 +9058,19 @@ function ns.PaintPlateExtras(f, unit, hostile)
     end
     local st = e and e.stance
     if d.plateStance ~= false and st then
-        if not f.stance then
-            f.stance = f:CreateTexture(nil, "ARTWORK")
-            f.stance:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+        if not f.stance then   -- the same look as the potion's, with a warrior-brown edge (the list's stance colour)
+            f.stance = CreateFrame("Frame", nil, f)
+            f.stance.icon = f.stance:CreateTexture(nil, "ARTWORK")
+            f.stance.icon:SetAllPoints()
+            f.stance.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+            local edge = f.stance:CreateTexture(nil, "BACKGROUND")
+            edge:SetPoint("TOPLEFT", -1, 1); edge:SetPoint("BOTTOMRIGHT", 1, -1)
+            edge:SetColorTexture(0.78, 0.66, 0.47, 1)
             f.stance:SetPoint("RIGHT", f, "LEFT", -4, 0)
         end
-        local ss = math.floor(size * 0.7 + 0.5)
+        local ss = math.floor(size * 0.72 + 0.5)
         f.stance:SetSize(ss, ss)
-        f.stance:SetTexture(ns.STANCE_ICONS and ns.STANCE_ICONS[st] or "Interface\\Icons\\INV_Sword_04")
+        f.stance.icon:SetTexture(ns.STANCE_ICONS and ns.STANCE_ICONS[st] or "Interface\\Icons\\INV_Sword_04")
         f.stance:Show()
     elseif f.stance then
         f.stance:Hide()
