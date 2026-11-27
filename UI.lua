@@ -3515,8 +3515,7 @@ local function BuildNearby()
     -- Bounty news (a new bounty, a claim, a debt, paid): a coin with a count, on the title's line where you can't
     -- miss it. Click: the Wanted list; right-click: seen. Hover: what happened. (A plain button: fine in a fight.)
     f.news = CreateFrame("Button", nil, f)
-    f.news:SetSize(18, 16)
-    f.news:SetPoint("TOPRIGHT", f, "TOPRIGHT", -7, -5)
+    f.news:SetSize(18, 16)   -- (left of the count, which sits at the very end: see below)
     f.news:RegisterForClicks("LeftButtonUp", "RightButtonUp")
     local coin = f.news:CreateTexture(nil, "ARTWORK")
     coin:SetSize(15, 15)
@@ -3552,12 +3551,14 @@ local function BuildNearby()
     end)
     f.news:SetScript("OnLeave", GameTooltip_Hide)
     f.news:Hide()
-    f.count = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    f.count:SetPoint("RIGHT", f.news, "LEFT", -8, 0)   -- (the coin's place stays: nothing moves when it shows)
+    -- the title's line: "Enemies" · ms and fps in the middle · the coin (bounty news) · how many, at the very end
+    f.count = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    f.count:SetPoint("RIGHT", f, "TOPRIGHT", -8, -13)
     f.count:SetTextColor(ACCENT[1], ACCENT[2], ACCENT[3])
-    -- ms and fps after the title, once a second (two cheap calls): green / yellow / red by how good it is
+    f.news:SetPoint("RIGHT", f.count, "LEFT", -6, 0)
+    -- ms and fps, once a second (two cheap calls): green / yellow / red by how good it is
     f.stats = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    f.stats:SetPoint("RIGHT", f.count, "LEFT", -8, 0)   -- left of the count, so the two never overlap
+    f.stats:SetPoint("CENTER", f, "TOP", 0, -13)
     -- a timer, not a check every frame; nothing to do while the list is hidden
     local function Stats()
         local self = f
@@ -3569,25 +3570,10 @@ local function BuildNearby()
         local mc = ms < 100 and "|cff40ff40" or ms < 250 and "|cffffd100" or "|cffff4040"
         local fc = fps >= 50 and "|cff40ff40" or fps >= 25 and "|cffffd100" or "|cffff4040"
         self.stats:SetText(mc .. ms .. "|r|cff999999ms|r  " .. fc .. fps .. "|r|cff999999fps|r")
-        -- at the right end of the title's line, on the title's baseline: left of the count and the coin only when they
-        -- show (else it would float in the middle)
-        -- (the count keeps the coin's place beside it even when there's no coin: 7 + 18 + 8 from the right)
-        local inset = 8
-        local ct = self.count:GetText()
-        if type(ct) == "string" and ct ~= "" then
-            inset = 7 + (self.news:GetWidth() or 18) + 8 + (self.count:GetStringWidth() or 0) + 10
-        elseif self.news:IsShown() then
-            inset = 7 + (self.news:GetWidth() or 18) + 8
-        end
-        local base = 6 + math.floor((self.title:GetStringHeight() or 13) + 0.5)
-        if self.statsAt ~= inset * 1000 + base then
-            self.statsAt = inset * 1000 + base
-            self.stats:ClearAllPoints()
-            self.stats:SetPoint("BOTTOMRIGHT", self, "TOPRIGHT", -inset, -base)
-        end
-        -- no room next to the title: leave it out rather than write over it
-        local tr, sl = self.title:GetRight(), self.stats:GetLeft()
-        if tr and sl and sl < tr + 4 then self.stats:SetText("") end
+        -- no room in the middle (a narrow list): left out rather than written over the title or the count
+        local tr, sl, sr = self.title:GetRight(), self.stats:GetLeft(), self.stats:GetRight()
+        local right = (self.news:IsShown() and self.news:GetLeft()) or self.count:GetLeft()
+        if (tr and sl and sl < tr + 4) or (right and sr and sr > right - 4) then self.stats:SetText("") end
     end
     if C_Timer and C_Timer.NewTicker then C_Timer.NewTicker(1, function() ns.Safe("nearby stats", Stats) end) end
     f:HookScript("OnShow", function() ns.Safe("nearby stats", Stats) end)   -- right away when it comes up
@@ -3781,7 +3767,8 @@ local function RefreshNearby()
     local now, near = time(), 0
     for _, e in ipairs(list) do if now - e.last <= ns.NEARBY_ACTIVE then near = near + 1 end end
     local hidden = #list - NearbyMax()
-    nb.count:SetText((near > 0 and (near .. " near") or (#list > 0 and (#list .. " recent") or ""))
+    -- just the number: how many are near now (none near: the ones seen lately, in grey)
+    nb.count:SetText(((near > 0 and tostring(near)) or (#list > 0 and ("|cff999999" .. #list .. "|r")) or "")
         .. (hidden > 0 and ("  |cffaaaaaa+" .. hidden .. "|r") or ""))
     if not combat then
         local zone = ns.NearbyZoneMode()
