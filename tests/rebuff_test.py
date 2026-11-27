@@ -109,6 +109,11 @@ check(ev('shown()') == "Main hand: Instant Poison / Deadly Poison / Crippling Po
 check(str(ev('WatchXRebuff.icons[1]:GetAttribute("macrotext1")')) == "/use item:6947\n/use 16", "left-click: Instant onto the main hand (by item ID)")
 check(str(ev('WatchXRebuff.icons[2]:GetAttribute("macrotext1")')) == "/use item:2892\n/use 17", "and Deadly onto the off hand")
 check(ev('WatchXRebuff.icons[1].hand:GetText()') == "MH" and ev('WatchXRebuff.icons[2].hand:GetText()') == "OH", "MH / OH on them")
+check(ev('WatchXRebuffGroup100 ~= nil and WatchXRebuff.icons[1]:GetParent() == WatchXRebuffGroup100 and WatchXRebuff.icons[2]:GetParent() == WatchXRebuffGroup100'),
+      "MH / OH: a spot of their own on the screen, not with the other buffs")
+ex('NS.RebuffJoin()')
+check(ev('WatchXRebuff.icons[1]:GetParent() == WatchXRebuff'), "'link them all again': the weapons too, into the main row")
+ex('NS.db.rebuffSpots.ROGUE = {}; NS.RefreshRebuff()')
 # right-click: every poison in your bags (all ranks, not the cloth), with how many; pick one
 ex('B1 = WatchXRebuff.icons[1]; B1:GetScript("PostClick")(B1, "RightButton")')
 menu = ev('(function() local t = {} for _, b in ipairs(WatchXMenu.buttons) do if b:IsShown() then t[#t + 1] = tostring(b:GetText()) end end return table.concat(t, " | ") end)()')

@@ -2658,7 +2658,7 @@ function ns.BuildNearbySettings()
             db().platePotionMax = math.max(1, math.min(6, ns.PlatePotionMax() + d)); ns.UpdatePlates()
         end)
     end
-    note("|cffffd100/wx plates test|r – test potions and a stance on your target's nameplate (a mob or a friend works).")
+    note("|cffffd100/wx plates test|r – test potions, a stance and combo points on your target's nameplate (any target).")
     y = y - 20
     potionList = note("")
     potionList:SetText("|cffaaaaaaWatched:|r " .. ns.PotionListText())
@@ -7863,10 +7863,16 @@ do (function()
         if type(d.rebuffGroupPts[k]) ~= "table" then d.rebuffGroupPts[k] = {} end
         return d.rebuffSpots[k], d.rebuffGroupPts[k]
     end
+    -- the weapons (a rogue's MH / OH, a shaman's weapon imbues) have a group of their own from the start: they're
+    -- seldom where your buffs are. Drop one into the main row and it stays there (spots = 1).
+    local WEAPONS = 100
     local function GroupOf(line)
         local spots, pts = Spots()
         local g = spots[tostring(line):lower()]
-        if g and g ~= 1 and pts[g] then return g end
+        if g == 1 then return 1 end
+        if g == WEAPONS then return WEAPONS end
+        if g and pts[g] then return g end
+        if WeaponLine(line) then return WEAPONS end
         return 1
     end
     local function Gap() return math.max(0, math.min(30, tonumber(db().rebuffGap) or GAP)) end
@@ -7924,7 +7930,10 @@ do (function()
         local _, pts = Spots()
         local pt = pts[gid]
         g:ClearAllPoints()
-        if pt then g:SetPoint(pt[1], UIParent, pt[2], pt[3], pt[4]) else g:SetPoint("CENTER", UIParent, "CENTER", 0, -120) end
+        if pt then g:SetPoint(pt[1], UIParent, pt[2], pt[3], pt[4])
+        elseif gid == WEAPONS and f and f:GetLeft() and f:GetBottom() then   -- the weapons: under your buffs, to start with
+            g:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", f:GetLeft(), f:GetBottom() - 8)
+        else g:SetPoint("CENTER", UIParent, "CENTER", 0, -120) end
         return g
     end
     -- another layout put in place (a character's own, an import): the frames to their spots now
@@ -7935,7 +7944,10 @@ do (function()
             if gid ~= 1 then
                 local pt = pts[gid]
                 g:ClearAllPoints()
-                if pt then g:SetPoint(pt[1], UIParent, pt[2], pt[3], pt[4]) else g:SetPoint("CENTER", UIParent, "CENTER", 0, -120) end
+                if pt then g:SetPoint(pt[1], UIParent, pt[2], pt[3], pt[4])
+                elseif gid == WEAPONS and f and f:GetLeft() and f:GetBottom() then
+                    g:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", f:GetLeft(), f:GetBottom() - 8)
+                else g:SetPoint("CENTER", UIParent, "CENTER", 0, -120) end
             end
         end
         if ns.RefreshRebuff then ns.RefreshRebuff() end
@@ -7971,7 +7983,9 @@ do (function()
             for i, l in ipairs(list) do if l == best.line then t = i end end
             table.insert(list, t and (after and t + 1 or t) or (#list + 1), b.line)
             local g = GroupOf(best.line)
-            spots[key] = g ~= 1 and g or nil
+            if g == 1 then spots[key] = WeaponLine(b.line) and 1 or nil   -- (a weapon in the main row: kept there)
+            elseif g == WEAPONS then spots[key] = (not WeaponLine(b.line)) and WEAPONS or nil
+            else spots[key] = g end
         else
             local l, t = b:GetLeft(), b:GetTop()
             if l and t then
@@ -7985,15 +7999,16 @@ do (function()
                 end
             end
         end
-        local used = {}
+        local used = { [WEAPONS] = true }   -- (the weapons' spot is kept: they come back to it)
         for _, g in pairs(spots) do used[g] = true end
         for gid in pairs(pts) do if not used[gid] then pts[gid] = nil end end
         ns.RefreshRebuff()
     end
-    -- all of them back in the main row
+    -- all of them back in the main row (the weapons too)
     function ns.RebuffJoin()
         local spots, pts = Spots()
         wipe(spots); wipe(pts)
+        for _, l in ipairs(ns.RebuffList()) do if WeaponLine(l) then spots[l:lower()] = 1 end end
         ns.Safe("rebuff icons", ns.RefreshRebuff)
     end
     local function Icon(i)
@@ -9481,12 +9496,17 @@ function ns.PlateDemo()
     ns.plateDemo.potions = { [6615] = ns.plateDemo.potion,
         [2379] = { label = "Swiftness", spell = 2379, untilT = now + 12, dur = 12 } }
     ns.UpdatePlates()
+    if ns.UpdateCombo then ns.Safe("combo points", ns.UpdateCombo) end
     if C_Timer then
         C_Timer.After(12.2, function() ns.Safe("nameplate icons", ns.UpdatePlates) end)   -- (Swiftness over)
-        C_Timer.After(dur + 0.2, function() ns.plateDemo = nil; ns.Safe("nameplate icons", ns.UpdatePlates) end)
+        C_Timer.After(dur + 0.2, function()
+            ns.plateDemo = nil
+            ns.Safe("nameplate icons", ns.UpdatePlates)
+            if ns.UpdateCombo then ns.Safe("combo points", ns.UpdateCombo) end
+        end)
     end
     local d = db()
-    P(("A test on %s's nameplate for %d s: potions (Swiftness 12 s, Free Action) right of the class icon, the stance (Defensive) left of it.")
+    P(("A test on %s's nameplate for %d s: potions (Swiftness 12 s, Free Action – it glows) right of the class icon, the stance (Defensive) left of it, 3 combo points under it.")
         :format(ns.plateDemo.name, dur))
     if d.platePotions == false or d.plateStance == false then
         P("|cffff8040Potions or stances are switched off|r (Settings > Nameplates) – those aren't shown.")
@@ -9745,15 +9765,16 @@ do
         local d = db()
         if not d then return end
         local plate
-        if d.plateCombo ~= false and Uses() and Readable(UnitExists("target")) == true
-                and Readable(UnitCanAttack("player", "target")) == true and C_NamePlate and C_NamePlate.GetNamePlateForUnit then
+        local demo = d.plateCombo ~= false and ns.PlateDemoFor and ns.PlateDemoFor("target")   -- (/wx plates test: 3 of 5)
+        if d.plateCombo ~= false and (demo or (Uses() and Readable(UnitExists("target")) == true
+                and Readable(UnitCanAttack("player", "target")) == true)) and C_NamePlate and C_NamePlate.GetNamePlateForUnit then
             local ok, p = pcall(C_NamePlate.GetNamePlateForUnit, "target")
             plate = ok and p or nil
         end
-        local cp = plate and UnitPower("player", CP)
+        local cp = plate and (demo and 3 or UnitPower("player", CP))
         local hidden = cp ~= nil and issecretvalue and issecretvalue(cp)
         local n = not hidden and tonumber(cp) or nil
-        local max = math.min(MAXPIPS, tonumber(Readable(UnitPowerMax("player", CP))) or 5)
+        local max = demo and 5 or math.min(MAXPIPS, tonumber(Readable(UnitPowerMax("player", CP))) or 5)
         if not plate or max <= 0 or (not hidden and (n or 0) <= 0) then
             if holder then holder:Hide() end
             return
