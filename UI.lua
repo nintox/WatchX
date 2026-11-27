@@ -9727,33 +9727,39 @@ local function OnPlateEvent(_, event, unit)
     end
 end
 
--- Combo points (rogues, druids in cat form): a row of pips under your target's nameplate – an enemy player or a mob.
--- Each pip is a tiny bar from n-1 to n given your combo points: it fills at n. (That works even if the game hides the
+-- Combo points (rogues, druids in cat form): a strip under your target's health bar, as wide as it and in the
+-- nameplate's own look (a gold edge, a dark inside), split in one part per combo point – an enemy player or a mob.
+-- Each part is a tiny bar from n-1 to n given your combo points: it fills at n. (That works even if the game hides the
 -- number from addons in a fight: a bar may be given a hidden number, it just can't be read.) Gone at 0.
 do
     local CP = (Enum and Enum.PowerType and Enum.PowerType.ComboPoints) or 4
-    local PIP, GAP, MAXPIPS = 9, 3, 7
+    local STRIP_H, INSET, SEP, MAXPIPS = 11, 3, 2, 7
     local holder
     local function Build()
         holder = CreateFrame("Frame", "WatchXComboPoints", UIParent)
-        holder:SetSize(PIP, PIP)
+        holder:SetSize(100, STRIP_H)
+        local bg = holder:CreateTexture(nil, "BACKGROUND")
+        bg:SetPoint("TOPLEFT", holder, "TOPLEFT", 2, -2)
+        bg:SetPoint("BOTTOMRIGHT", holder, "BOTTOMRIGHT", -2, 2)
+        bg:SetColorTexture(0.05, 0.04, 0.03, 0.9)
+        holder.edge = CreateFrame("Frame", nil, holder)
+        holder.edge:SetAllPoints()
+        if Backdrop(holder.edge, { edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", edgeSize = 8 }) then
+            holder.edge:SetBackdropBorderColor(EDGE[1], EDGE[2], EDGE[3], 1)
+        end
         holder.pips = {}
         for i = 1, MAXPIPS do
             local b = CreateFrame("StatusBar", nil, holder)
-            b:SetSize(PIP, PIP)
-            b:SetStatusBarTexture("Interface\\Buttons\\WHITE8X8")
-            b:SetStatusBarColor(1, 0.82, 0.15)
+            b:SetStatusBarTexture("Interface\\TargetingFrame\\UI-StatusBar")   -- (the nameplate bar's own sheen)
+            b:SetStatusBarColor(1, 0.78, 0.12)
             b:SetMinMaxValues(i - 1, i)
-            local bg = b:CreateTexture(nil, "BACKGROUND")
-            bg:SetPoint("TOPLEFT", b, "TOPLEFT", -1, 1)
-            bg:SetPoint("BOTTOMRIGHT", b, "BOTTOMRIGHT", 1, -1)
-            bg:SetColorTexture(0, 0, 0, 0.85)
-            local empty = b:CreateTexture(nil, "BORDER")
+            local empty = b:CreateTexture(nil, "BACKGROUND")
             empty:SetAllPoints()
-            empty:SetColorTexture(0.25, 0.2, 0.1, 0.9)
+            empty:SetColorTexture(0.22, 0.17, 0.08, 0.9)
             b:Hide()
             holder.pips[i] = b
         end
+        holder.edge:SetFrameLevel(holder:GetFrameLevel() + 2)   -- (the edge over the parts)
         holder:Hide()
     end
     local function Uses()
@@ -9786,18 +9792,23 @@ do
             holder.under = under
             holder:SetParent(plate)
             holder:SetFrameLevel((plate:GetFrameLevel() or 0) + 25)
-            holder:ClearAllPoints()
-            holder:SetPoint("TOP", under, "BOTTOM", 0, -3)
+            holder.edge:SetFrameLevel(holder:GetFrameLevel() + 2)
+            holder:ClearAllPoints()   -- as wide as the health bar with its edge, just under it
+            holder:SetPoint("TOPLEFT", under, "BOTTOMLEFT", -3, -4)
+            holder:SetPoint("TOPRIGHT", under, "BOTTOMRIGHT", 3, -4)
+            holder:SetHeight(STRIP_H)
         end
-        holder:SetSize(max * PIP + (max - 1) * GAP, PIP)
+        local w = (holder:GetWidth() or 0) > 0 and holder:GetWidth() or ((under:GetWidth() or 100) + 6)
+        local part = (w - INSET * 2 - (max - 1) * SEP) / max
         local full = n and n >= max
         for i = 1, MAXPIPS do
             local b = holder.pips[i]
             if i <= max then
                 b:ClearAllPoints()
-                b:SetPoint("LEFT", holder, "LEFT", (i - 1) * (PIP + GAP), 0)
+                b:SetPoint("TOPLEFT", holder, "TOPLEFT", INSET + (i - 1) * (part + SEP), -INSET)
+                b:SetSize(math.max(1, part), STRIP_H - INSET * 2)
                 b:SetValue(cp)
-                if full then b:SetStatusBarColor(1, 0.35, 0.1) else b:SetStatusBarColor(1, 0.82, 0.15) end   -- all 5: finish
+                if full then b:SetStatusBarColor(1, 0.4, 0.1) else b:SetStatusBarColor(1, 0.78, 0.12) end   -- all of them: finish
                 b:Show()
             else
                 b:Hide()

@@ -28,6 +28,8 @@ ex('CPN = 3; fire("UNIT_POWER_UPDATE", "player", "COMBO_POINTS")')
 check(ev('WatchXComboPoints and WatchXComboPoints:IsShown()'), "3 combo points: the pips show")
 check(ev('WatchXComboPoints:GetParent() == PLATE'), "on the target's nameplate")
 check(ev('select(2, WatchXComboPoints:GetPoint(1)) == PLATE.UnitFrame.healthBar'), "under its health bar")
+check(ev('select(1, WatchXComboPoints:GetPoint(1)) == "TOPLEFT" and select(1, WatchXComboPoints:GetPoint(2)) == "TOPRIGHT" and select(2, WatchXComboPoints:GetPoint(2)) == PLATE.UnitFrame.healthBar'),
+      "as wide as the health bar (both its ends)")
 ex('VALS = {} for i, b in ipairs(WatchXComboPoints.pips) do VALS[i] = b:IsShown() end')
 check(ev('VALS[5] == true and VALS[6] == false'), "five pips (your max)")
 ex('CPN = 5; fire("UNIT_POWER_UPDATE", "player", "COMBO_POINTS")')
