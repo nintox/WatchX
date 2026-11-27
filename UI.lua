@@ -2560,12 +2560,20 @@ function ns.BuildNearbySettings()
         function() return db().plateHealer ~= false end, function(v) db().plateHealer = v; ns.UpdatePlates() end)
     check("KOS mark", "a red ring and a skull on KOS players and guilds",
         function() return db().plateKOS ~= false end, function(v) db().plateKOS = v; ns.UpdatePlates() end)
+    check("Potions they drink", "Free Action, Invulnerability, Swiftness … right of the icon, while it lasts",
+        function() return db().platePotions ~= false end, function(v) db().platePotions = v; ns.UpdatePlates() end)
+    check("Warriors' stance", "Battle, Defensive or Berserker – left of the icon, and in the list",
+        function() return db().plateStance ~= false end, function(v) db().plateStance = v; ns.UpdatePlates() end)
     P.size = stepper("Icon size", "12 – 40 · normal 22", function() return ns.PlateSize() end, function(d)
         db().plateSize = math.max(12, math.min(40, ns.PlateSize() + d * 2)); ns.UpdatePlates()
     end)
     heading("HEALERS")
     note("Friendly players: their talents (inspected). Enemies: a healing-talent spell like Riptide or Wild Growth.")
     y = y - 22
+    heading("POTIONS & STANCES")
+    note("Seen when they drink or switch: the potion is a spell they cast. A stance also shows from an ability only it "
+        .. "allows (Overpower, Shield Wall, Whirlwind …), and out of combat from the warrior's stance buff.")
+    y = y - 34
 
     -- ===== KOS & bounties
     local kosPage = NewSub("kos", "WatchXKOSOptions", "KOS & bounties", "kill on sight, and WANTED – shared with your guild and friends")
@@ -3642,6 +3650,14 @@ local function PaintNearbyRow(r, e, now)
     local tags = ""
     if e.stealth and now - e.stealth < 60 then tags = tags .. "|cffd8a0ffSTEALTH|r  " end
     if e.targetingMe and now - e.targetingMe < 10 then tags = tags .. "|cffff5050> you|r  " end
+    local pot = e.potion
+    if pot and ns.db.platePotions ~= false then
+        local left = pot.untilT - GetTime()
+        if left > 0 then tags = tags .. "|cff40d8ff" .. pot.label:upper() .. " " .. math.ceil(left) .. "s|r  " end
+    end
+    if e.stance and ns.db.plateStance ~= false then
+        tags = tags .. "|cffc8a878" .. (e.stance == "Defensive" and "DEF" or e.stance == "Berserker" and "BERS" or "BATTLE") .. "|r  "
+    end
     local lvl = (e.level and e.level > 0) and tostring(e.level) or "??"
     local info = tags .. lvl .. " " .. ClassName(e.class) .. (near and "" or ("  |cffaaaaaa" .. Ago(now - e.last) .. "|r"))
     local look = (e.class or "") .. (near and "1" or "0")
@@ -8992,7 +9008,68 @@ local function UpdatePlate(unit, fresh)
     f.skull:SetShown(kos)
     f.class:SetTexCoord(coords[1], coords[2], coords[3], coords[4])
     f.heal:SetShown(d.plateHealer ~= false and ns.IsHealer(ns.PlayerKey(unit), unit) == true)
+    if hostile and fresh and d.plateStance ~= false then ns.Safe("stance", ns.ScanStance, unit) end
+    ns.PaintPlateExtras(f, unit, hostile)
     f:Show()
+end
+ns.UpdatePlateUnit = UpdatePlate
+
+-- A potion they drank (its icon right of the class icon, the game's cooldown shade for the time it lasts) and a
+-- warrior's stance (its icon on the left). Their own frames, made the first time they're needed.
+function ns.PaintPlateExtras(f, unit, hostile)
+    local d = db()
+    local key = hostile and ns.PlayerKey(unit)
+    local e = key and ns.nearby and ns.nearby[key]
+    local size = f.size or PLATE_ICON
+    local p = e and e.potion
+    if d.platePotions ~= false and p and p.untilT > GetTime() then
+        if not f.pot then
+            f.pot = CreateFrame("Frame", nil, f)
+            f.pot.icon = f.pot:CreateTexture(nil, "ARTWORK")
+            f.pot.icon:SetAllPoints()
+            f.pot.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+            local edge = f.pot:CreateTexture(nil, "BACKGROUND")
+            edge:SetPoint("TOPLEFT", -1, 1); edge:SetPoint("BOTTOMRIGHT", 1, -1)
+            edge:SetColorTexture(0.25, 0.85, 1, 1)
+            local ok, cd = pcall(CreateFrame, "Cooldown", nil, f.pot, "CooldownFrameTemplate")
+            if ok and cd then
+                cd:SetAllPoints()
+                if cd.SetDrawEdge then cd:SetDrawEdge(false) end
+                f.pot.cd = cd
+            end
+            f.pot:SetPoint("LEFT", f, "RIGHT", 4, 0)
+        end
+        local ps = math.floor(size * 0.85 + 0.5)
+        f.pot:SetSize(ps, ps)
+        local tex = C_Spell and C_Spell.GetSpellTexture and Readable(C_Spell.GetSpellTexture(p.spell))
+        f.pot.icon:SetTexture(tex or "Interface\\Icons\\INV_Potion_51")
+        if f.pot.cd and f.pot.key ~= p.untilT then f.pot.key = p.untilT; f.pot.cd:SetCooldown(p.untilT - p.dur, p.dur) end
+        f.pot:Show()
+    elseif f.pot then
+        f.pot:Hide()
+    end
+    local st = e and e.stance
+    if d.plateStance ~= false and st then
+        if not f.stance then
+            f.stance = f:CreateTexture(nil, "ARTWORK")
+            f.stance:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+            f.stance:SetPoint("RIGHT", f, "LEFT", -4, 0)
+        end
+        local ss = math.floor(size * 0.7 + 0.5)
+        f.stance:SetSize(ss, ss)
+        f.stance:SetTexture(ns.STANCE_ICONS and ns.STANCE_ICONS[st] or "Interface\\Icons\\INV_Sword_04")
+        f.stance:Show()
+    elseif f.stance then
+        f.stance:Hide()
+    end
+end
+-- a potion or a stance just seen: that plate now, the potion's icon away when it's over, the list's row too
+function ns.OnEnemyTrickSeen(unit, e)
+    if ns.UpdatePlateUnit then ns.Safe("nameplate icons", ns.UpdatePlateUnit, unit) end
+    if e and e.potion and C_Timer then
+        C_Timer.After(e.potion.dur + 0.2, function() ns.Safe("nameplate icons", ns.UpdatePlates) end)
+    end
+    if ns.RefreshUI then ns.RefreshUI() end
 end
 
 function ns.UpdatePlates()

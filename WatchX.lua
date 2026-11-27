@@ -1306,6 +1306,88 @@ local function OnRoleCast(unit, spellID)
     if role then SetRole((PlayerKey(unit)), unit, role, name) end
 end
 
+-- Potions and warrior stances on enemy players: seen from their casts (a potion is a spell when it's drunk, so is a
+-- stance change), and out of combat from a warrior's stance buff. Kept on the player's Nearby entry: e.potion =
+-- { label, spell, untilT, dur } while it lasts, e.stance = "Battle" / "Defensive" / "Berserker".
+do   -- (its own block: the main chunk is at Lua's 200-locals limit)
+    -- spell name -> what to call it, how long it lasts (s)
+    local POTIONS = {
+        ["Free Action"] = { "Free Action", 30 }, ["Living Free Action"] = { "Living Action", 5 },
+        ["Invulnerability"] = { "Invulnerability", 6 }, ["Restoration"] = { "Restorative", 10 },
+        ["Speed"] = { "Swiftness", 15 }, ["Mighty Rage"] = { "Mighty Rage", 20 }, ["Great Rage"] = { "Great Rage", 20 },
+        ["Rage"] = { "Rage", 20 }, ["Healing Potion"] = { "Healing Potion", 5 }, ["Restore Mana"] = { "Mana Potion", 5 },
+        ["Purification"] = { "Purification", 5 }, ["Magic Resistance"] = { "Magic Resistance", 180 },
+        ["Lesser Invisibility"] = { "Lesser Invisibility", 15 }, ["Invisibility"] = { "Invisibility", 18 },
+        ["Fire Protection"] = { "Fire Protection", 60 }, ["Frost Protection"] = { "Frost Protection", 60 },
+        ["Nature Protection"] = { "Nature Protection", 60 }, ["Shadow Protection"] = { "Shadow Protection", 60 },
+        ["Arcane Protection"] = { "Arcane Protection", 60 },
+    }
+    local POTION_IDS = { [6615] = "Free Action", [24364] = "Living Free Action", [3169] = "Invulnerability",
+        [11359] = "Restoration", [2379] = "Speed", [17528] = "Mighty Rage" }
+    local STANCES = { ["Battle Stance"] = "Battle", ["Defensive Stance"] = "Defensive", ["Berserker Stance"] = "Berserker" }
+    -- abilities only one stance allows: using one says which stance they're in
+    local STANCE_OF = { Overpower = "Battle", Charge = "Battle", ["Mocking Blow"] = "Battle", Retaliation = "Battle",
+        ["Thunder Clap"] = "Battle", ["Sweeping Strikes"] = "Battle",
+        ["Shield Wall"] = "Defensive", ["Shield Block"] = "Defensive", Disarm = "Defensive", Revenge = "Defensive",
+        Taunt = "Defensive",
+        Intercept = "Berserker", Whirlwind = "Berserker", ["Berserker Rage"] = "Berserker", Pummel = "Berserker",
+        Recklessness = "Berserker" }
+    ns.STANCE_SPELLS = { Battle = 2457, Defensive = 71, Berserker = 2458 }
+    ns.STANCE_ICONS = { Battle = "Interface\\Icons\\Ability_Warrior_OffensiveStance",
+        Defensive = "Interface\\Icons\\Ability_Warrior_DefensiveStance", Berserker = "Interface\\Icons\\Ability_Racial_Avatar" }
+    local function IsWarrior(unit)
+        local _, c = UnitClass(unit)
+        return Plain(c) == "WARRIOR"
+    end
+    function ns.OnEnemyTrick(unit, spellID)
+        if not (db.nearby and type(unit) == "string") or not ns.NearbyHere() then return end
+        if not (unit == "target" or unit == "focus" or unit == "mouseover" or unit:find("^nameplate%d+$")) then return end
+        spellID = Plain(spellID)
+        if type(spellID) ~= "number" then return end
+        local name = POTION_IDS[spellID] or SpellName(spellID)
+        if type(name) ~= "string" then return end
+        local pot, st = POTIONS[name], STANCES[name] or STANCE_OF[name]
+        if not (pot or st) then return end
+        if Plain(UnitIsPlayer(unit)) ~= true or not ns.IsHostilePlayer(unit) then return end
+        if st and not IsWarrior(unit) then st = nil end   -- (Charge, Taunt … of a druid's: no stance)
+        if not (pot or st) then return end
+        local key = NoteNearby(unit)
+        local e = key and ns.nearby[key]
+        if not e then return end
+        if pot then
+            local now = GetTime()
+            local old = e.potion
+            if not (old and old.spell == spellID and now - (old.untilT - old.dur) < 2) then   -- (one cast, every token)
+                e.potion = { label = pot[1], spell = spellID, untilT = now + pot[2], dur = pot[2] }
+                Log("potion", e.name, pot[1])
+            end
+        end
+        if st then e.stance, e.stanceAt = st, time() end
+        if ns.OnEnemyTrickSeen then ns.OnEnemyTrickSeen(unit, e) end
+    end
+    -- out of combat: a warrior's stance is a buff on him (Forever hides auras in a fight)
+    function ns.ScanStance(unit)
+        if Plain(UnitIsPlayer(unit)) ~= true or not IsWarrior(unit) or not ns.IsHostilePlayer(unit) then return end
+        local get = C_UnitAuras and C_UnitAuras.GetBuffDataByIndex
+        if not get then return end
+        for i = 1, 40 do
+            local ok, a = pcall(get, unit, i)
+            if not ok or type(a) ~= "table" then return end
+            local st = STANCES[Plain(a.name) or ""]
+            if not st then
+                local sid = Plain(a.spellId)
+                for k, id in pairs(ns.STANCE_SPELLS) do if id == sid then st = k end end
+            end
+            if st then
+                local key = PlayerKey(unit)
+                local e = key and ns.nearby[key]
+                if e then e.stance, e.stanceAt = st, time() end
+                return st
+            end
+        end
+    end
+end
+
 -- A healer's or damage dealer's form on the player (Tree of Life, Shadowform, Moonkin Form). Out of combat;
 -- Forever hides auras in combat, and then this finds nothing.
 function ns.ScanRoleAuras(unit)
@@ -4271,6 +4353,7 @@ local function OnEvent(_, event, arg1, arg2, ...)
             local spellID = (...)
             OnStealthCast(arg1, spellID)
             OnRoleCast(arg1, spellID)
+            if ns.OnEnemyTrick then ns.Safe("potions & stances", ns.OnEnemyTrick, arg1, spellID) end
         end
         return
     elseif event == "NAME_PLATE_UNIT_REMOVED" then
