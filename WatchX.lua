@@ -1307,8 +1307,8 @@ local function OnRoleCast(unit, spellID)
 end
 
 -- Potions and warrior stances on enemy players: seen from their casts (a potion is a spell when it's drunk, so is a
--- stance change), and out of combat from a warrior's stance buff. Kept on the player's Nearby entry: e.potion =
--- { label, spell, untilT, dur } while it lasts, e.stance = "Battle" / "Defensive" / "Berserker".
+-- stance change), and out of combat from a warrior's stance buff. Kept on the player's Nearby entry: e.potions =
+-- { [spell] = { label, spell, untilT, dur } } while they last, e.stance = "Battle" / "Defensive" / "Berserker".
 do   -- (its own block: the main chunk is at Lua's 200-locals limit)
     -- spell name -> what to call it, how long it lasts (s)
     local POTIONS = {
@@ -1356,9 +1356,12 @@ do   -- (its own block: the main chunk is at Lua's 200-locals limit)
         if not e then return end
         if pot then
             local now = GetTime()
-            local old = e.potion
-            if not (old and old.spell == spellID and now - (old.untilT - old.dur) < 2) then   -- (one cast, every token)
-                e.potion = { label = pot[1], spell = spellID, untilT = now + pot[2], dur = pot[2] }
+            e.potions = e.potions or {}   -- (several at once: Free Action and Swiftness …, one each)
+            for id, q in pairs(e.potions) do if q.untilT <= now then e.potions[id] = nil end end
+            local old = e.potions[spellID]
+            if not (old and now - (old.untilT - old.dur) < 2) then   -- (one cast, every token)
+                local p = { label = pot[1], spell = spellID, untilT = now + pot[2], dur = pot[2] }
+                e.potions[spellID], e.potion = p, p   -- (e.potion: the latest)
                 Log("potion", e.name, pot[1])
             end
         end

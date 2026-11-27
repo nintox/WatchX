@@ -20,7 +20,7 @@ UnitIsPlayer = function(u) return ENEMY[u] ~= nil or oP(u) end
 UnitCanAttack = function(a, u) return ENEMY[u] ~= nil end
 UnitGUID = function(u) if ENEMY[u] then return "Player-1-" .. ENEMY[u][1] end return oG(u) end
 UnitLevel = function() return 40 end
-SPELLS = { [6615] = "Free Action", [3169] = "Invulnerability", [71] = "Defensive Stance", [1680] = "Whirlwind", [100] = "Charge", [2457] = "Battle Stance" }
+SPELLS = { [6615] = "Free Action", [3169] = "Invulnerability", [71] = "Defensive Stance", [1680] = "Whirlwind", [100] = "Charge", [2457] = "Battle Stance", [2379] = "Speed" }
 C_Spell.GetSpellName = function(id) return SPELLS[id] or ("Spell" .. id) end
 C_Spell.GetSpellTexture = function(id) return 5000 + id end
 PLATES = {}
@@ -56,6 +56,15 @@ ex('cast("nameplate2", 100); tick(0.3)')
 check(not ev('NS.nearby[key("nameplate2")] and NS.nearby[key("nameplate2")].stance'), "a druid's Charge: no stance")
 ex('NS.db.plateStance = false; NS.RefreshUI(); tick(1.2)')
 check("BERS" not in str(ev('rowText()')), "switched off: not shown")
+# several potions at once: each its own icon, the list shows both
+ex('NS.db.plateStance = true; cast("nameplate1", 6615); tick(0.2); cast("nameplate1", 2379); tick(0.3)')
+check(ev('PF.nameplate1.pots[1] and PF.nameplate1.pots[1]:IsShown() and PF.nameplate1.pots[2] and PF.nameplate1.pots[2]:IsShown()'), "Free Action and Swiftness: two icons on the plate")
+ex('NS.RefreshUI(); tick(1.2)')
+check("FREE ACTION" in str(ev('rowText()')) and "SWIFTNESS" in str(ev('rowText()')), "both in the list")
+ex('tick(15, 1); NS.RefreshUI(); tick(1)')
+check("SWIFTNESS" not in str(ev('rowText()')) and "FREE ACTION" in str(ev('rowText()')), "Swiftness over (15 s), Free Action still on")
+check(ev('PF.nameplate1.pots[1]:IsShown()') and not ev('PF.nameplate1.pots[2]:IsShown()'), "the plate: one icon left")
+ex('tick(16, 1)')
 # /wx plates test: a made-up potion and stance on your target's plate, a friend's too (friendly icons off)
 ex('''
 NS.db.plateStance = true; NS.db.plateFriendly = false
@@ -75,6 +84,7 @@ check(not ev('PF.nameplate3 and PF.nameplate3:IsShown()'), "a friend's plate: no
 ex('SlashCmdList.WATCHX("plates test"); tick(0.3)')
 check(ev('PF.nameplate3 and PF.nameplate3:IsShown() and PF.nameplate3.pot and PF.nameplate3.pot:IsShown()'), "/wx plates test: the potion on the friend's plate")
 check(ev('PF.nameplate3.stance and PF.nameplate3.stance:IsShown()'), "and the stance")
+check(ev('PF.nameplate3.pots[2] and PF.nameplate3.pots[2]:IsShown()'), "two test potions")
 check(not ev('PF.nameplate1.pot:IsShown()'), "not on another player's plate")
 ex('tick(21, 1)')
 check(not ev('PF.nameplate3:IsShown()'), "after 20 s: gone again")

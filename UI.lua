@@ -3652,10 +3652,11 @@ local function PaintNearbyRow(r, e, now)
     local tags = ""
     if e.stealth and now - e.stealth < 60 then tags = tags .. "|cffd8a0ffSTEALTH|r  " end
     if e.targetingMe and now - e.targetingMe < 10 then tags = tags .. "|cffff5050> you|r  " end
-    local pot = e.potion
-    if pot and ns.db.platePotions ~= false then
-        local left = pot.untilT - GetTime()
-        if left > 0 then tags = tags .. "|cff40d8ff" .. pot.label:upper() .. " " .. math.ceil(left) .. "s|r  " end
+    if ns.db.platePotions ~= false then
+        local gt = GetTime()
+        for _, pot in ipairs(ns.ActivePotions(e)) do
+            tags = tags .. "|cff40d8ff" .. pot.label:upper() .. " " .. math.ceil(pot.untilT - gt) .. "s|r  "
+        end
     end
     if e.stance and ns.db.plateStance ~= false then
         tags = tags .. "|cffc8a878" .. (e.stance == "Defensive" and "DEF" or e.stance == "Berserker" and "BERS" or "BATTLE") .. "|r  "
@@ -9027,35 +9028,23 @@ function ns.PaintPlateExtras(f, unit, hostile)
     local key = hostile and ns.PlayerKey(unit)
     local e = ns.PlateDemoFor(unit) or (key and ns.nearby and ns.nearby[key])
     local size = f.size or PLATE_ICON
-    local p = e and e.potion
-    if d.platePotions ~= false and p and p.untilT > GetTime() then
-        if not f.pot then
-            f.pot = CreateFrame("Frame", nil, f)
-            f.pot.icon = f.pot:CreateTexture(nil, "ARTWORK")
-            f.pot.icon:SetAllPoints()
-            f.pot.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-            local edge = f.pot:CreateTexture(nil, "BACKGROUND")
-            edge:SetPoint("TOPLEFT", -1, 1); edge:SetPoint("BOTTOMRIGHT", 1, -1)
-            edge:SetColorTexture(0.25, 0.85, 1, 1)
-            local ok, cd = pcall(CreateFrame, "Cooldown", nil, f.pot, "CooldownFrameTemplate")
-            if ok and cd then
-                cd:SetAllPoints()
-                if cd.SetDrawEdge then cd:SetDrawEdge(false) end
-                -- the seconds: small, like the game's own debuffs on the plate (not a big number over the icon)
-                if cd.SetCountdownFont then pcall(cd.SetCountdownFont, cd, "NumberFontNormalSmall") end
-                f.pot.cd = cd
-            end
-            f.pot:SetPoint("LEFT", f, "RIGHT", 4, 0)
+    local pots = d.platePotions ~= false and ns.ActivePotions(e) or {}
+    f.pots = f.pots or {}
+    for i = 1, math.max(#pots, #f.pots) do
+        local p, b = pots[i], f.pots[i]
+        if p and i <= 4 then
+            if not b then b = ns.PlatePotIcon(f, i); f.pots[i] = b end
+            local ps = math.floor(size * 0.72 + 0.5)
+            b:SetSize(ps, ps)
+            local tex = C_Spell and C_Spell.GetSpellTexture and Readable(C_Spell.GetSpellTexture(p.spell))
+            b.icon:SetTexture(tex or "Interface\\Icons\\INV_Potion_51")
+            if b.cd and b.key ~= p.untilT then b.key = p.untilT; b.cd:SetCooldown(p.untilT - p.dur, p.dur) end
+            b:Show()
+        elseif b then
+            b:Hide()
         end
-        local ps = math.floor(size * 0.72 + 0.5)
-        f.pot:SetSize(ps, ps)
-        local tex = C_Spell and C_Spell.GetSpellTexture and Readable(C_Spell.GetSpellTexture(p.spell))
-        f.pot.icon:SetTexture(tex or "Interface\\Icons\\INV_Potion_51")
-        if f.pot.cd and f.pot.key ~= p.untilT then f.pot.key = p.untilT; f.pot.cd:SetCooldown(p.untilT - p.dur, p.dur) end
-        f.pot:Show()
-    elseif f.pot then
-        f.pot:Hide()
     end
+    f.pot = f.pots[1]
     local st = e and e.stance
     if d.plateStance ~= false and st then
         if not f.stance then   -- the same look as the potion's, with a warrior-brown edge (the list's stance colour)
@@ -9076,7 +9065,7 @@ function ns.PaintPlateExtras(f, unit, hostile)
         f.stance:Hide()
     end
 end
--- /wx plates test: a made-up potion (Free Action, 20 s) and stance (Defensive) on your target's nameplate – to see
+-- /wx plates test: made-up potions (Free Action 20 s, Swiftness 12 s) and a stance (Defensive) on your target's nameplate – to see
 -- where they go. Anyone with a nameplate works: a mob (a stand-in class icon), a friend (shown even if friendly icons
 -- are off).
 function ns.PlateDemoFor(unit)
@@ -9095,10 +9084,12 @@ function ns.PlateDemo()
     local now, dur = GetTime(), 20
     ns.plateDemo = { name = Readable((UnitName("target"))) or "your target", guid = Readable(UnitGUID("target")),
         potion = { label = "Free Action", spell = 6615, untilT = now + dur, dur = dur }, stance = "Defensive" }
+    ns.plateDemo.potions = { [6615] = ns.plateDemo.potion,
+        [2379] = { label = "Swiftness", spell = 2379, untilT = now + 12, dur = 12 } }
     ns.UpdatePlates()
     if C_Timer then C_Timer.After(dur + 0.2, function() ns.plateDemo = nil; ns.Safe("nameplate icons", ns.UpdatePlates) end) end
     local d = db()
-    P(("A test on %s's nameplate for %d s: the potion (Free Action) right of the class icon, the stance (Defensive) left of it.")
+    P(("A test on %s's nameplate for %d s: potions (Swiftness 12 s, Free Action) right of the class icon, the stance (Defensive) left of it.")
         :format(ns.plateDemo.name, dur))
     if d.platePotions == false or d.plateStance == false then
         P("|cffff8040Potions or stances are switched off|r (Settings > Nameplates) – those aren't shown.")
@@ -9106,6 +9097,36 @@ function ns.PlateDemo()
     if C_NamePlate and C_NamePlate.GetNamePlateForUnit and not C_NamePlate.GetNamePlateForUnit("target") then
         P("|cffff8040No nameplate on your target|r – switch nameplates on (V for enemies, Shift+V for friends).")
     end
+end
+
+-- A player's potions still on, the one over soonest first (it sits nearest the class icon).
+function ns.ActivePotions(e)
+    local out, now = {}, GetTime()
+    if not e then return out end
+    local src = e.potions or (e.potion and { [e.potion.spell] = e.potion }) or {}
+    for _, p in pairs(src) do if p.untilT > now then out[#out + 1] = p end end
+    table.sort(out, function(a, b) return a.untilT < b.untilT end)
+    return out
+end
+-- One potion's icon on a plate: the i-th right of the class icon, a blue edge, the game's cooldown shade.
+function ns.PlatePotIcon(f, i)
+    local b = CreateFrame("Frame", nil, f)
+    b.icon = b:CreateTexture(nil, "ARTWORK")
+    b.icon:SetAllPoints()
+    b.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+    local edge = b:CreateTexture(nil, "BACKGROUND")
+    edge:SetPoint("TOPLEFT", -1, 1); edge:SetPoint("BOTTOMRIGHT", 1, -1)
+    edge:SetColorTexture(0.25, 0.85, 1, 1)
+    local ok, cd = pcall(CreateFrame, "Cooldown", nil, b, "CooldownFrameTemplate")
+    if ok and cd then
+        cd:SetAllPoints()
+        if cd.SetDrawEdge then cd:SetDrawEdge(false) end
+        -- the seconds: small, like the game's own debuffs on the plate (not a big number over the icon)
+        if cd.SetCountdownFont then pcall(cd.SetCountdownFont, cd, "NumberFontNormalSmall") end
+        b.cd = cd
+    end
+    if i == 1 then b:SetPoint("LEFT", f, "RIGHT", 4, 0) else b:SetPoint("LEFT", f.pots[i - 1], "RIGHT", 3, 0) end
+    return b
 end
 
 -- a potion or a stance just seen: that plate now, the potion's icon away when it's over, the list's row too
