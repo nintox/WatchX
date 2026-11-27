@@ -73,6 +73,7 @@ local defaults = {
     shareFriendNames = {},
     potionOrder = { "Free Action", "Living Action", "Invulnerability", "Swiftness", "Restorative" },   -- shown first
     platePotionMax = 4,   -- potions on one nameplate at most
+    plateX = 0, plateY = 8,   -- nameplate icons: moved from just above the nameplate (+ = right / up)
     potionGlow = { "Free Action", "Living Action", "Invulnerability" },   -- the important ones: a glow round them
     customPotions = {},   -- your own: { spell = the spell it casts, id, label, secs } (Settings > Nameplates)
     shareStealth = true,  -- ... which: stealth, KOS, WANTED (and every new enemy, at most one every 10 s)
@@ -4240,6 +4241,43 @@ function ns.SaveProfile()   -- keeps the active profile up to date (also done at
     if db and db.profiles and db.profile then db.profiles[db.profile] = Snapshot() end
 end
 
+-- The rebuff icons' layout is each character's own: where they are, row or column, size, gap, and the icons you
+-- placed on their own. The live values are this character's; at logout they're kept under its name (charLayout),
+-- at login its own come back. A character with none yet starts from another of its class (else as it is now).
+-- It's all in WatchXDB, so an export takes every character's layout along.
+do
+    local KEYS = { "rebuffPoint", "rebuffScale", "rebuffGap", "rebuffVertical" }
+    local function Class() local _, c = UnitClass("player"); c = Plain(c); return type(c) == "string" and c or "ANY" end
+    function ns.SaveCharLayout()
+        if not db then return end
+        if type(db.charLayout) ~= "table" then db.charLayout = {} end
+        local c = Class()
+        local t = { class = c, at = time() }
+        for _, k in ipairs(KEYS) do t[k] = Copy(db[k]) end
+        t.spots = Copy(type(db.rebuffSpots) == "table" and db.rebuffSpots[c] or nil)
+        t.pts = Copy(type(db.rebuffGroupPts) == "table" and db.rebuffGroupPts[c] or nil)
+        db.charLayout[ns.CharKey()] = t
+    end
+    function ns.LoadCharLayout()   -- true when a saved layout was put in place
+        if not db or type(db.charLayout) ~= "table" then return false end
+        local c = Class()
+        local t = db.charLayout[ns.CharKey()]
+        if type(t) ~= "table" then   -- new here: the one of its class used last
+            for _, o in pairs(db.charLayout) do
+                if type(o) == "table" and o.class == c and (not t or (o.at or 0) > (t.at or 0)) then t = o end
+            end
+        end
+        if type(t) ~= "table" then return false end
+        for _, k in ipairs(KEYS) do db[k] = Copy(t[k]) end
+        if type(db.rebuffSpots) ~= "table" then db.rebuffSpots = {} end
+        if type(db.rebuffGroupPts) ~= "table" then db.rebuffGroupPts = {} end
+        db.rebuffSpots[c] = Copy(t.spots) or {}
+        db.rebuffGroupPts[c] = Copy(t.pts) or {}
+        if ns.RebuffRelayout then ns.Safe("rebuff icons", ns.RebuffRelayout) end
+        return true
+    end
+end
+
 -- ---------------------------------------------------------------- attacked
 -- Combat starts while you haven't done anything for a while (or are AFK) = something attacked you.
 -- Doing something = moving, casting, changing target or moving the mouse (checked every second). Tabbed out,
@@ -4419,6 +4457,7 @@ local function OnEvent(_, event, arg1, arg2, ...)
             if n > ENEMY_MAX then ns.PruneEnemies() end
         end
         ns.InitProfiles()
+        ns.LoadCharLayout()
         ns.MigrateAvoid()
         for _, r in pairs(db.enemies) do r.healer = nil end   -- 2.3.0 guessed healers from heals; only proof now
         if db.instant ~= false then
@@ -4507,6 +4546,7 @@ local function OnEvent(_, event, arg1, arg2, ...)
     elseif event == "PLAYER_LOGOUT" then
         -- written to disk right now: the bridge sees the file change and tells your phone (not on reload/quit)
         ns.SaveProfile()
+        ns.SaveCharLayout()
         db.exitAt = time()
         db.exitWhy = exitReason or (campingAfk and "afk") or "disconnect"
     end

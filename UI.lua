@@ -2567,6 +2567,12 @@ function ns.BuildNearbySettings()
     P.size = stepper("Icon size", "12 – 40 · normal 22", function() return ns.PlateSize() end, function(d)
         db().plateSize = math.max(12, math.min(40, ns.PlateSize() + d * 2)); ns.UpdatePlates()
     end)
+    stepper("Up / down", "+ higher · normal 8", function() return (select(2, ns.PlateOffset())) end, function(d)
+        db().plateY = math.max(-60, math.min(100, (select(2, ns.PlateOffset())) + d * 2)); ns.UpdatePlates()
+    end)
+    stepper("Left / right", "+ to the right · normal 0", function() return (ns.PlateOffset()) end, function(d)
+        db().plateX = math.max(-80, math.min(80, (ns.PlateOffset()) + d * 2)); ns.UpdatePlates()
+    end)
     heading("HEALERS")
     note("Friendly players: their talents (inspected). Enemies: a healing-talent spell like Riptide or Wild Growth.")
     y = y - 22
@@ -7729,6 +7735,19 @@ do (function()
         if pt then g:SetPoint(pt[1], UIParent, pt[2], pt[3], pt[4]) else g:SetPoint("CENTER", UIParent, "CENTER", 0, -120) end
         return g
     end
+    -- another layout put in place (a character's own, an import): the frames to their spots now
+    function ns.RebuffRelayout()
+        if f then LoadPoint(f, "rebuffPoint", { "CENTER", "CENTER", 0, -170 }) end
+        local _, pts = Spots()
+        for gid, g in pairs(groups) do
+            if gid ~= 1 then
+                local pt = pts[gid]
+                g:ClearAllPoints()
+                if pt then g:SetPoint(pt[1], UIParent, pt[2], pt[3], pt[4]) else g:SetPoint("CENTER", UIParent, "CENTER", 0, -120) end
+            end
+        end
+        if ns.RefreshRebuff then ns.RefreshRebuff() end
+    end
     -- an icon let go (unlocked): next to another icon -> into its group, beside it; else a group of its own, there
     local function Drop(b)
         local spots, pts = Spots()
@@ -8413,7 +8432,7 @@ do (function()
             y = y - 26
         end
         check("Show rebuff icons", nil, function() return db().rebuffOn ~= false end, function(v) db().rebuffOn = v end)
-        check("In a column", "off: in a row", function() return db().rebuffVertical == true end, function(v) db().rebuffVertical = v end)
+        check("In a column", "off: in a row · where, size and direction: this character's own", function() return db().rebuffVertical == true end, function(v) db().rebuffVertical = v end)
         check("Also the ones you have", "dimmed, with a green edge", function() return db().rebuffAll == true end, function(v) db().rebuffAll = v end)
         check("Always show the weapon icons", "MH / OH with the poison that's on, faded, and its minutes left",
             function() return db().rebuffWeaponAlways ~= false end, function(v) db().rebuffWeaponAlways = v end)
@@ -8810,6 +8829,7 @@ do (function()
     function ns.MakeExport(opts)
         local d = db()
         if ns.SaveProfile then ns.SaveProfile() end   -- (the active profile as it is now)
+        if ns.SaveCharLayout then ns.SaveCharLayout() end   -- (this character's rebuff layout as it is now)
         local pick = {}
         for k, v in pairs(d) do
             local enemy = ENEMIES[k]
@@ -8864,6 +8884,7 @@ do (function()
                 n.settings = n.settings + 1
             end
         end
+        if t.data.charLayout and ns.LoadCharLayout then ns.LoadCharLayout() end   -- (this character's, if it came along)
         return n
     end
 
@@ -8994,6 +9015,10 @@ local CLASS_COORDS = {   -- Interface\TargetingFrame\UI-Classes-Circles, if the 
 }
 local PLATE_ICON = 22   -- the size the healer + is drawn for; it's scaled with the icon
 function ns.PlateSize() return math.max(12, math.min(40, tonumber(db().plateSize) or PLATE_ICON)) end
+-- where the icons sit: moved from just above the nameplate (others' nameplate addons are taller or shorter)
+function ns.PlateOffset()
+    return math.max(-80, math.min(80, tonumber(db().plateX) or 0)), math.max(-60, math.min(100, tonumber(db().plateY) or 8))
+end
 local plateIcons, plateUnits = {}, {}   -- nameplate frame -> icon; nameplate unit -> true while it's up
 
 local function Readable(v)
@@ -9018,7 +9043,7 @@ local function PlateIcon(plate)
     if f then return f end
     f = CreateFrame("Frame", nil, plate)
     f:SetSize(PLATE_ICON, PLATE_ICON)
-    f:SetPoint("BOTTOM", plate, "TOP", 0, 0)
+    f:SetPoint("BOTTOM", plate, "TOP", ns.PlateOffset())
     pcall(f.SetFrameLevel, f, (plate:GetFrameLevel() or 0) + 20)
     -- KOS: a red disc behind the round class icon (a red ring around it) and a skull on its upper left
     f.kosRing = f:CreateTexture(nil, "BACKGROUND")
@@ -9088,6 +9113,12 @@ local function UpdatePlate(unit, fresh)
         local edge = math.max(2, math.floor(size / 7 + 0.5))
         f.kosRing:SetPoint("TOPLEFT", f, "TOPLEFT", -edge, edge)
         f.kosRing:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", edge, -edge)
+    end
+    local ox, oy = ns.PlateOffset()
+    if f.ox ~= ox or f.oy ~= oy then
+        f.ox, f.oy = ox, oy
+        f:ClearAllPoints()
+        f:SetPoint("BOTTOM", plate, "TOP", ox, oy)
     end
     local kos = false
     if hostile and d.plateKOS ~= false then
