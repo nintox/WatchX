@@ -4726,7 +4726,7 @@ local function OnSlash(input)
     elseif (cmd == "plates" or cmd == "plate" or cmd == "nameplates") and rest == "test" and ns.PlateDemo then
         ns.PlateDemo()
     elseif (cmd == "swing" or cmd == "wand") and ns.SwingDemo then
-        ns.SwingDemo()
+        if rest == "why" and ns.SwingWhy then ns.SwingWhy() else ns.SwingDemo() end
     elseif (cmd == "potion" or cmd == "potions") and ns.AddCustomPotion then
         -- /wx potions: the list · /wx potion add Name: seconds · /wx potion remove Name
         local sub, what = rest:match("^(%S+)%s*(.*)$")

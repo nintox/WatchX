@@ -9057,6 +9057,13 @@ do (function()
     local autoOn, repeatOn, demo = false, false, nil
     local casts, nCasts = {}, 0   -- the casts with a cast time (by castGUID): finishing one starts the swing over
     local Done, Layout, Tick
+    local known = {}   -- the last speeds read plainly (in a fight the game may hide them)
+    local shotKind, shotAt = "Wand", 0
+    local log = {}   -- /wx swing why: what the game said lately
+    local function Note(text)
+        table.insert(log, 1, ("%.1f  %s"):format(GetTime() % 1000, text))
+        while #log > 14 do table.remove(log) end
+    end
 
     local function Plain(v) if issecretvalue and v ~= nil and issecretvalue(v) then return nil end return v end
     local function SwingOn() return demo ~= nil or (db() and db().swingTimer ~= false) end
@@ -9064,15 +9071,31 @@ do (function()
     local function Speeds()   -- main hand, off hand (nil: none)
         if demo then return demo.mh, demo.oh end
         local ok, mh, oh = pcall(UnitAttackSpeed, "player")
-        if not ok then return nil end
-        mh, oh = tonumber(Plain(mh)), tonumber(Plain(oh))
-        return (mh and mh > 0) and mh or nil, (oh and oh > 0) and oh or nil
+        if not ok then return known.mh, known.oh end
+        local hidden = issecretvalue and ((mh ~= nil and issecretvalue(mh)) or (oh ~= nil and issecretvalue(oh)))
+        if hidden then return known.mh, known.oh end   -- (a fight: the speed from before it)
+        mh, oh = tonumber(mh), tonumber(oh)
+        known.mh, known.oh = (mh and mh > 0) and mh or nil, (oh and oh > 0) and oh or nil
+        return known.mh, known.oh
     end
     local function RangedSpeed()
         if demo then return demo.r end
         local ok, s = pcall(UnitRangedDamage, "player")
         s = ok and tonumber(Plain(s))
-        return (s and s > 0) and s or nil
+        if s and s > 0 then known.r = s end
+        return known.r
+    end
+    -- is the wand / Auto Shot going? (its start / stop events, or the game asked)
+    local function Repeating()
+        if demo then return repeatOn end
+        if repeatOn then return true end
+        local ask = (C_Spell and C_Spell.IsAutoRepeatSpell) or IsAutoRepeatSpell
+        if not ask then return false end
+        for _, sp in ipairs({ "Shoot", "Auto Shot", 5019, 75 }) do
+            local ok, yes = pcall(ask, sp)
+            if ok and Plain(yes) and yes ~= 0 then return true end
+        end
+        return false
     end
     local function SpellName(id)
         if not id then return nil end
@@ -9238,9 +9261,9 @@ do (function()
             local mh, oh = Speeds()
             local s = b.key == "mh" and mh or oh
             if autoOn and s and SwingOn() then Run(b, s, s) return end   -- still attacking: the next swing
-        elseif repeatOn and WandOn() then
-            Tick()
-            return   -- full: the next shot goes now (and starts it again)
+        elseif WandOn() and Repeating() then
+            local s = RangedSpeed()   -- still shooting: the next shot (each shot the game shows sets it right)
+            if s then Run(b, s, s) return end
         end
         Tick()
         Fade(b)
@@ -9292,11 +9315,16 @@ do (function()
         local s = RangedSpeed()
         if not s then return end
         Build()
+        shotKind, shotAt = kind, GetTime()
         Paint(bars[3], kind, kind)
         Run(bars[3], s, s)
     end
 
     local function OnEvent(e, unit, a2, a3)
+        if e ~= "UNIT_COMBAT" and (e:find("AUTOREPEAT") or e:find("COMBAT") or unit == "player") then
+            local id = a3 ~= nil and (Plain(a3) or "hidden") or ""
+            Note(e:gsub("^UNIT_SPELLCAST_", ""):gsub("^PLAYER_", "") .. (id ~= "" and ("  " .. tostring(id) .. " " .. (SpellName(Plain(a3)) or "")) or ""))
+        end
         if demo then return end
         if e == "PLAYER_ENTER_COMBAT" then
             autoOn = true
@@ -9333,7 +9361,12 @@ do (function()
             local shot = (id and SHOTS[id]) or (name and SHOT_NAMES[name])
             if shot then Shot(shot)
             elseif name and NEXT_SWING[name] then Swung(false)
-            elseif hadCast then Swung(true) end
+            elseif hadCast then Swung(true)
+            elseif id == nil and a3 ~= nil and Repeating() and WandOn() then
+                -- hidden in a fight: while you shoot, a cast that comes about one shot after the last is the next shot
+                local s = RangedSpeed()
+                if s and GetTime() - shotAt > s * 0.6 then Shot(shotKind) end
+            end
         end
     end
     local ev = CreateFrame("Frame")
@@ -9345,6 +9378,21 @@ do (function()
         if not pcall(ev.RegisterUnitEvent, ev, e, "player") then pcall(ev.RegisterEvent, ev, e) end
     end
     ev:SetScript("OnEvent", function(_, e, ...) ns.Safe("swing timer", OnEvent, e, ...) end)
+
+    -- /wx swing why: what the game told the timer lately
+    function ns.SwingWhy()
+        local P = ns.Print or print
+        local function plain(v) return v == nil and "none" or (issecretvalue and issecretvalue(v)) and "hidden" or tostring(v) end
+        local okA, mh, oh = pcall(UnitAttackSpeed, "player")
+        local okR, r = pcall(UnitRangedDamage, "player")
+        P(("Swing timer: %s · wand timer: %s"):format(SwingOn() and "on" or "|cffff6060off|r", WandOn() and "on" or "|cffff6060off|r"))
+        P(("Speed now: main hand %s, off hand %s, ranged %s  (kept: %s / %s / %s)"):format(okA and plain(mh) or "?",
+            okA and plain(oh) or "?", okR and plain(r) or "?", tostring(known.mh), tostring(known.oh), tostring(known.r)))
+        P(("Attacking: %s · shooting: %s"):format(tostring(autoOn), tostring(Repeating())))
+        P("Lately (newest first):")
+        for _, l in ipairs(log) do P("  " .. l) end
+        if #log == 0 then P("  nothing yet – attack or shoot something, then /wx swing why") end
+    end
 
     -- switched off in Settings: its bars go at once
     function ns.RefreshSwing()
