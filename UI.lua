@@ -6823,15 +6823,21 @@ do (function()
         Big(t.tick, 13)
         t.tick:SetAlpha(0)
         if t.tick.CreateAnimationGroup then
+            -- from its spot it fades in and rises, then fades out up there – and stays gone (it doesn't drop back
+            -- to its spot when the animation ends: that looked like "down again, then up")
             local ag = t.tick:CreateAnimationGroup()
+            local show = ag:CreateAnimation("Alpha")
+            show:SetFromAlpha(0); show:SetToAlpha(1); show:SetDuration(0.15)
             local up = ag:CreateAnimation("Translation")
-            if up.SetOffset then up:SetOffset(0, 14) end
-            up:SetDuration(0.85)
+            if up.SetOffset then up:SetOffset(0, 18) end
+            up:SetDuration(0.9)
             if up.SetSmoothing then up:SetSmoothing("OUT") end
             local fade = ag:CreateAnimation("Alpha")
             fade:SetFromAlpha(1); fade:SetToAlpha(0)
-            fade:SetStartDelay(0.45); fade:SetDuration(0.4)
+            fade:SetStartDelay(0.5); fade:SetDuration(0.4)
             if ag.SetToFinalAlpha then ag:SetToFinalAlpha(true) end
+            ag:SetScript("OnFinished", function() t.tick:SetAlpha(0) end)
+            ag:SetScript("OnStop", function() t.tick:SetAlpha(0) end)
             t.tickAnim = ag
         end
         -- the fill when your health/mana can only be read by the game itself (hidden values): a status bar takes them
@@ -6966,8 +6972,8 @@ do (function()
             if not r.nextTick or now >= r.nextTick then
                 r.nextTick = (r.nextTick and now - r.nextTick < tk.period) and (r.nextTick + tk.period) or (now + tk.period)
                 r.tick:SetText(color .. "+" .. Short(tk.amount) .. "|r")
-                r.tick:SetAlpha(1)
-                if r.tickAnim then r.tickAnim:Stop(); r.tickAnim:Play() end
+                if r.tickAnim then r.tickAnim:Stop(); r.tick:SetAlpha(1); r.tickAnim:Play()   -- (it fades itself in)
+                else r.tick:SetAlpha(1) end
             end
         end
         if r.bar then r.bar:Hide() end

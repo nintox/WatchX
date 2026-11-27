@@ -27,6 +27,9 @@ ex('FIRST = R.nextTick; tick(1.05)')
 check(ev('R.nextTick') > ev('FIRST'), "the next tick a second later")
 check("20%|r |cffcccccc»|r |cff4da6ff7" in str(ev("R.pct.__text")), "now » where it ends: " + str(ev('R.pct.__text')))
 
+# the tick fades in where it is, rises, fades – and when it's done it stays gone (no drop back down)
+ex('R.tickAnim:GetScript("OnFinished")(R.tickAnim)')
+check(ev('R.tick:GetAlpha()') == 0, "the tick's animation over: gone, not back at its spot")
 # smooth: buffs looked at again and again (UNIT_AURA) don't restart the tick – one a second
 ex('PLAYS = 0; local old = R.tickAnim.Play; R.tickAnim.Play = function(s) PLAYS = PLAYS + 1; return old(s) end')
 ex('for i = 1, 20 do fire("UNIT_AURA", "player"); tick(0.25) end')
