@@ -2562,6 +2562,8 @@ function ns.BuildNearbySettings()
         function() return db().plateKOS ~= false end, function(v) db().plateKOS = v; ns.UpdatePlates() end)
     check("Potions they drink", "Free Action, Invulnerability, Swiftness … right of the icon, while it lasts",
         function() return db().platePotions ~= false end, function(v) db().platePotions = v; ns.UpdatePlates() end)
+    check("Combo points", "rogues and druids: pips under your target's nameplate (players and mobs)",
+        function() return db().plateCombo ~= false end, function(v) db().plateCombo = v; if ns.UpdateCombo then ns.UpdateCombo() end end)
     check("Warriors' stance", "Battle, Defensive or Berserker – left of the icon, and in the list",
         function() return db().plateStance ~= false end, function(v) db().plateStance = v; ns.UpdatePlates() end)
     P.size = stepper("Icon size", "12 – 40 · normal 22", function() return ns.PlateSize() end, function(d)
@@ -9699,7 +9701,98 @@ local function OnPlateEvent(_, event, unit)
     end
 end
 
+-- Combo points (rogues, druids in cat form): a row of pips under your target's nameplate – an enemy player or a mob.
+-- Each pip is a tiny bar from n-1 to n given your combo points: it fills at n. (That works even if the game hides the
+-- number from addons in a fight: a bar may be given a hidden number, it just can't be read.) Gone at 0.
+do
+    local CP = (Enum and Enum.PowerType and Enum.PowerType.ComboPoints) or 4
+    local PIP, GAP, MAXPIPS = 9, 3, 7
+    local holder
+    local function Build()
+        holder = CreateFrame("Frame", "WatchXComboPoints", UIParent)
+        holder:SetSize(PIP, PIP)
+        holder.pips = {}
+        for i = 1, MAXPIPS do
+            local b = CreateFrame("StatusBar", nil, holder)
+            b:SetSize(PIP, PIP)
+            b:SetStatusBarTexture("Interface\\Buttons\\WHITE8X8")
+            b:SetStatusBarColor(1, 0.82, 0.15)
+            b:SetMinMaxValues(i - 1, i)
+            local bg = b:CreateTexture(nil, "BACKGROUND")
+            bg:SetPoint("TOPLEFT", b, "TOPLEFT", -1, 1)
+            bg:SetPoint("BOTTOMRIGHT", b, "BOTTOMRIGHT", 1, -1)
+            bg:SetColorTexture(0, 0, 0, 0.85)
+            local empty = b:CreateTexture(nil, "BORDER")
+            empty:SetAllPoints()
+            empty:SetColorTexture(0.25, 0.2, 0.1, 0.9)
+            b:Hide()
+            holder.pips[i] = b
+        end
+        holder:Hide()
+    end
+    local function Uses()
+        local _, c = UnitClass("player")
+        c = Readable(c)
+        return c == "ROGUE" or c == "DRUID"
+    end
+    function ns.UpdateCombo()
+        local d = db()
+        if not d then return end
+        local plate
+        if d.plateCombo ~= false and Uses() and Readable(UnitExists("target")) == true
+                and Readable(UnitCanAttack("player", "target")) == true and C_NamePlate and C_NamePlate.GetNamePlateForUnit then
+            local ok, p = pcall(C_NamePlate.GetNamePlateForUnit, "target")
+            plate = ok and p or nil
+        end
+        local cp = plate and UnitPower("player", CP)
+        local hidden = cp ~= nil and issecretvalue and issecretvalue(cp)
+        local n = not hidden and tonumber(cp) or nil
+        local max = math.min(MAXPIPS, tonumber(Readable(UnitPowerMax("player", CP))) or 5)
+        if not plate or max <= 0 or (not hidden and (n or 0) <= 0) then
+            if holder then holder:Hide() end
+            return
+        end
+        if not holder then Build() end
+        -- under the target's health bar (the plate's own frame, else the plate)
+        local under = plate.UnitFrame and (plate.UnitFrame.healthBar or plate.UnitFrame.HealthBar) or plate
+        if holder.under ~= under then
+            holder.under = under
+            holder:SetParent(plate)
+            holder:SetFrameLevel((plate:GetFrameLevel() or 0) + 25)
+            holder:ClearAllPoints()
+            holder:SetPoint("TOP", under, "BOTTOM", 0, -3)
+        end
+        holder:SetSize(max * PIP + (max - 1) * GAP, PIP)
+        local full = n and n >= max
+        for i = 1, MAXPIPS do
+            local b = holder.pips[i]
+            if i <= max then
+                b:ClearAllPoints()
+                b:SetPoint("LEFT", holder, "LEFT", (i - 1) * (PIP + GAP), 0)
+                b:SetValue(cp)
+                if full then b:SetStatusBarColor(1, 0.35, 0.1) else b:SetStatusBarColor(1, 0.82, 0.15) end   -- all 5: finish
+                b:Show()
+            else
+                b:Hide()
+            end
+        end
+        holder:Show()
+    end
+    function ns.InitCombo()
+        local ev = CreateFrame("Frame")
+        for _, e in ipairs({ "PLAYER_TARGET_CHANGED", "NAME_PLATE_UNIT_ADDED", "NAME_PLATE_UNIT_REMOVED", "PLAYER_ENTERING_WORLD",
+                             "UPDATE_SHAPESHIFT_FORM" }) do pcall(ev.RegisterEvent, ev, e) end
+        if not pcall(ev.RegisterUnitEvent, ev, "UNIT_POWER_UPDATE", "player") then pcall(ev.RegisterEvent, ev, "UNIT_POWER_UPDATE") end
+        if not pcall(ev.RegisterUnitEvent, ev, "UNIT_MAXPOWER", "player") then pcall(ev.RegisterEvent, ev, "UNIT_MAXPOWER") end
+        ev:SetScript("OnEvent", function(_, event, unit, kind)
+            if (event == "UNIT_POWER_UPDATE" or event == "UNIT_MAXPOWER") and (unit ~= "player" or (kind and kind ~= "COMBO_POINTS")) then return end
+            ns.Safe("combo points", ns.UpdateCombo)
+        end)
+    end
+end
+
 local function InitPlates()
+    ns.Safe("combo points", ns.InitCombo)
     local f = CreateFrame("Frame")
     for _, e in ipairs({ "NAME_PLATE_UNIT_ADDED", "NAME_PLATE_UNIT_REMOVED", "UNIT_FACTION" }) do
         pcall(f.RegisterEvent, f, e)

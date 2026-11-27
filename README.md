@@ -23,7 +23,8 @@
 - **Sounds** – pick your own for Stealth, Kill on sight, WANTED, a new enemy nearby and bounty news (or off).
 - **Nameplate icons** – class, proven healers and KOS over enemy players; the potions they drink (Free Action,
   Invulnerability, Swiftness …, add your own, choose which come first) while they last, and a warrior's stance
-  (Battle, Defensive, Berserker) – in the Enemies list too. `/wx plates test` shows where they go.
+  (Battle, Defensive, Berserker) – in the Enemies list too. `/wx plates test` shows where they go. Rogues and druids:
+  your combo points under your target's nameplate.
 - **History** – everyone you've met: kills, deaths, last seen, notes, guilds.
 - **Avoid list** – people you don't want to play with: tooltip, group warning, a mark in chat.
 

@@ -1,0 +1,47 @@
+# Combo points (rogue / druid): pips under your target's nameplate – an enemy player or a mob; filled up to your
+# combo points (each pip a bar, so a number the game hides in a fight still fills them); none at 0, none for a mage.
+import sys
+from harness import load, errors
+
+lua, ex, ev = load()
+fails = []
+def check(cond, what):
+    print(("ok   " if cond else "FAIL ") + what)
+    if not cond: fails.append(what)
+
+ex(r'''
+CLASS = "ROGUE"; CPN = 0; TARGET = true
+UnitClass = function(u) return "Rogue", CLASS end
+UnitPower = function(u, t) if t == 4 then return CPN end return 100 end
+UnitPowerMax = function(u, t) if t == 4 then return 5 end return 100 end
+local oE, oA = UnitExists, UnitCanAttack
+UnitExists = function(u) if u == "target" then return TARGET end return oE(u) end
+UnitCanAttack = function(a, u) if u == "target" then return TARGET end return oA(a, u) end
+PLATE = CreateFrame("Frame", nil, UIParent); PLATE.UnitFrame = CreateFrame("Frame", nil, PLATE); PLATE.UnitFrame.healthBar = CreateFrame("StatusBar", nil, PLATE.UnitFrame)
+C_NamePlate.GetNamePlateForUnit = function(u) if u == "target" and TARGET then return PLATE end end
+function pips() local n, f = 0, 0 for _, b in ipairs(WatchXComboPoints and WatchXComboPoints.pips or {}) do if b:IsShown() then n = n + 1; if (b.__value or b.VAL or 0) >= select(2, b:GetMinMaxValues()) then f = f + 1 end end end return n .. "/" .. f end
+for _, b in ipairs({}) do end
+''')
+ex('fire("PLAYER_TARGET_CHANGED")')
+check(not ev('WatchXComboPoints and WatchXComboPoints:IsShown()'), "0 combo points: nothing")
+ex('CPN = 3; fire("UNIT_POWER_UPDATE", "player", "COMBO_POINTS")')
+check(ev('WatchXComboPoints and WatchXComboPoints:IsShown()'), "3 combo points: the pips show")
+check(ev('WatchXComboPoints:GetParent() == PLATE'), "on the target's nameplate")
+check(ev('select(2, WatchXComboPoints:GetPoint(1)) == PLATE.UnitFrame.healthBar'), "under its health bar")
+ex('VALS = {} for i, b in ipairs(WatchXComboPoints.pips) do VALS[i] = b:IsShown() end')
+check(ev('VALS[5] == true and VALS[6] == false'), "five pips (your max)")
+ex('CPN = 5; fire("UNIT_POWER_UPDATE", "player", "COMBO_POINTS")')
+check(ev('WatchXComboPoints:IsShown()'), "5: still there (finish him)")
+# a number the game hides in a fight: still shown (the bars fill themselves)
+ex('local oS = issecretvalue; SECRET = { }; issecretvalue = function(v) return type(v) == "table" and v.secret == true end; CPN = { secret = true }; fire("UNIT_POWER_UPDATE", "player", "COMBO_POINTS")')
+check(ev('WatchXComboPoints:IsShown()'), "hidden number in a fight: the pips still show")
+ex('issecretvalue = nil; CPN = 2; TARGET = false; fire("PLAYER_TARGET_CHANGED")')
+check(not ev('WatchXComboPoints:IsShown()'), "no target: gone")
+ex('TARGET = true; CLASS = "MAGE"; fire("PLAYER_TARGET_CHANGED")')
+check(not ev('WatchXComboPoints:IsShown()'), "a mage: never")
+ex('CLASS = "ROGUE"; NS.db.plateCombo = false; fire("PLAYER_TARGET_CHANGED")')
+check(not ev('WatchXComboPoints:IsShown()'), "switched off: gone")
+errs = errors(ev)
+check(len(errs) == 0, "no Lua errors " + (str(errs[0])[:300] if errs else ""))
+print("combo points:", "ALL PASSED" if not fails else "%d FAILED" % len(fails))
+sys.exit(1 if fails else 0)
