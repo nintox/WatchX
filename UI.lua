@@ -1218,6 +1218,10 @@ local function BuildSettings()
         function() return db().comprehendClick ~= false end, function(v) db().comprehendClick = v end)
     module("Eating & drinking timer", "time left and how much health / mana you'll get, mid-screen",
         function() return db().eatTimer ~= false end, function(v) db().eatTimer = v; if ns.RefreshEating then ns.RefreshEating() end end)
+    module("Swing timer", "your next melee swing, mid-screen  ·  /wx swing to test",
+        function() return db().swingTimer ~= false end, function(v) db().swingTimer = v; if ns.RefreshSwing then ns.RefreshSwing() end end)
+    module("Wand timer", "your next wand shot (a hunter's: Auto Shot)",
+        function() return db().wandTimer ~= false end, function(v) db().wandTimer = v; if ns.RefreshSwing then ns.RefreshSwing() end end)
     module("Spots on the map", "where to stand for the rares you watch",
         function() return db().mapSpots ~= false end,
         function(v) db().mapSpots = v; ns.Safe("map pins", ns.UpdateMapPins) end)
@@ -3415,6 +3419,7 @@ function ns.StartMove(keepWindow)
     if ns.EatingMove then ns.EatingMove(true) end
     if ns.RebuffMove then ns.RebuffMove(true) end
     if ns.CombatTextMove then ns.CombatTextMove(true) end
+    if ns.SwingMove then ns.SwingMove(true) end
 end
 
 function ns.ToggleUnlock()
@@ -3443,6 +3448,7 @@ function ns.StopMove(why)
     if ns.EatingMove then ns.EatingMove(false) end
     if ns.RebuffMove then ns.RebuffMove(false) end
     if ns.CombatTextMove then ns.CombatTextMove(false) end
+    if ns.SwingMove then ns.SwingMove(false) end
     ns.Print(why or "Locked.")
     ns.RefreshUI()
     ns.UpdateTargetButton()
@@ -9019,6 +9025,387 @@ do
         ns.Safe("combat text", ns.ShowCombatText, event == "PLAYER_REGEN_DISABLED")
     end)
 end
+
+-- ---------------------------------------------------------------- swing timer & wand timer (Settings > WatchX > MORE)
+-- Thin bars mid-screen: your melee swing (and the off hand's when you dual-wield), and your wand (Shoot) or a
+-- hunter's Auto Shot. Forever keeps the combat log from addons, so a melee swing itself isn't seen: that bar starts
+-- with your auto-attack and runs at your attack speed (taking haste as it changes, and a parry's speed-up); Heroic
+-- Strike, Cleave, Maul and Raptor Strike land with a swing and set it right again, and a finished cast starts it over
+-- (as the game does). Each wand shot / Auto Shot is a cast the game does tell us about: that bar is exact.
+-- The fill slides by the game's own animation (no Lua each frame); the seconds left are written 10 times a second
+-- while a bar runs. Unlocked: drag it, wheel: size. /wx swing: a test.
+do (function()
+    local BAR_W, BAR_H, GAP = 220, 14, 3
+    local CW = BAR_W - 4   -- the inside: the fill's room
+    local NEXT_SWING = { ["Heroic Strike"] = true, ["Cleave"] = true, ["Maul"] = true, ["Raptor Strike"] = true }
+    local SHOTS = { [5019] = "Wand", [75] = "Auto Shot" }
+    local SHOT_NAMES = { ["Shoot"] = "Wand", ["Auto Shot"] = "Auto Shot" }
+    local COLORS = { mh = { 1, 0.74, 0.18 }, oh = { 0.92, 0.48, 0.12 }, Wand = { 0.68, 0.48, 1 },
+        ["Auto Shot"] = { 0.4, 0.86, 0.35 } }
+    local box, label, bars, ticker
+    local autoOn, repeatOn, demo = false, false, nil
+    local casts, nCasts = {}, 0   -- the casts with a cast time (by castGUID): finishing one starts the swing over
+    local Done, Layout, Tick
+
+    local function Plain(v) if issecretvalue and v ~= nil and issecretvalue(v) then return nil end return v end
+    local function SwingOn() return demo ~= nil or (db() and db().swingTimer ~= false) end
+    local function WandOn() return demo ~= nil or (db() and db().wandTimer ~= false) end
+    local function Speeds()   -- main hand, off hand (nil: none)
+        if demo then return demo.mh, demo.oh end
+        local ok, mh, oh = pcall(UnitAttackSpeed, "player")
+        if not ok then return nil end
+        mh, oh = tonumber(Plain(mh)), tonumber(Plain(oh))
+        return (mh and mh > 0) and mh or nil, (oh and oh > 0) and oh or nil
+    end
+    local function RangedSpeed()
+        if demo then return demo.r end
+        local ok, s = pcall(UnitRangedDamage, "player")
+        s = ok and tonumber(Plain(s))
+        return (s and s > 0) and s or nil
+    end
+    local function SpellName(id)
+        if not id then return nil end
+        local get = (C_Spell and C_Spell.GetSpellName) or GetSpellInfo
+        if not get then return nil end
+        local ok, n = pcall(get, id)
+        n = ok and Plain(n)
+        return type(n) == "string" and n or nil
+    end
+
+    -- how full a bar stands, still (0 … 1)
+    local function Place(b, frac)
+        b.mover:ClearAllPoints()
+        b.mover:SetPoint("LEFT", b.clip, "LEFT", -CW * (1 - frac), 0)
+    end
+    local function Paint(b, text, key)
+        local c = COLORS[key] or COLORS.mh
+        b.fill:SetVertexColor(c[1], c[2], c[3], 1)
+        b.name:SetText(text)
+    end
+    local function MakeBar(key)
+        local b = CreateFrame("Frame", nil, box)
+        b:SetSize(BAR_W, BAR_H)
+        b.key = key
+        local back = b:CreateTexture(nil, "BACKGROUND")
+        back:SetAllPoints()
+        back:SetColorTexture(0.08, 0.06, 0.04, 0.9)
+        b.clip = CreateFrame("Frame", nil, b)
+        b.clip:SetPoint("TOPLEFT", b, "TOPLEFT", 2, -2)
+        b.clip:SetPoint("BOTTOMRIGHT", b, "BOTTOMRIGHT", -2, 2)
+        if b.clip.SetClipsChildren then b.clip:SetClipsChildren(true) end
+        b.mover = CreateFrame("Frame", nil, b.clip)   -- the fill and its spark, slid in from the left
+        b.mover:SetSize(CW, BAR_H - 4)
+        b.fill = b.mover:CreateTexture(nil, "ARTWORK")
+        b.fill:SetAllPoints()
+        b.fill:SetTexture("Interface\\TargetingFrame\\UI-StatusBar")
+        b.spark = b.mover:CreateTexture(nil, "OVERLAY")
+        b.spark:SetTexture("Interface\\CastingBar\\UI-CastingBar-Spark")
+        b.spark:SetBlendMode("ADD")
+        b.spark:SetSize(16, BAR_H * 2)
+        b.spark:SetPoint("CENTER", b.mover, "RIGHT", 0, 0)
+        b.spark:Hide()
+        Place(b, 0)
+        if b.mover.CreateAnimationGroup then
+            b.ag = b.mover:CreateAnimationGroup()
+            b.slide = b.ag:CreateAnimation("Translation")
+            b.ag:SetScript("OnFinished", function() Place(b, 1) end)   -- (it would spring back to where it began)
+        end
+        local edge = CreateFrame("Frame", nil, b)
+        edge:SetAllPoints()
+        edge:SetFrameLevel((b:GetFrameLevel() or 1) + 4)
+        if Backdrop(edge, { edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", edgeSize = 8 }) then
+            edge:SetBackdropBorderColor(EDGE[1], EDGE[2], EDGE[3], 0.9)
+        end
+        b.name = edge:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        b.name:SetPoint("LEFT", b, "LEFT", 6, 0)
+        b.left = edge:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        b.left:SetPoint("RIGHT", b, "RIGHT", -6, 0)
+        b:Hide()
+        return b
+    end
+
+    local function Build()
+        if box then return end
+        box = CreateFrame("Frame", "WatchXSwing", UIParent)
+        box:SetSize(BAR_W, BAR_H)
+        box:SetFrameStrata("MEDIUM")
+        box:SetClampedToScreen(true)
+        box:SetMovable(true)
+        box:SetScale(ClampScale(db().swingScale))
+        LoadPoint(box, "swingPoint", { "CENTER", "CENTER", 0, -170 })
+        box:RegisterForDrag("LeftButton")
+        ns.MoveHover(box)
+        box:SetScript("OnDragStart", function(self) if moving then self.dragging = true; self:StartMoving() end end)
+        box:SetScript("OnDragStop", function(self)
+            if not self.dragging then return end
+            self.dragging = nil
+            self:StopMovingOrSizing()
+            SavePoint(self, "swingPoint")
+        end)
+        box:SetScript("OnMouseWheel", function(self, delta)
+            if not moving then return end
+            Rescale(self, "swingScale", delta)
+            SavePoint(self, "swingPoint")
+            if label then label:Set(self, "|cffffd100Swing & wand timer|r · drag to move · wheel: size (" .. Pct(self:GetScale()) .. ")") end
+        end)
+        box:EnableMouse(false)
+        bars = { MakeBar("mh"), MakeBar("oh"), MakeBar("r") }
+        box:Hide()
+    end
+    ns.SwingBars = function() return bars end   -- (tests)
+
+    -- the bars that show, one under the other from the top
+    function Layout()
+        local y, n = 0, 0
+        for _, b in ipairs(bars) do
+            if b:IsShown() then
+                b:ClearAllPoints()
+                b:SetPoint("TOP", box, "TOP", 0, -y)
+                y, n = y + BAR_H + GAP, n + 1
+            end
+        end
+        box:SetHeight(math.max(BAR_H, y - GAP))
+        box:SetShown(n > 0)
+    end
+
+    -- the seconds left; a ticker only while a bar runs
+    function Tick()
+        local now, any = GetTime(), false
+        for _, b in ipairs(bars or {}) do
+            if b.ends and b.ends > now then
+                any = true
+                b.left:SetText(("%.1f"):format(b.ends - now))
+            elseif not b.example then
+                b.left:SetText("")
+            end
+        end
+        if any and not ticker and C_Timer and C_Timer.NewTicker then
+            ticker = C_Timer.NewTicker(0.1, function() ns.Safe("swing timer", Tick) end)
+        elseif not any and ticker then
+            ticker:Cancel(); ticker = nil
+        end
+    end
+
+    -- gone a moment after it filled, unless it starts again
+    local function Fade(b)
+        local token = {}
+        b.fadeToken = token
+        C_Timer.After(0.8, function()
+            if b.fadeToken ~= token or b.ends or (moving and b.example) then return end
+            b:Hide()
+            Layout()
+        end)
+    end
+
+    -- left of total seconds to go (a swing just went: left == total)
+    local function Run(b, total, left)
+        left = math.max(0, math.min(left, total))
+        if b.timer then b.timer:Cancel(); b.timer = nil end
+        if b.ag then b.ag:Stop() end
+        b.total, b.fadeToken, b.example = total, nil, nil
+        b.ends = GetTime() + left
+        Place(b, 1 - left / total)
+        b.spark:Show()
+        b:Show()
+        Layout()
+        if left <= 0 then Done(b) return end
+        if b.ag then
+            b.slide:SetOffset(CW * left / total, 0)
+            b.slide:SetDuration(left)
+            b.ag:Play()
+        end
+        b.timer = C_Timer.NewTimer(left, function() b.timer = nil; ns.Safe("swing timer", Done, b) end)
+        Tick()
+    end
+
+    function Done(b)
+        b.ends = nil
+        if b.ag then b.ag:Stop() end
+        Place(b, 1)
+        b.spark:Hide()
+        if b.key ~= "r" then
+            local mh, oh = Speeds()
+            local s = b.key == "mh" and mh or oh
+            if autoOn and s and SwingOn() then Run(b, s, s) return end   -- still attacking: the next swing
+        elseif repeatOn and WandOn() then
+            Tick()
+            return   -- full: the next shot goes now (and starts it again)
+        end
+        Tick()
+        Fade(b)
+    end
+
+    local function Names(oh)
+        Paint(bars[1], oh and "Main hand" or "Swing", "mh")
+        Paint(bars[2], "Off hand", "oh")
+    end
+    -- the auto-attack started: a swing now (unless the last one's time isn't up yet – then that one goes first)
+    local function StartSwing()
+        if not SwingOn() then return end
+        Build()
+        local mh, oh = Speeds()
+        Names(oh)
+        if mh and not bars[1].ends then Run(bars[1], mh, mh) end
+        if oh and not bars[2].ends then Run(bars[2], oh, oh) end
+    end
+    -- a swing went now (Heroic Strike …), or a cast finished (both hands start over)
+    local function Swung(both)
+        if not (SwingOn() and bars) then return end
+        local mh, oh = Speeds()
+        if mh and (autoOn or bars[1].ends) then Names(oh); Run(bars[1], mh, mh) end
+        if both and oh and (autoOn or bars[2].ends) then Run(bars[2], oh, oh) end
+    end
+    -- haste came or went: the rest of the swing at the new speed
+    local function Rehaste()
+        if not bars then return end
+        local mh, oh = Speeds()
+        local now = GetTime()
+        for i, s in ipairs({ mh or false, oh or false }) do
+            local b = bars[i]
+            if s and b.ends and b.total and math.abs(s - b.total) > 0.01 then
+                Run(b, s, (b.ends - now) * s / b.total)
+            end
+        end
+    end
+    -- you parried: your next swing comes sooner (40 % of the swing, but never under 20 % left)
+    local function Parried()
+        local b = bars and bars[1]
+        if not (b and b.ends and b.total) then return end
+        local left = b.ends - GetTime()
+        local cut = math.min(0.4 * b.total, left - 0.2 * b.total)
+        if cut > 0 then Run(b, b.total, left - cut) end
+    end
+    -- a wand shot / Auto Shot went: the next in your ranged speed
+    local function Shot(kind)
+        if not WandOn() then return end
+        local s = RangedSpeed()
+        if not s then return end
+        Build()
+        Paint(bars[3], kind, kind)
+        Run(bars[3], s, s)
+    end
+
+    local function OnEvent(e, unit, a2, a3)
+        if demo then return end
+        if e == "PLAYER_ENTER_COMBAT" then
+            autoOn = true
+            StartSwing()
+        elseif e == "PLAYER_LEAVE_COMBAT" then
+            autoOn = false
+            for i = 1, 2 do local b = bars and bars[i]; if b and b:IsShown() and not b.ends then Fade(b) end end
+        elseif e == "START_AUTOREPEAT_SPELL" then
+            repeatOn = true
+        elseif e == "STOP_AUTOREPEAT_SPELL" then
+            repeatOn = false
+            local b = bars and bars[3]
+            if b and b:IsShown() and not b.ends then Fade(b) end
+        elseif unit ~= "player" then
+            return
+        elseif e == "UNIT_ATTACK_SPEED" then
+            Rehaste()
+        elseif e == "UNIT_COMBAT" then
+            if Plain(a2) == "PARRY" then Parried() end
+        elseif e == "UNIT_SPELLCAST_START" then
+            local guid = Plain(a2)
+            if guid then
+                if nCasts > 40 then wipe(casts); nCasts = 0 end
+                casts[guid], nCasts = true, nCasts + 1
+            end
+        elseif e == "UNIT_SPELLCAST_FAILED" or e == "UNIT_SPELLCAST_INTERRUPTED" then
+            local guid = Plain(a2)
+            if guid then casts[guid] = nil end
+        elseif e == "UNIT_SPELLCAST_SUCCEEDED" then
+            local guid, id = Plain(a2), Plain(a3)
+            local hadCast = guid and casts[guid]
+            if guid then casts[guid] = nil end
+            local name = SpellName(id)
+            local shot = (id and SHOTS[id]) or (name and SHOT_NAMES[name])
+            if shot then Shot(shot)
+            elseif name and NEXT_SWING[name] then Swung(false)
+            elseif hadCast then Swung(true) end
+        end
+    end
+    local ev = CreateFrame("Frame")
+    for _, e in ipairs({ "PLAYER_ENTER_COMBAT", "PLAYER_LEAVE_COMBAT", "START_AUTOREPEAT_SPELL", "STOP_AUTOREPEAT_SPELL" }) do
+        pcall(ev.RegisterEvent, ev, e)
+    end
+    for _, e in ipairs({ "UNIT_ATTACK_SPEED", "UNIT_COMBAT", "UNIT_SPELLCAST_START", "UNIT_SPELLCAST_SUCCEEDED",
+                         "UNIT_SPELLCAST_FAILED", "UNIT_SPELLCAST_INTERRUPTED" }) do
+        if not pcall(ev.RegisterUnitEvent, ev, e, "player") then pcall(ev.RegisterEvent, ev, e) end
+    end
+    ev:SetScript("OnEvent", function(_, e, ...) ns.Safe("swing timer", OnEvent, e, ...) end)
+
+    -- switched off in Settings: its bars go at once
+    function ns.RefreshSwing()
+        if not bars then return end
+        for i, b in ipairs(bars) do
+            if not (i == 3 and WandOn() or i < 3 and SwingOn()) then
+                if b.timer then b.timer:Cancel(); b.timer = nil end
+                if b.ag then b.ag:Stop() end
+                b.ends, b.example = nil, nil
+                b:Hide()
+            end
+        end
+        Layout()
+        Tick()
+    end
+
+    -- unlocked: an example of each bar that's on, to place it by
+    function ns.SwingMove(on)
+        if on then
+            if not (SwingOn() or WandOn()) then return end
+            Build()
+            local _, oh = Speeds()
+            Names(oh)
+            for i, b in ipairs(bars) do
+                local want = (i == 1 and SwingOn()) or (i == 2 and SwingOn() and oh) or (i == 3 and WandOn())
+                if want and not b.ends then
+                    if i == 3 then Paint(b, "Wand", "Wand") end
+                    b.example = true
+                    b.fadeToken = nil
+                    Place(b, 0.6)
+                    b.spark:Show()
+                    b.left:SetText(i == 3 and "1.6" or "2.6")
+                    b:Show()
+                end
+            end
+            Layout()
+            box:EnableMouse(true)
+            box:EnableMouseWheel(true)
+            label = label or MakeLabel("WatchXSwingLabel")
+            label:Set(box, "|cffffd100Swing & wand timer|r · drag to move · wheel: size (" .. Pct(box:GetScale()) .. ")")
+        elseif box then
+            if box.dragging then box.dragging = nil; box:StopMovingOrSizing() end
+            box:EnableMouse(false)
+            box:EnableMouseWheel(false)
+            if label then label:Hide() end
+            for _, b in ipairs(bars) do
+                if b.example then b.example = nil; b.left:SetText(""); b.spark:Hide(); b:Hide() end
+            end
+            Layout()
+        end
+    end
+
+    -- /wx swing: 12 s of made-up swings (main hand 2.6 s, off hand 1.9 s) and wand shots (1.6 s)
+    function ns.SwingDemo()
+        if moving then ns.StopMove() end
+        Build()
+        local token = {}
+        demo = { mh = 2.6, oh = 1.9, r = 1.6, token = token }
+        autoOn, repeatOn = true, true
+        for _, b in ipairs(bars) do b.ends = nil end
+        StartSwing()
+        Shot("Wand")
+        local shots = C_Timer.NewTicker(1.6, function() if demo and demo.token == token then Shot("Wand") end end)
+        ns.Print("Swing & wand timer: a 12 s test – main hand 2.6 s, off hand 1.9 s, wand 1.6 s. Unlock bars to move it.")
+        C_Timer.After(12, function()
+            shots:Cancel()
+            if not (demo and demo.token == token) then return end
+            autoOn, repeatOn = false, false   -- (each bar fills up once more, then goes)
+            C_Timer.After(4, function() if demo and demo.token == token then demo = nil end end)
+        end)
+    end
+end)() end
 
 -- ---------------------------------------------------------------- export / import (/wx export)
 -- Everything WatchX keeps is for the whole account (all your characters): settings and profiles (and which profile

@@ -4725,6 +4725,8 @@ local function OnSlash(input)
         if ns.ShowExport then ns.ShowExport(cmd == "import") end
     elseif (cmd == "plates" or cmd == "plate" or cmd == "nameplates") and rest == "test" and ns.PlateDemo then
         ns.PlateDemo()
+    elseif (cmd == "swing" or cmd == "wand") and ns.SwingDemo then
+        ns.SwingDemo()
     elseif (cmd == "potion" or cmd == "potions") and ns.AddCustomPotion then
         -- /wx potions: the list · /wx potion add Name: seconds · /wx potion remove Name
         local sub, what = rest:match("^(%S+)%s*(.*)$")
@@ -4801,7 +4803,7 @@ local function OnSlash(input)
         for i = math.max(1, #lines - 24), #lines do DEFAULT_CHAT_FRAME:AddMessage("  " .. lines[i]) end
     else
         Print("Made by " .. ns.AUTHOR .. ". Commands: /wx (settings) | guide | test | add <name> | "
-            .. "remove <name> | profile [name] | enemy | friend | nearby [on|off|test] | xp | buffs [name|test] | avoid [name: note] | wanted [name: reward note] | rares | mem | auras | attack | afk [minutes] | instant | list | mini | quiet | alert | move | lock | unlock | minimap | sound | "
+            .. "remove <name> | profile [name] | enemy | friend | nearby [on|off|test] | xp | buffs [name|test] | swing | avoid [name: note] | wanted [name: reward note] | rares | mem | auras | attack | afk [minutes] | instant | list | mini | quiet | alert | move | lock | unlock | minimap | sound | "
             .. "whisper | dead [name] | "
             .. "respawn <min> [name] | reset | log [previous]")
     end

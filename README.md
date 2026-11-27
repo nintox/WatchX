@@ -43,6 +43,10 @@
 
 - An XP bar with rested and quest XP, XP boosts (rested, XP food, sleeping bag, campfire and tent), and what a camp gave you (Camp Benefits).
 - An eating & drinking timer: time left, where your health / mana ends, a tick for each gain.
+- A swing timer and a wand timer: thin bars mid-screen for your next melee swing (main / off hand) and your next
+  wand shot (a hunter's Auto Shot). The combat log is closed to addons on Forever, so the swing bar runs at your attack
+  speed from the moment you start attacking (haste, parries, Heroic Strike / Cleave / Maul / Raptor Strike and casts
+  keep it in step); the wand bar is exact. `/wx swing` shows a test.
 - Mages: right-click a "Scroll: …" in your bags to cast Comprehend Scroll on it (one click, not the spell and then the
   scroll). Not in a fight, and not while you write a letter.
 - Buff warnings before and when a buff runs out. Profiles for different setups – each character remembers its own.
