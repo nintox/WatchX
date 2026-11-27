@@ -13,9 +13,9 @@ check(ev('WatchXLanding ~= nil and WatchXLanding.name == "WatchX"'), "Options > 
 ex('NS.OpenSettings()')
 check(ev('WatchXSettings and WatchXSettings:IsShown()'), "/wx settings opens WatchX's own window")
 check(ev('WatchXOptions:IsShown() and WatchXOptions:GetParent() ~= UIParent'), "the main page in it")
-tabs = ["main", "alerts", "enemies", "plates", "kos", "avoid", "level", "buffs", "rebuff"]
+tabs = ["main", "alerts", "swing", "enemies", "plates", "kos", "avoid", "level", "buffs", "rebuff"]
 pages = {"main": "WatchXOptions", "enemies": "WatchXNearbyOptions", "plates": "WatchXPlateOptions", "kos": "WatchXKOSOptions",
-         "avoid": "WatchXAvoidOptions", "level": "WatchXLevelOptions", "buffs": "WatchXBuffOptions", "rebuff": "WatchXRebuffOptions"}
+         "avoid": "WatchXAvoidOptions", "level": "WatchXLevelOptions", "buffs": "WatchXBuffOptions", "rebuff": "WatchXRebuffOptions", "swing": "WatchXSwingOptions"}
 for t in tabs:
     ex('NS.OpenWindow("%s")' % t)
     check(ev('NS.SettingsShown()') == t, "page: " + t)
@@ -23,7 +23,7 @@ for t in tabs:
         others = [p for k, p in pages.items() if k != t]
         shown = [p for p in others if ev('%s:IsShown()' % p)]
         check(ev('%s:IsShown()' % pages[t]) and not shown, "  only it is shown " + str(shown))
-check(len(list(ev('WatchXSettings.navButtons').values())) == 9, "nine pages in the list")
+check(len(list(ev('WatchXSettings.navButtons').values())) == 10, "ten pages in the list")
 # the PvP pages work
 ex('NS.OpenNearbySettings("kos"); NS.SetKOS(NS.KeyFromName("Badguy"), true); NS.RefreshKOSChips()')
 check(ev('NS.SettingsShown()') == "kos", "OpenNearbySettings('kos') opens KOS & bounties")

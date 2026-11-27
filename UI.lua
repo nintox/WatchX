@@ -855,7 +855,7 @@ do
     local win, content
     local tabs = {}
     local NAV = {
-        { group = "GENERAL" }, { "main", "WatchX" }, { "alerts", "Alerts & scan" },
+        { group = "GENERAL" }, { "main", "WatchX" }, { "alerts", "Alerts & scan" }, { "swing", "Swing & wand timer" },
         { group = "PVP" }, { "enemies", "Enemies list" }, { "plates", "Nameplates" }, { "kos", "KOS & bounties" },
         { "avoid", "Avoid list" },
         { group = "LEVELING" }, { "level", "XP boosts" }, { "buffs", "Buff warnings" }, { "rebuff", "Rebuff icons" },
@@ -1219,9 +1219,11 @@ local function BuildSettings()
     module("Eating & drinking timer", "time left and how much health / mana you'll get, mid-screen",
         function() return db().eatTimer ~= false end, function(v) db().eatTimer = v; if ns.RefreshEating then ns.RefreshEating() end end)
     module("Swing timer", "your next melee swing, mid-screen  ·  /wx swing to test",
-        function() return db().swingTimer ~= false end, function(v) db().swingTimer = v; if ns.RefreshSwing then ns.RefreshSwing() end end)
+        function() return db().swingTimer ~= false end, function(v) db().swingTimer = v; if ns.RefreshSwing then ns.RefreshSwing() end end,
+        function() ns.OpenSwingSettings() end)
     module("Wand timer", "your next wand shot (a hunter's: Auto Shot)",
-        function() return db().wandTimer ~= false end, function(v) db().wandTimer = v; if ns.RefreshSwing then ns.RefreshSwing() end end)
+        function() return db().wandTimer ~= false end, function(v) db().wandTimer = v; if ns.RefreshSwing then ns.RefreshSwing() end end,
+        function() ns.OpenSwingSettings() end)
     module("Spots on the map", "where to stand for the rares you watch",
         function() return db().mapSpots ~= false end,
         function(v) db().mapSpots = v; ns.Safe("map pins", ns.UpdateMapPins) end)
@@ -1553,6 +1555,7 @@ local function BuildSettings()
     ns.BuildLevelSettings()
     ns.BuildBuffSettings()
     ns.BuildRebuffSettings()
+    if ns.BuildSwingSettings then ns.BuildSwingSettings() end
 end
 
 -- ---------------------------------------------------------------- rare catalogue
@@ -9054,7 +9057,7 @@ do (function()
     local COLORS = { mh = { 1, 0.74, 0.18 }, oh = { 0.92, 0.48, 0.12 }, Wand = { 0.68, 0.48, 1 },
         ["Auto Shot"] = { 0.4, 0.86, 0.35 } }
     local box, label, bars, ticker
-    local autoOn, repeatOn, demo = false, false, nil
+    local autoOn, repeatOn, demo, previewing = false, false, nil, false
     local casts, nCasts = {}, 0   -- the casts with a cast time (by castGUID): finishing one starts the swing over
     local Done, Layout, Tick
     local known = {}   -- the last speeds read plainly (in a fight the game may hide them)
@@ -9068,6 +9071,29 @@ do (function()
     local function Plain(v) if issecretvalue and v ~= nil and issecretvalue(v) then return nil end return v end
     local function SwingOn() return demo ~= nil or (db() and db().swingTimer ~= false) end
     local function WandOn() return demo ~= nil or (db() and db().wandTimer ~= false) end
+    local function OffOn() return demo ~= nil or (db() and db().swingOffhand ~= false) end   -- a bar for the off hand
+    -- your width / height (Settings > Swing & wand timer)
+    -- the frame round each bar: "gold" (WatchX's gold edge, a little outside – like the eating and rebuff icons),
+    -- "thin" (a fine one on the bar), "none"
+    local function FrameStyle()
+        local f = db() and db().swingFrame
+        return (f == "thin" or f == "none") and f or "gold"
+    end
+    ns.SwingFrameStyle = FrameStyle
+    local function Dims()
+        local d = db() or {}
+        GAP = FrameStyle() == "gold" and 8 or 3   -- (room for the gold edges between the bars)
+        BAR_W = math.max(100, math.min(400, math.floor(tonumber(d.swingWidth) or 220)))
+        BAR_H = math.max(8, math.min(30, math.floor(tonumber(d.swingHeight) or 14)))
+        CW = BAR_W - 4
+    end
+    ns.SWING_COLORS = COLORS
+    local function Color(key)
+        local mine = db() and type(db().swingColors) == "table" and db().swingColors[key]
+        if type(mine) == "table" and tonumber(mine[1]) and tonumber(mine[2]) and tonumber(mine[3]) then return mine end
+        return COLORS[key] or COLORS.mh
+    end
+    ns.SwingColor = Color
     local function Speeds()   -- main hand, off hand (nil: none)
         if demo then return demo.mh, demo.oh end
         local ok, mh, oh = pcall(UnitAttackSpeed, "player")
@@ -9112,7 +9138,8 @@ do (function()
         b.mover:SetPoint("LEFT", b.clip, "LEFT", -CW * (1 - frac), 0)
     end
     local function Paint(b, text, key)
-        local c = COLORS[key] or COLORS.mh
+        local c = Color(key)
+        b.colorKey = key
         b.fill:SetVertexColor(c[1], c[2], c[3], 1)
         b.name:SetText(text)
     end
@@ -9144,12 +9171,10 @@ do (function()
             b.slide = b.ag:CreateAnimation("Translation")
             b.ag:SetScript("OnFinished", function() Place(b, 1) end)   -- (it would spring back to where it began)
         end
-        local edge = CreateFrame("Frame", nil, b)
+        local edge = CreateFrame("Frame", nil, b)   -- its frame (Settings: gold, thin or none) and the texts
         edge:SetAllPoints()
         edge:SetFrameLevel((b:GetFrameLevel() or 1) + 4)
-        if Backdrop(edge, { edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", edgeSize = 8 }) then
-            edge:SetBackdropBorderColor(EDGE[1], EDGE[2], EDGE[3], 0.9)
-        end
+        b.edge = edge
         b.name = edge:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
         b.name:SetPoint("LEFT", b, "LEFT", 6, 0)
         b.left = edge:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
@@ -9183,8 +9208,10 @@ do (function()
             if label then label:Set(self, "|cffffd100Swing & wand timer|r · drag to move · wheel: size (" .. Pct(self:GetScale()) .. ")") end
         end)
         box:EnableMouse(false)
+        Dims()
         bars = { MakeBar("mh"), MakeBar("oh"), MakeBar("r") }
         box:Hide()
+        ns.SwingLook()
     end
     ns.SwingBars = function() return bars end   -- (tests)
 
@@ -9225,7 +9252,7 @@ do (function()
         local token = {}
         b.fadeToken = token
         C_Timer.After(0.8, function()
-            if b.fadeToken ~= token or b.ends or (moving and b.example) then return end
+            if b.fadeToken ~= token or b.ends or (b.example and (moving or previewing)) then return end
             b:Hide()
             Layout()
         end)
@@ -9259,7 +9286,7 @@ do (function()
         b.spark:Hide()
         if b.key ~= "r" then
             local mh, oh = Speeds()
-            local s = b.key == "mh" and mh or oh
+            local s = b.key == "mh" and mh or (OffOn() and oh)
             if autoOn and s and SwingOn() then Run(b, s, s) return end   -- still attacking: the next swing
         elseif WandOn() and Repeating() then
             local s = RangedSpeed()   -- still shooting: the next shot (each shot the game shows sets it right)
@@ -9278,6 +9305,7 @@ do (function()
         if not SwingOn() then return end
         Build()
         local mh, oh = Speeds()
+        if not OffOn() then oh = nil end
         Names(oh)
         if mh and not bars[1].ends then Run(bars[1], mh, mh) end
         if oh and not bars[2].ends then Run(bars[2], oh, oh) end
@@ -9286,6 +9314,7 @@ do (function()
     local function Swung(both)
         if not (SwingOn() and bars) then return end
         local mh, oh = Speeds()
+        if not OffOn() then oh = nil end
         if mh and (autoOn or bars[1].ends) then Names(oh); Run(bars[1], mh, mh) end
         if both and oh and (autoOn or bars[2].ends) then Run(bars[2], oh, oh) end
     end
@@ -9394,27 +9423,68 @@ do (function()
         if #log == 0 then P("  nothing yet – attack or shoot something, then /wx swing why") end
     end
 
+    -- the look: your size, colours, texts – on every bar (a running one carries on)
+    function ns.SwingLook()
+        if not box then return end
+        Dims()
+        local d = db() or {}
+        local now = GetTime()
+        box:SetWidth(BAR_W)
+        local style = FrameStyle()
+        for _, b in ipairs(bars) do
+            b:SetSize(BAR_W, BAR_H)
+            b.mover:SetSize(CW, BAR_H - 4)
+            if b.edgeStyle ~= style then
+                b.edgeStyle = style
+                local e = b.edge
+                e:ClearAllPoints()
+                if style == "gold" then
+                    e:SetPoint("TOPLEFT", b, "TOPLEFT", -4, 4); e:SetPoint("BOTTOMRIGHT", b, "BOTTOMRIGHT", 4, -4)
+                else
+                    e:SetAllPoints(b)
+                end
+                if style == "none" then
+                    if e.SetBackdrop then e:SetBackdrop(nil) end
+                elseif Backdrop(e, { edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", edgeSize = style == "gold" and 12 or 8 }) then
+                    e:SetBackdropBorderColor(EDGE[1], EDGE[2], EDGE[3], style == "gold" and 1 or 0.9)
+                end
+            end
+            b.spark:SetSize(16, BAR_H * 2)
+            b.fill:SetTexture(d.swingFlat == true and "Interface\\Buttons\\WHITE8X8" or "Interface\\TargetingFrame\\UI-StatusBar")
+            local font = BAR_H >= 20 and "GameFontHighlight" or "GameFontHighlightSmall"
+            if b.name.SetFontObject then b.name:SetFontObject(font); b.left:SetFontObject(font) end
+            b.name:SetShown(d.swingNames ~= false)
+            b.left:SetShown(d.swingTime ~= false)
+            if b.colorKey then local c = Color(b.colorKey); b.fill:SetVertexColor(c[1], c[2], c[3], 1) end
+            if b.ends and b.total then Run(b, b.total, b.ends - now)
+            else Place(b, b.example and 0.6 or 1) end
+        end
+        Layout()
+    end
+
     -- switched off in Settings: its bars go at once
     function ns.RefreshSwing()
         if not bars then return end
         for i, b in ipairs(bars) do
-            if not (i == 3 and WandOn() or i < 3 and SwingOn()) then
+            if not (i == 3 and WandOn() or i == 1 and SwingOn() or i == 2 and SwingOn() and OffOn()) then
                 if b.timer then b.timer:Cancel(); b.timer = nil end
                 if b.ag then b.ag:Stop() end
                 b.ends, b.example = nil, nil
                 b:Hide()
             end
         end
-        Layout()
+        if moving or previewing then ns.SwingExamples(true, previewing) end
+        ns.SwingLook()
         Tick()
     end
 
-    -- unlocked: an example of each bar that's on, to place it by
-    function ns.SwingMove(on)
+    -- an example of each bar that's on, to place it by (unlocked) or to see your look (the settings page open);
+    -- all: the off hand's too, with one weapon
+    function ns.SwingExamples(on, all)
         if on then
-            if not (SwingOn() or WandOn()) then return end
             Build()
             local _, oh = Speeds()
+            oh = OffOn() and (oh or all) or nil
             Names(oh)
             for i, b in ipairs(bars) do
                 local want = (i == 1 and SwingOn()) or (i == 2 and SwingOn() and oh) or (i == 3 and WandOn())
@@ -9424,11 +9494,31 @@ do (function()
                     b.fadeToken = nil
                     Place(b, 0.6)
                     b.spark:Show()
-                    b.left:SetText(i == 3 and "1.6" or "2.6")
+                    b.left:SetText(i == 3 and "1.6" or i == 2 and "1.9" or "2.6")
                     b:Show()
+                elseif not want and b.example then
+                    b.example = nil; b.spark:Hide(); b:Hide()
                 end
             end
             Layout()
+        elseif bars then
+            for _, b in ipairs(bars) do
+                if b.example then b.example = nil; b.left:SetText(""); b.spark:Hide(); b:Hide() end
+            end
+            Layout()
+        end
+    end
+    function ns.SwingPreview(on)
+        previewing = on and true or false
+        if on then ns.SwingExamples(true, true)
+        elseif moving then ns.SwingExamples(true) else ns.SwingExamples(false) end
+    end
+
+    -- unlocked: drag it, wheel: size
+    function ns.SwingMove(on)
+        if on then
+            if not (SwingOn() or WandOn()) then return end
+            ns.SwingExamples(true, previewing)
             box:EnableMouse(true)
             box:EnableMouseWheel(true)
             label = label or MakeLabel("WatchXSwingLabel")
@@ -9438,11 +9528,168 @@ do (function()
             box:EnableMouse(false)
             box:EnableMouseWheel(false)
             if label then label:Hide() end
-            for _, b in ipairs(bars) do
-                if b.example then b.example = nil; b.left:SetText(""); b.spark:Hide(); b:Hide() end
-            end
-            Layout()
+            ns.SwingExamples(previewing, true)
         end
+    end
+
+    -- Settings > WatchX > Swing & wand timer
+    function ns.OpenSwingSettings() ns.OpenWindow("swing") end
+    function ns.BuildSwingSettings()
+        local page = CreateFrame("Frame", "WatchXSwingOptions", UIParent)
+        page:Hide()
+        local L, CTRL = 20, 200
+        local title = page:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+        title:SetPoint("TOPLEFT", page, "TOPLEFT", 16, -16)
+        title:SetText("Swing & wand timer")
+        local sub = page:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+        sub:SetPoint("LEFT", title, "RIGHT", 10, -1)
+        sub:SetText("your next melee swing and wand shot, mid-screen  ·  the bars show here while this page is open")
+        local y, refresh = -50, {}
+        local function changed() ns.RefreshSwing(); for _, fn in ipairs(refresh) do fn() end end
+        local function heading(text)
+            y = y - 8
+            local h = page:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+            h:SetPoint("TOPLEFT", page, "TOPLEFT", L, y)
+            h:SetText(text)
+            h:SetTextColor(EDGE[1], EDGE[2], EDGE[3])
+            y = y - 22
+        end
+        local function check(label, hint, key, default)
+            local cb = ns.CheckBox(page)
+            cb:SetSize(26, 26)
+            cb:SetPoint("TOPLEFT", page, "TOPLEFT", L - 4, y + 2)
+            local name = page:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+            name:SetPoint("LEFT", cb, "RIGHT", 2, 1)
+            name:SetText(label .. (hint and ("  |cff808080" .. hint .. "|r") or ""))
+            local function get() if default then return db()[key] ~= false end return db()[key] == true end
+            cb:SetScript("OnClick", function(self) db()[key] = self:GetChecked() and true or false; changed() end)
+            refresh[#refresh + 1] = function() cb:SetChecked(get()) end
+            y = y - 28
+        end
+        local function stepper(label, hint, key, default, step, lo, hi, fmt)
+            local lab = page:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+            lab:SetPoint("TOPLEFT", page, "TOPLEFT", L + 4, y - 4)
+            lab:SetText(label)
+            local val = page:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+            local function get() return tonumber(db()[key]) or default end
+            local function go(d)
+                local v = math.max(lo, math.min(hi, get() + d))
+                db()[key] = math.floor(v * 100 + 0.5) / 100
+                if key == "swingScale" and box then box:SetScale(ClampScale(db().swingScale)) end
+                changed()
+            end
+            local minus = FlatButton(page, "-", 24, 20, function() go(-step) end)
+            minus:SetPoint("TOPLEFT", page, "TOPLEFT", CTRL, y - 1)
+            val:SetPoint("LEFT", minus, "RIGHT", 2, 0)
+            val:SetWidth(48)
+            local plus = FlatButton(page, "+", 24, 20, function() go(step) end)
+            plus:SetPoint("LEFT", val, "RIGHT", 2, 0)
+            if hint then
+                local h = page:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+                h:SetPoint("LEFT", plus, "RIGHT", 10, 0)
+                h:SetText(hint)
+            end
+            refresh[#refresh + 1] = function() val:SetText(fmt(get())) end
+            y = y - 27
+        end
+        -- a colour: a swatch to click (the game's colour picker)
+        local function Pick(key)
+            local c = Color(key)
+            local old = { c[1], c[2], c[3] }
+            local function set(r, g, b)
+                db().swingColors = type(db().swingColors) == "table" and db().swingColors or {}
+                db().swingColors[key] = { r, g, b }
+                changed()
+            end
+            local CP = ColorPickerFrame
+            if not CP then return end
+            local function now() local r, g, b = CP:GetColorRGB(); set(r, g, b) end
+            local function cancel() set(old[1], old[2], old[3]) end
+            if CP.SetupColorPickerAndShow then
+                CP:SetupColorPickerAndShow({ r = old[1], g = old[2], b = old[3], hasOpacity = false,
+                    swatchFunc = now, cancelFunc = cancel })
+            else
+                CP.hasOpacity, CP.previousValues = false, { r = old[1], g = old[2], b = old[3] }
+                CP.func, CP.cancelFunc = now, cancel
+                CP:SetColorRGB(old[1], old[2], old[3])
+                CP:Show()
+            end
+        end
+        local function swatch(label, key, x)
+            local b = CreateFrame("Button", nil, page)
+            b:SetSize(44, 18)
+            b:SetPoint("TOPLEFT", page, "TOPLEFT", x + 110, y)
+            local edge = b:CreateTexture(nil, "BACKGROUND")
+            edge:SetAllPoints()
+            edge:SetColorTexture(EDGE[1], EDGE[2], EDGE[3], 0.9)
+            local fill = b:CreateTexture(nil, "ARTWORK")
+            fill:SetPoint("TOPLEFT", 2, -2); fill:SetPoint("BOTTOMRIGHT", -2, 2)
+            local hl = b:CreateTexture(nil, "HIGHLIGHT")
+            hl:SetAllPoints()
+            hl:SetColorTexture(1, 1, 1, 0.2)
+            b:SetScript("OnClick", function() Pick(key) end)
+            b:SetScript("OnEnter", function(self) Tip(self, label, "Click: pick its colour") end)
+            b:SetScript("OnLeave", GameTooltip_Hide)
+            local lab = page:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+            lab:SetPoint("TOPLEFT", page, "TOPLEFT", x + 4, y - 2)
+            lab:SetText(label)
+            refresh[#refresh + 1] = function() local c = Color(key); fill:SetColorTexture(c[1], c[2], c[3], 1) end
+        end
+
+        heading("BARS")
+        check("Swing timer", "your melee swings – one bar with a two-hander", "swingTimer", true)
+        check("Off-hand bar", "a weapon in each hand: a second bar for the off hand", "swingOffhand", true)
+        check("Wand timer", "your wand shots – a hunter's Auto Shot", "wandTimer", true)
+        heading("LOOK")
+        check("Names on the bars", "Swing / Main hand / Off hand / Wand", "swingNames", true)
+        check("Seconds left on the bars", nil, "swingTime", true)
+        check("Flat colour", "off: the game's shiny bar", "swingFlat", false)
+        do
+            local NAMES = { gold = "Gold", thin = "Thin", none = "None" }
+            local NEXT = { gold = "thin", thin = "none", none = "gold" }
+            local lab = page:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+            lab:SetPoint("TOPLEFT", page, "TOPLEFT", L + 4, y - 4)
+            lab:SetText("Frame")
+            local b = FlatButton(page, "", 98, 20)
+            b:SetPoint("TOPLEFT", page, "TOPLEFT", CTRL, y - 1)
+            b:SetScript("OnClick", function() db().swingFrame = NEXT[FrameStyle()]; changed() end)
+            local h = page:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+            h:SetPoint("LEFT", b, "RIGHT", 10, 0)
+            h:SetText("click: gold (like WatchX's icons) · thin · none")
+            refresh[#refresh + 1] = function() SetButtonText(b, NAMES[FrameStyle()] .. "  |cff999999»|r") end
+            y = y - 27
+        end
+        stepper("Width", "normal 220", "swingWidth", 220, 20, 100, 400, function(v) return tostring(math.floor(v)) end)
+        stepper("Height", "normal 14", "swingHeight", 14, 2, 8, 30, function(v) return tostring(math.floor(v)) end)
+        stepper("Size", "or the wheel over it, unlocked", "swingScale", 1, 0.1, 0.6, 3, function(v) return Pct(v) end)
+        heading("COLOURS")
+        swatch("Swing / main", "mh", L); swatch("Off hand", "oh", L + 200); y = y - 26
+        swatch("Wand", "Wand", L); swatch("Auto Shot", "Auto Shot", L + 200); y = y - 30
+        local reset = Button(page, "Normal colours", 130, 22, function() db().swingColors = nil; changed() end)
+        reset:SetPoint("TOPLEFT", page, "TOPLEFT", L, y)
+        local test = Button(page, "Test", 80, 22, function() ns.SwingDemo() end)
+        test:SetPoint("LEFT", reset, "RIGHT", 8, 0)
+        local th = page:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+        th:SetPoint("LEFT", test, "RIGHT", 10, 0)
+        th:SetText("12 s of swings and wand shots  ·  Unlock bars (top) to move it")
+        y = y - 40
+        local help = page:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+        help:SetPoint("TOPLEFT", page, "TOPLEFT", L, y)
+        help:SetWidth(600)
+        help:SetJustifyH("LEFT")
+        help:SetSpacing(4)
+        help:SetText(table.concat({
+            "|cffffd100HOW IT KNOWS|r",
+            "|cffaaaaaa•|r  |cffffd100Wand / Auto Shot|r – each shot starts the bar; it runs at your ranged speed.",
+            "|cffaaaaaa•|r  |cffffd100Melee|r – WoW Forever keeps the combat log from addons, so a swing itself isn't seen: "
+                .. "the bar starts with your auto-attack and runs at your attack speed (haste and parries count). Heroic Strike, "
+                .. "Cleave, Maul and Raptor Strike land with a swing and set it right again, and so does a finished cast.",
+            "|cff808080/wx swing – a test  ·  /wx swing why – what the game told it lately|r",
+        }, "\n"))
+        page:SetScript("OnShow", function() for _, fn in ipairs(refresh) do fn() end; ns.SwingPreview(true) end)
+        page:SetScript("OnHide", function() ns.SwingPreview(false) end)
+        page.contentH = -y + (help:GetStringHeight() or 100) + 40
+        ns.AddTab("swing", page, true)
     end
 
     -- /wx swing: 12 s of made-up swings (main hand 2.6 s, off hand 1.9 s) and wand shots (1.6 s)
