@@ -32,6 +32,8 @@ check(ev('select(1, WatchXComboPoints:GetPoint(1)) == "TOPLEFT" and select(1, Wa
       "as wide as the health bar (both its ends)")
 ex('VALS = {} for i, b in ipairs(WatchXComboPoints.pips) do VALS[i] = b:IsShown() end')
 check(ev('VALS[5] == true and VALS[6] == false'), "five pips (your max)")
+ex('WatchXComboPoints.shine.SetMinMaxValues = function(self, a, b) SH = { a, b } end; fire("UNIT_POWER_UPDATE", "player", "COMBO_POINTS")')
+check(ev('SH and SH[1]') == 4 and ev('SH[2]') == 5, "the shine: a bar from 4 to 5 – lit only when all five are filled")
 ex('CPN = 5; fire("UNIT_POWER_UPDATE", "player", "COMBO_POINTS")')
 check(ev('WatchXComboPoints:IsShown()'), "5: still there (finish him)")
 # a number the game hides in a fight: still shown (the bars fill themselves)

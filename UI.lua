@@ -9729,6 +9729,7 @@ end
 
 -- Combo points (rogues, druids in cat form): a strip under your target's health bar, as wide as it and in the
 -- nameplate's own look (a gold edge, a dark inside), split in one part per combo point – an enemy player or a mob.
+-- Red → orange → green along it; all of them: a pulsing green shine (finisher time).
 -- Each part is a tiny bar from n-1 to n given your combo points: it fills at n. (That works even if the game hides the
 -- number from addons in a fight: a bar may be given a hidden number, it just can't be read.) Gone at 0.
 do
@@ -9759,8 +9760,35 @@ do
             b:Hide()
             holder.pips[i] = b
         end
+        -- full: a green shine over the whole strip, pulsing. It's a bar too (from max-1 to max): it fills – and shows –
+        -- only when every part is filled, so it works with a hidden number as well.
+        holder.shine = CreateFrame("StatusBar", nil, holder)
+        holder.shine:SetPoint("TOPLEFT", holder, "TOPLEFT", -2, 2)
+        holder.shine:SetPoint("BOTTOMRIGHT", holder, "BOTTOMRIGHT", 2, -2)
+        holder.shine:SetStatusBarTexture("Interface\\Buttons\\WHITE8X8")
+        holder.shine:SetStatusBarColor(0.45, 1, 0.35, 0.45)
+        local tex = holder.shine:GetStatusBarTexture()
+        if tex and tex.SetBlendMode then tex:SetBlendMode("ADD") end
+        if holder.shine.CreateAnimationGroup then
+            local ag = holder.shine:CreateAnimationGroup()
+            ag:SetLooping("BOUNCE")
+            local a = ag:CreateAnimation("Alpha")
+            a:SetFromAlpha(1); a:SetToAlpha(0.2); a:SetDuration(0.45)
+            holder:HookScript("OnShow", function() ag:Play() end)
+            holder:HookScript("OnHide", function() ag:Stop() end)
+            ag:Play()
+        end
         holder.edge:SetFrameLevel(holder:GetFrameLevel() + 2)   -- (the edge over the parts)
+        holder.shine:SetFrameLevel(holder:GetFrameLevel() + 3)
         holder:Hide()
+    end
+    -- each part's own colour, by its place: red at the start, orange in the middle, green at the end (finisher time)
+    local STOPS = { { 1, 0.22, 0.12 }, { 1, 0.6, 0.1 }, { 0.35, 0.92, 0.22 } }
+    local function PartColor(i, max)
+        local t = max > 1 and (i - 1) / (max - 1) or 1
+        local a, b, k = STOPS[1], STOPS[2], t * 2
+        if t > 0.5 then a, b, k = STOPS[2], STOPS[3], (t - 0.5) * 2 end
+        return a[1] + (b[1] - a[1]) * k, a[2] + (b[2] - a[2]) * k, a[3] + (b[3] - a[3]) * k
     end
     local function Uses()
         local _, c = UnitClass("player")
@@ -9793,6 +9821,7 @@ do
             holder:SetParent(plate)
             holder:SetFrameLevel((plate:GetFrameLevel() or 0) + 25)
             holder.edge:SetFrameLevel(holder:GetFrameLevel() + 2)
+            holder.shine:SetFrameLevel(holder:GetFrameLevel() + 3)
             holder:ClearAllPoints()   -- as wide as the health bar with its edge, just under it
             holder:SetPoint("TOPLEFT", under, "BOTTOMLEFT", -3, -4)
             holder:SetPoint("TOPRIGHT", under, "BOTTOMRIGHT", 3, -4)
@@ -9800,7 +9829,8 @@ do
         end
         local w = (holder:GetWidth() or 0) > 0 and holder:GetWidth() or ((under:GetWidth() or 100) + 6)
         local part = (w - INSET * 2 - (max - 1) * SEP) / max
-        local full = n and n >= max
+        holder.shine:SetMinMaxValues(max - 1, max)
+        holder.shine:SetValue(cp)
         for i = 1, MAXPIPS do
             local b = holder.pips[i]
             if i <= max then
@@ -9808,7 +9838,7 @@ do
                 b:SetPoint("TOPLEFT", holder, "TOPLEFT", INSET + (i - 1) * (part + SEP), -INSET)
                 b:SetSize(math.max(1, part), STRIP_H - INSET * 2)
                 b:SetValue(cp)
-                if full then b:SetStatusBarColor(1, 0.4, 0.1) else b:SetStatusBarColor(1, 0.78, 0.12) end   -- all of them: finish
+                b:SetStatusBarColor(PartColor(i, max))
                 b:Show()
             else
                 b:Hide()
