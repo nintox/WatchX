@@ -56,6 +56,27 @@ ex('cast("nameplate2", 100); tick(0.3)')
 check(not ev('NS.nearby[key("nameplate2")] and NS.nearby[key("nameplate2")].stance'), "a druid's Charge: no stance")
 ex('NS.db.plateStance = false; NS.RefreshUI(); tick(1.2)')
 check("BERS" not in str(ev('rowText()')), "switched off: not shown")
+# /wx plates test: a made-up potion and stance on your target's plate, a friend's too (friendly icons off)
+ex('''
+NS.db.plateStance = true; NS.db.plateFriendly = false
+ENEMY.nameplate3 = { "Venn", "MAGE" }
+local oCA = UnitCanAttack
+UnitCanAttack = function(a, u) if u == "nameplate3" or u == "target" then return false end return oCA(a, u) end
+local oIU, oG2, oP2, oN2, oC2 = UnitIsUnit, UnitGUID, UnitIsPlayer, UnitName, UnitClass
+UnitIsUnit = function(a, b) if (a == "nameplate3" and b == "target") or (a == "target" and b == "nameplate3") then return true end return oIU(a, b) end
+UnitGUID = function(u) if u == "target" then return "Player-1-Venn" end return oG2(u) end
+UnitIsPlayer = function(u) if u == "target" then return true end return oP2(u) end
+UnitName = function(u) if u == "target" then return "Venn", nil end return oN2(u) end
+fire("NAME_PLATE_UNIT_ADDED", "nameplate3")
+''')
+check(not ev('PF.nameplate3 and PF.nameplate3:IsShown()'), "a friend's plate: no icon (friendly icons off)")
+ex('SlashCmdList.WATCHX("plates test"); tick(0.3)')
+check(ev('PF.nameplate3 and PF.nameplate3:IsShown() and PF.nameplate3.pot and PF.nameplate3.pot:IsShown()'), "/wx plates test: the potion on the friend's plate")
+check(ev('PF.nameplate3.stance and PF.nameplate3.stance:IsShown()'), "and the stance")
+check(not ev('PF.nameplate1.pot:IsShown()'), "not on another player's plate")
+ex('tick(21, 1)')
+check(not ev('PF.nameplate3:IsShown()'), "after 20 s: gone again")
+check(not ev('NS.nearby[key("nameplate3")]'), "the friend isn't put in the Enemies list")
 errs = errors(ev)
 check(len(errs) == 0, "no Lua errors " + (str(errs[0])[:300] if errs else ""))
 print("potions:", "ALL PASSED" if not fails else "%d FAILED" % len(fails))

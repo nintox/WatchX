@@ -4663,6 +4663,8 @@ local function OnSlash(input)
         elseif ns.ShowHistory then ns.ShowHistory("avoid") end
     elseif cmd == "export" or cmd == "import" or cmd == "backup" then
         if ns.ShowExport then ns.ShowExport(cmd == "import") end
+    elseif (cmd == "plates" or cmd == "plate" or cmd == "nameplates") and rest == "test" and ns.PlateDemo then
+        ns.PlateDemo()
     elseif cmd == "scroll" or cmd == "scrolls" or cmd == "comprehend" then
         if ns.ScrollDebug then ns.ScrollDebug() else Print("Scrolls.lua isn't loaded – log out and in again (a /reload doesn't load new files).") end
     elseif cmd == "rebuff" then
