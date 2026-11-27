@@ -23,7 +23,9 @@ end
 function ns.ComprehendSpell()
     for _, id in ipairs(SPELL_IDS) do
         local known = false
-        for _, f in ipairs({ IsPlayerSpell or false, IsSpellKnown or false }) do
+        local SB = C_SpellBook or {}
+        for _, f in ipairs({ SB.IsSpellKnown or false, SB.IsSpellInSpellBook or false, IsPlayerSpell or false,
+                IsSpellKnown or false }) do
             if f then
                 local ok, yes = pcall(f, id)
                 if ok and Plain(yes) == true then known = true break end
@@ -109,8 +111,12 @@ local function Cover(owner)
 end
 
 local saidAt, saidFor   -- (both ways below may see one tooltip: its line once)
+local function Why(text) ns.comprehendWhy = text end
 local function Hover(tip, bag, slot)
-    if tip ~= GameTooltip or not On() or InCombatLockdown() then return end
+    ns.comprehendSeen = (ns.comprehendSeen or 0) + 1
+    if tip ~= GameTooltip then return end
+    if not On() then Why("switched off (Settings > WatchX)") return end
+    if InCombatLockdown() then Why("in a fight") return end
     local owner = tip:GetOwner()
     if btn and owner == btn then bag, slot = btn.bag, btn.slot end
     local key = tostring(owner) .. ":" .. tostring(bag) .. ":" .. tostring(slot)
@@ -122,11 +128,14 @@ local function Hover(tip, bag, slot)
         tip:Show()
         return
     end
-    if not (owner and bag and slot) or WritingMail() then return end
+    if not (owner and bag and slot) then Why("the bag didn't say which slot") return end
+    if WritingMail() then Why("writing a letter") return end
     local spell = ns.ComprehendSpell()
-    if not spell or not ns.IsUnreadScroll(bag, slot) then return end
+    if not spell then Why("Comprehend Scroll isn't in your spellbook") return end
+    if not ns.IsUnreadScroll(bag, slot) then Why(("bag %s slot %s isn't a \"Scroll: …\""):format(tostring(bag), tostring(slot))) return end
     if not btn then Build() end
-    if not Cover(owner) then return end
+    if not Cover(owner) then Why("couldn't find where the bag slot is on screen") return end
+    Why(("ready over bag %d slot %d – right-click"):format(bag, slot))
     btn.bag, btn.slot = bag, slot
     btn:SetAttribute("macrotext2", ("/cast %s\n/use %d %d"):format(spell, bag, slot))
     btn:Show()
@@ -163,4 +172,31 @@ do
     ev:SetScript("OnEvent", function()
         if btn and btn:IsShown() and not InCombatLockdown() then btn:Hide(); btn.bag, btn.slot = nil, nil end
     end)
+end
+
+-- /wx scroll: what the right-click sees (the spell, your scrolls, the last hover)
+function ns.ScrollDebug()
+    local P = ns.Print or print
+    local spell = ns.ComprehendSpell()
+    P("Comprehend Scroll: " .. (spell and ("|cff40ff40known|r (" .. spell .. ")") or "|cffff6060not found in your spellbook|r"))
+    P("Right-click: " .. (On() and "on" or "|cffff6060off|r (Settings > WatchX)"))
+    local n = 0
+    for bag = 0, 5 do
+        local okN, slots = pcall(C_Container.GetContainerNumSlots, bag)
+        for slot = 1, (okN and tonumber(Plain(slots)) or 0) do
+            local ok, info = pcall(C_Container.GetContainerItemInfo, bag, slot)
+            local link = ok and type(info) == "table" and Plain(info.hyperlink)
+            local name = type(link) == "string" and link:match("%[(.-)%]")
+            if type(name) == "string" and name:lower():find("scroll", 1, true) then
+                n = n + 1
+                P(("  bag %d slot %d: %s  %s"):format(bag, slot, name,
+                    ns.IsUnreadScroll(bag, slot) and "|cff40ff40– can be comprehended|r" or "|cff999999– not a \"Scroll: …\"|r"))
+            end
+        end
+    end
+    if n == 0 then P("  No scrolls in your bags.") end
+    P("Tooltips seen: " .. (ns.comprehendSeen or 0) .. (ns.comprehendWhy and (" · last: " .. ns.comprehendWhy) or " · none over a bag yet"))
+    if C_AddOns and C_AddOns.IsAddOnLoaded and C_AddOns.IsAddOnLoaded("MageFamiliar") then
+        P("|cffff8040Mage Familiar is on too|r – both put a button over the scroll. Switch it off.")
+    end
 end

@@ -41,6 +41,13 @@ ex('SendMailFrame:Hide(); local c = InCombatLockdown; InCombatLockdown = functio
 check(not ev('WatchXComprehend:IsShown()'), "in a fight: nothing")
 ex('NS.db.comprehendClick = false; tick(1); hover(0, 3)')
 check(not ev('WatchXComprehend:IsShown()'), "switched off: nothing")
+# /wx scroll: says what it sees
+ex('NS.db.comprehendClick = nil; PRINTED = {}; local p = NS.Print; NS.Print = function(m) table.insert(PRINTED, m) end; NS.ScrollDebug(); NS.Print = p')
+out = str(ev('table.concat(PRINTED, "\\n")'))
+print("    " + out.replace("\n", "\n    "))
+check("known" in out and "Scroll: Arcane Ward" in out and "can be comprehended" in out, "/wx scroll: the spell, your scrolls")
+ex('IsPlayerSpell = function() return false end; C_SpellBook = { IsSpellKnown = function(id) return id == 1309973 end }')
+check(ev('NS.ComprehendSpell()') is not None, "known through C_SpellBook too (IsPlayerSpell saying no)")
 errs = errors(ev)
 check(len(errs) == 0, "no Lua errors " + (str(errs[0])[:300] if errs else ""))
 print("scrolls:", "ALL PASSED" if not fails else "%d FAILED" % len(fails))

@@ -4580,6 +4580,8 @@ local function OnSlash(input)
         elseif ns.ShowHistory then ns.ShowHistory("avoid") end
     elseif cmd == "export" or cmd == "import" or cmd == "backup" then
         if ns.ShowExport then ns.ShowExport(cmd == "import") end
+    elseif cmd == "scroll" or cmd == "scrolls" or cmd == "comprehend" then
+        if ns.ScrollDebug then ns.ScrollDebug() else Print("Scrolls.lua isn't loaded – log out and in again (a /reload doesn't load new files).") end
     elseif cmd == "rebuff" then
         if rest ~= "" and ns.AddRebuff then ns.AddRebuff(rest)
         elseif ns.OpenRebuffSettings then ns.OpenRebuffSettings() end
