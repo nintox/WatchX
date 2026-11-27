@@ -468,7 +468,7 @@ function ns.ShowMenu(anchor, title, items)
         menu:SetFrameStrata("FULLSCREEN_DIALOG")
         menu:SetClampedToScreen(true)
         menu:EnableMouse(true)
-        menu:SetWidth(200)
+        menu:SetWidth(240)
         Flat(menu)
         menu.title = menu:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
         menu.title:SetPoint("TOPLEFT", menu, "TOPLEFT", 10, -8)
@@ -476,30 +476,55 @@ function ns.ShowMenu(anchor, title, items)
         menu.title:SetJustifyH("LEFT")
         menu.title:SetWordWrap(false)
         menu.buttons = {}
+        menu.heads = {}
         tinsert(UISpecialFrames, "WatchXMenu")   -- Esc closes it
         ns.MenuAutoClose(menu)
     end
     menu.anchor = anchor
     menu.title:SetText(title or "")
     local y = -26
-    for i, it in ipairs(items) do
-        local b = menu.buttons[i]
-        if not b then
-            b = MenuRow(menu, 180, function(self)
-                menu:Hide()
-                if self.fn then self.fn() end
-                if ns.RefreshHistory then ns.RefreshHistory() end   -- the list behind it shows the change at once
-            end)
-            menu.buttons[i] = b
+    local bi, hi = 0, 0
+    for _, it in ipairs(items) do
+        if it.head then   -- a small heading with a line: the next group of rows
+            hi = hi + 1
+            local h = menu.heads[hi]
+            if not h then
+                h = menu:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+                h.line = menu:CreateTexture(nil, "ARTWORK")
+                h.line:SetHeight(1)
+                h.line:SetColorTexture(EDGE[1], EDGE[2], EDGE[3], 0.35)
+                menu.heads[hi] = h
+            end
+            h:SetText(it[1] or "")
+            h:ClearAllPoints()
+            h:SetPoint("TOPLEFT", menu, "TOPLEFT", 16, y - 6)
+            h.line:ClearAllPoints()
+            if (it[1] or "") ~= "" then h.line:SetPoint("LEFT", h, "RIGHT", 6, 0)
+            else h.line:SetPoint("LEFT", menu, "TOPLEFT", 16, y - 8) end
+            h.line:SetPoint("RIGHT", menu, "RIGHT", -16, 0)
+            h:Show(); h.line:Show()
+            y = y - ((it[1] or "") ~= "" and 20 or 10)
+        else
+            bi = bi + 1
+            local b = menu.buttons[bi]
+            if not b then
+                b = MenuRow(menu, 220, function(self)
+                    menu:Hide()
+                    if self.fn then self.fn() end
+                    if ns.RefreshHistory then ns.RefreshHistory() end   -- the list behind it shows the change at once
+                end)
+                menu.buttons[bi] = b
+            end
+            b:SetText(it[1])
+            b.fn = it[2]
+            b:ClearAllPoints()
+            b:SetPoint("TOPLEFT", menu, "TOPLEFT", 10, y)
+            b:Show()
+            y = y - 22
         end
-        b:SetText(it[1])
-        b.fn = it[2]
-        b:ClearAllPoints()
-        b:SetPoint("TOPLEFT", menu, "TOPLEFT", 10, y)
-        b:Show()
-        y = y - 23
     end
-    for i = #items + 1, #menu.buttons do menu.buttons[i]:Hide() end
+    for i = bi + 1, #menu.buttons do menu.buttons[i]:Hide() end
+    for i = hi + 1, #menu.heads do menu.heads[i]:Hide(); menu.heads[i].line:Hide() end
     menu:SetHeight(-y + 6)
     menu:ClearAllPoints()
     local aw = (anchor.GetWidth and anchor:GetWidth() or 0) * (anchor.GetEffectiveScale and anchor:GetEffectiveScale() or 1)
@@ -517,31 +542,17 @@ end
 function ns.EnemyMenu(anchor, key)
     local r = ns.db.enemies[key]
     if not r then return end
+    -- whole lines in one colour: red = KOS, orange = avoid, gold = bounty; then where to tell, each in its chat's colour
     local items = {
-        { r.kos and "Remove from KOS" or "|cffff4040Kill on sight (KOS)|r", function() ns.SetKOS(key, not r.kos) end },
-        { r.avoid and "Remove from avoid list" or "|cffff8040Avoid|r – don't play with", function() ns.SetAvoid(key, not r.avoid) end },
+        { r.kos and "|cffff9090Remove from KOS|r" or "|cffff4040Kill on sight (KOS)|r", function() ns.SetKOS(key, not r.kos) end },
     }
-    -- tell your party / guild about this one: who, level, class, guild, KOS / WANTED with the reward, where you are
-    local function Tell(where)
-        local live = ns.nearby and ns.nearby[key]
-        local e = { name = r.name or (live and live.name), class = r.class or (live and live.class),
-            level = r.level or (live and live.level), guild = r.guild or (live and live.guild) }
-        local kind = (r.wanted and ns.WantedState(r.wanted).open) and "wanted" or (r.kos or (live and live.kos)) and "kos"
-            or (live and live.stealth and time() - live.stealth < 60) and "stealth" or "enemy"
-        ns.ShareSpot(e, kind, kind == "wanted" and r.wanted or (kind == "stealth" and live.stealthHow) or nil, where)
-    end
-    items[#items + 1] = { "Announce in |cffffffffsay|r", function() Tell("say") end }
-    if IsInGroup and IsInGroup() then
-        items[#items + 1] = { "Announce in |cffaad4ff" .. ((IsInRaid and IsInRaid()) and "raid" or "party") .. "|r", function() Tell("party") end }
-    end
-    if IsInGuild and IsInGuild() then items[#items + 1] = { "Announce in |cff40ff40guild|r", function() Tell("guild") end } end
-    if ns.ShareFriendNames and #ns.ShareFriendNames() > 0 then
-        items[#items + 1] = { "Whisper to |cffff80ffyour friends|r", function() Tell("friends") end }
-    end
     if r.guild then
         local gk = ns.db.kosGuilds[r.guild:lower()]
-        items[#items + 1] = { (gk and "Guild off KOS: " or "KOS the guild: ") .. r.guild, function() ns.SetGuildKOS(r.guild, not gk) end }
+        items[#items + 1] = { gk and ("|cffff9090Guild off KOS: " .. r.guild .. "|r") or ("|cffff6060KOS the guild: " .. r.guild .. "|r"),
+            function() ns.SetGuildKOS(r.guild, not gk) end }
     end
+    items[#items + 1] = { r.avoid and "|cffffc090Remove from avoid list|r" or "|cffff8040Avoid – don't play with|r",
+        function() ns.SetAvoid(key, not r.avoid) end }
     local mineW = r.wanted and ns.WantedMine(r.wanted)
     if r.wanted and not mineW then
         items[#items + 1] = { "|cff909090Bounty by " .. ((r.wanted.by or "?"):gsub("%-", " ")) .. " – only they can change it|r", nil }
@@ -552,16 +563,41 @@ function ns.EnemyMenu(anchor, key)
             if shown < 3 and not ns.IsMe(e.full) then
                 shown = shown + 1
                 local who = e.full
-                items[#items + 1] = { "|cff40ff40Mark paid|r: " .. (who:gsub("%-", " ")) .. " " .. ns.Money(e.copper)
-                    .. (e.n > 1 and (" (" .. e.n .. " kills)") or ""), function() ns.MarkPaid(key, who) end }
+                items[#items + 1] = { "|cff40ff40Mark paid: " .. (who:gsub("%-", " ")) .. " " .. ns.Money(e.copper)
+                    .. (e.n > 1 and (" (" .. e.n .. " kills)") or "") .. "|r", function() ns.MarkPaid(key, who) end }
             end
         end
         if st.open then items[#items + 1] = { "|cffffa000Edit bounty|r", function() ns.ShowBounty(key) end } end
-        items[#items + 1] = { "Take the bounty down...", function() StaticPopup_Show("WATCHX_TAKEDOWN", r.name, nil, key) end }
+        items[#items + 1] = { "|cffffc860Take the bounty down...|r", function() StaticPopup_Show("WATCHX_TAKEDOWN", r.name, nil, key) end }
     else
-        items[#items + 1] = { "|cffffa000WANTED|r – put a bounty on them", function() ns.ShowBounty(key) end }
+        items[#items + 1] = { "|cffffa000WANTED – put a bounty on them|r", function() ns.ShowBounty(key) end }
     end
     items[#items + 1] = { r.note and "Edit note" or "Add note", function() StaticPopup_Show("WATCHX_NOTE", r.name, nil, key) end }
+
+    -- tell others about this one: who, level, class, guild, KOS / WANTED with the reward, where you are
+    local function Tell(where)
+        local live = ns.nearby and ns.nearby[key]
+        local e = { name = r.name or (live and live.name), class = r.class or (live and live.class),
+            level = r.level or (live and live.level), guild = r.guild or (live and live.guild) }
+        local kind = (r.wanted and ns.WantedState(r.wanted).open) and "wanted" or (r.kos or (live and live.kos)) and "kos"
+            or (live and live.stealth and time() - live.stealth < 60) and "stealth" or "enemy"
+        ns.ShareSpot(e, kind, kind == "wanted" and r.wanted or (kind == "stealth" and live.stealthHow) or nil, where)
+    end
+    items[#items + 1] = { "Announce", head = true }
+    if IsInGroup and IsInGroup() then
+        local raid = IsInRaid and IsInRaid()
+        items[#items + 1] = { raid and "|cffff7f00Raid|r" or "|cffaad4ffParty|r", function() Tell("party") end }
+    end
+    if IsInGuild and IsInGuild() then items[#items + 1] = { "|cff40ff40Guild|r", function() Tell("guild") end } end
+    local fr = ns.ShareFriendNames and ns.ShareFriendNames() or {}
+    if #fr > 0 then
+        items[#items + 1] = { "|cffff80ffWhisper your friends|r  |cff999999(" .. #fr .. ")|r", function() Tell("friends") end }
+    else   -- none yet: where to add them
+        items[#items + 1] = { "|cff9a6a9aWhisper friends – add them...|r", function() ns.OpenNearbySettings("enemies") end }
+    end
+    items[#items + 1] = { "|cffffffffSay|r  |cff999999(people around you)|r", function() Tell("say") end }
+
+    items[#items + 1] = { "", head = true }
     if r.wanted and not ns.WantedMine(r.wanted) and not ns.WantedState(r.wanted).settled then   -- someone else's bounty keeps them here
         items[#items + 1] = { "|cff606060Can't forget – " .. (r.wanted.by or "someone") .. " has a bounty on them|r", nil }
     else
