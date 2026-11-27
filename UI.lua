@@ -7956,8 +7956,12 @@ do (function()
     local have, haveGen, haveAt = {}, nil, 0
     local function ReadHave()
         if haveGen == ns.auraGen and GetTime() - haveAt < 10 then return true end
-        if ns.AurasUnsure and ns.AurasUnsure() then return false end
+        -- a fight (or its first seconds after): not now. "In combat" alone isn't enough to wait for – the game can
+        -- keep you in it a long while after (a mob that won't let go): then the buffs count as long as all of them
+        -- can be read, or the icons would stay as they were until something else changed.
+        if InCombatLockdown() or (ns.combatEnd and GetTime() - ns.combatEnd < 3) then return false end
         local list = ns.ReadBuffs and ns.ReadBuffs() or {}
+        if ns.AurasUnsure and ns.AurasUnsure() and (list.unreadable or #list == 0) then return false end
         wipe(have)
         for _, a in ipairs(list) do if type(a.name) == "string" then have[a.name:lower()] = true end end
         -- one buff whose name is hidden (dungeons have some) doesn't stop the rest: what's missing is then asked

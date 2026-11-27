@@ -42,6 +42,14 @@ ex('local old = InCombatLockdown; InCombatLockdown = function() return true end;
 check(ev('FIGHT') == False, "in a fight: not changed")
 ex('tick(4, 0.5)')
 check(ev('shown()') == "Ice Armor / Frost Armor,Arcane Intellect / Arcane Brilliance", "after it: both missing")
+# "in combat" that lingers (no fight lockdown, the buffs readable): not frozen – Ice Armor cast, its icon goes
+ex('NS.db.rebuffAll = false; AURAS = { A("Arcane Intellect") }; tick(4, 0.5)')
+check(ev('shown()') == "Ice Armor / Frost Armor", "before: Ice Armor missing")
+ex('INFIGHT = true; AURAS = { A("Arcane Intellect"), A("Ice Armor") }; fire("UNIT_AURA", "player"); tick(6, 0.5)')
+check(ev('WatchXRebuff:IsShown()') == False, "still 'in combat' (no fight lockdown), Ice Armor read: its icon gone")
+ex('AURAS = { { spellId = nil, name = nil } }; fire("UNIT_AURA", "player"); tick(6, 0.5)')
+check(ev('WatchXRebuff:IsShown()') == False, "'in combat' with the buffs hidden: left as it is")
+ex('INFIGHT = false; AURAS = { A("Arcane Intellect"), A("Ice Armor") }; fire("UNIT_AURA", "player"); tick(6, 0.5)')
 # one buff whose name the game hides (dungeons): the rest still count, the icons don't freeze as "missing"
 ex('AURAS = { A("Arcane Intellect"), A("Frost Armor"), { expirationTime = 0 } }; NS.auraGen = (NS.auraGen or 0) + 1; NS.RefreshRebuff()')
 check(ev('WatchXRebuff:IsShown()') == False, "a hidden buff beside them: both up, no icons (was stuck on 'missing')")
