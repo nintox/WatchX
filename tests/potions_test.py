@@ -67,6 +67,8 @@ UnitIsUnit = function(a, b) if (a == "nameplate3" and b == "target") or (a == "t
 UnitGUID = function(u) if u == "target" then return "Player-1-Venn" end return oG2(u) end
 UnitIsPlayer = function(u) if u == "target" then return true end return oP2(u) end
 UnitName = function(u) if u == "target" then return "Venn", nil end return oN2(u) end
+local oE2 = UnitExists
+UnitExists = function(u) if u == "target" then return true end return oE2(u) end
 fire("NAME_PLATE_UNIT_ADDED", "nameplate3")
 ''')
 check(not ev('PF.nameplate3 and PF.nameplate3:IsShown()'), "a friend's plate: no icon (friendly icons off)")
@@ -77,6 +79,24 @@ check(not ev('PF.nameplate1.pot:IsShown()'), "not on another player's plate")
 ex('tick(21, 1)')
 check(not ev('PF.nameplate3:IsShown()'), "after 20 s: gone again")
 check(not ev('NS.nearby[key("nameplate3")]'), "the friend isn't put in the Enemies list")
+# ... and on a mob
+ex('''
+MOB = CreateFrame("Frame", nil, UIParent)
+local gp = C_NamePlate.GetNamePlateForUnit
+C_NamePlate.GetNamePlateForUnit = function(u) if u == "nameplate4" or u == "target" then return MOB end return gp(u) end
+local oE3, oIU3, oG3, oP3, oN3 = UnitExists, UnitIsUnit, UnitGUID, UnitIsPlayer, UnitName
+UnitExists = function(u) if u == "nameplate4" or u == "target" then return true end return oE3(u) end
+UnitIsPlayer = function(u) if u == "nameplate4" or u == "target" then return false end return oP3(u) end
+UnitGUID = function(u) if u == "nameplate4" or u == "target" then return "Creature-0-1-2-3-1234-0001" end return oG3(u) end
+UnitName = function(u) if u == "target" then return "Kobold Miner", nil end return oN3(u) end
+fire("NAME_PLATE_UNIT_ADDED", "nameplate4")
+''')
+check(not ev('PF.nameplate4 and PF.nameplate4:IsShown()'), "a mob's plate: no icon")
+ex('CHATLINES = {}; SlashCmdList.WATCHX("plates test"); tick(0.3)')
+check(ev('PF.nameplate4 and PF.nameplate4:IsShown() and PF.nameplate4.pot:IsShown() and PF.nameplate4.stance:IsShown()'), "/wx plates test on a mob: icon, potion and stance")
+check(not ev('PF.nameplate4.heal:IsShown()'), "no healer mark on the mob")
+ex('tick(21, 1)')
+check(not ev('PF.nameplate4:IsShown()'), "the mob's: gone after 20 s")
 errs = errors(ev)
 check(len(errs) == 0, "no Lua errors " + (str(errs[0])[:300] if errs else ""))
 print("potions:", "ALL PASSED" if not fails else "%d FAILED" % len(fails))

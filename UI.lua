@@ -2574,7 +2574,7 @@ function ns.BuildNearbySettings()
     note("Seen when they drink or switch: the potion is a spell they cast. A stance also shows from an ability only it "
         .. "allows (Overpower, Shield Wall, Whirlwind …), and out of combat from the warrior's stance buff.")
     y = y - 34
-    note("|cffffd100/wx plates test|r – a test potion and stance on your target's nameplate (a friend works).")
+    note("|cffffd100/wx plates test|r – a test potion and stance on your target's nameplate (a mob or a friend works).")
     y = y - 20
 
     -- ===== KOS & bounties
@@ -8980,12 +8980,16 @@ local function UpdatePlate(unit, fresh)
             if type(class) == "string" then coords = (CLASS_ICON_TCOORDS and CLASS_ICON_TCOORDS[class]) or CLASS_COORDS[class] end
         end
     end
+    local isPlayer = coords ~= nil
+    if not coords and ns.PlateDemoFor(unit) then   -- (/wx plates test on a mob: a stand-in icon)
+        coords = (CLASS_ICON_TCOORDS and CLASS_ICON_TCOORDS.WARRIOR) or CLASS_COORDS.WARRIOR
+    end
     local f = plateIcons[plate]
     if not coords then
         if f then f:Hide() end
         return
     end
-    if fresh and d.plateHealer ~= false then
+    if fresh and isPlayer and d.plateHealer ~= false then
         ns.Safe("role auras", ns.ScanRoleAuras, unit)
         if friendly then ns.Safe("inspect", ns.MaybeInspect, unit) end
     end
@@ -9009,7 +9013,7 @@ local function UpdatePlate(unit, fresh)
     f.kosRing:SetShown(kos)
     f.skull:SetShown(kos)
     f.class:SetTexCoord(coords[1], coords[2], coords[3], coords[4])
-    f.heal:SetShown(d.plateHealer ~= false and ns.IsHealer(ns.PlayerKey(unit), unit) == true)
+    f.heal:SetShown(isPlayer and d.plateHealer ~= false and ns.IsHealer(ns.PlayerKey(unit), unit) == true)
     if hostile and fresh and d.plateStance ~= false then ns.Safe("stance", ns.ScanStance, unit) end
     ns.PaintPlateExtras(f, unit, hostile)
     f:Show()
@@ -9066,7 +9070,8 @@ function ns.PaintPlateExtras(f, unit, hostile)
     end
 end
 -- /wx plates test: a made-up potion (Free Action, 20 s) and stance (Defensive) on your target's nameplate – to see
--- where they go. Any player works, a friend too (their class icon is shown for it even if friendly icons are off).
+-- where they go. Anyone with a nameplate works: a mob (a stand-in class icon), a friend (shown even if friendly icons
+-- are off).
 function ns.PlateDemoFor(unit)
     local p = ns.plateDemo
     if not (p and p.potion.untilT > GetTime() and type(unit) == "string") then return nil end
@@ -9076,8 +9081,8 @@ function ns.PlateDemoFor(unit)
 end
 function ns.PlateDemo()
     local P = ns.Print or print
-    if Readable(UnitIsPlayer("target")) ~= true or Readable(UnitIsUnit("target", "player")) == true then
-        P("Target another player first (a friend works) with their nameplate showing, then /wx plates test.")
+    if Readable(UnitExists("target")) ~= true or Readable(UnitIsUnit("target", "player")) == true then
+        P("Target someone first (a mob or a friend works) with a nameplate showing, then /wx plates test.")
         return
     end
     local now, dur = GetTime(), 20
@@ -9092,7 +9097,7 @@ function ns.PlateDemo()
         P("|cffff8040Potions or stances are switched off|r (Settings > Nameplates) – those aren't shown.")
     end
     if C_NamePlate and C_NamePlate.GetNamePlateForUnit and not C_NamePlate.GetNamePlateForUnit("target") then
-        P("|cffff8040No nameplate on your target|r – switch friendly nameplates on (Shift+V) to see it.")
+        P("|cffff8040No nameplate on your target|r – switch nameplates on (V for enemies, Shift+V for friends).")
     end
 end
 
