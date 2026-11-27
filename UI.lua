@@ -8007,7 +8007,7 @@ do (function()
         wipe(have)
         for _, a in ipairs(list) do if type(a.name) == "string" then have[a.name:lower()] = true end end
         -- one buff whose name is hidden (dungeons have some) doesn't stop the rest: what's missing is then asked
-        -- for by name (HaveByName), and a line nobody can answer for isn't nagged about
+        -- for by name (HaveByName); only its "yes" counts then, and a line nobody can say yes to isn't nagged about
         have.partial = list.unreadable and true or nil
         haveGen, haveAt = ns.auraGen, GetTime()
         return true
@@ -8086,7 +8086,9 @@ do (function()
                         for _, n in ipairs(names) do
                             local by = HaveByName(n)
                             if by == true then got = true break end
-                            if by == nil and have.partial then unsure = true end
+                            -- with buffs hidden (dungeons) the game's "no" isn't to be trusted either (it says
+                            -- no to ones you have): only a "yes" counts then, the rest isn't nagged about
+                            if by ~= true and have.partial then unsure = true end
                         end
                     end
                     local pick = #names > 1 and ns.RebuffCastPick(line) or nil
