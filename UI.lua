@@ -9738,7 +9738,7 @@ end
 
 -- Combo points (rogues, druids in cat form): a strip under your target's health bar, as wide as it and in the
 -- nameplate's own look (a gold edge, a dark inside), split in one part per combo point – an enemy player or a mob.
--- Red → orange → green along it; all of them: a pulsing green shine (finisher time).
+-- Red → orange → green along it; all of them: a sparkle on the last, green one (finisher time).
 -- Each part is a tiny bar from n-1 to n given your combo points: it fills at n. (That works even if the game hides the
 -- number from addons in a fight: a bar may be given a hidden number, it just can't be read.) Gone at 0.
 do
@@ -9766,30 +9766,37 @@ do
             local empty = b:CreateTexture(nil, "BACKGROUND")
             empty:SetAllPoints()
             empty:SetColorTexture(0.22, 0.17, 0.08, 0.9)
+            -- the last part, when it fills: a sparkle twinkling on it. It sits in a frame as big as the part's fill
+            -- that cuts off what's outside it: an empty part has no fill, so no sparkle (with a hidden number too)
+            local fill = b:GetStatusBarTexture()
+            local clip = CreateFrame("Frame", nil, b)
+            if fill and clip.SetClipsChildren and pcall(clip.SetClipsChildren, clip, true) then
+                clip:SetPoint("TOPLEFT", fill, "TOPLEFT")
+                clip:SetPoint("BOTTOMRIGHT", fill, "BOTTOMRIGHT")
+                clip:SetFrameLevel(b:GetFrameLevel() + 1)
+                local spark = clip:CreateTexture(nil, "OVERLAY")
+                spark:SetTexture("Interface\\Cooldown\\star4")
+                spark:SetBlendMode("ADD")
+                spark:SetVertexColor(1, 1, 0.85, 1)
+                spark:SetPoint("CENTER", b, "CENTER", 0, 0)
+                if spark.CreateAnimationGroup then
+                    local ag = spark:CreateAnimationGroup()
+                    ag:SetLooping("REPEAT")
+                    local turn = ag:CreateAnimation("Rotation")
+                    turn:SetDegrees(-180); turn:SetDuration(1.6)
+                    local tw = ag:CreateAnimation("Alpha")
+                    tw:SetFromAlpha(1); tw:SetToAlpha(0.25); tw:SetDuration(0.4)
+                    local tw2 = ag:CreateAnimation("Alpha")
+                    tw2:SetFromAlpha(0.25); tw2:SetToAlpha(1); tw2:SetDuration(0.4); tw2:SetStartDelay(0.4)
+                    ag:Play()
+                    b.sparkAnim = ag
+                end
+                b.spark, b.clip = spark, clip
+            end
             b:Hide()
             holder.pips[i] = b
         end
-        -- full: a green glow round the strip, pulsing – behind it, so only a soft ring shows outside its edge (the
-        -- parts keep their colours). It's a bar too (from max-1 to max): it fills – and shows – only when every part
-        -- is filled, so it works with a hidden number as well.
-        holder.shine = CreateFrame("StatusBar", nil, holder)
-        holder.shine:SetPoint("TOPLEFT", holder, "TOPLEFT", -4, 4)
-        holder.shine:SetPoint("BOTTOMRIGHT", holder, "BOTTOMRIGHT", 4, -4)
-        holder.shine:SetStatusBarTexture("Interface\\Buttons\\WHITE8X8")
-        holder.shine:SetStatusBarColor(0.4, 1, 0.3, 0.55)
-        local tex = holder.shine:GetStatusBarTexture()
-        if tex and tex.SetBlendMode then tex:SetBlendMode("ADD") end
-        if holder.shine.CreateAnimationGroup then
-            local ag = holder.shine:CreateAnimationGroup()
-            ag:SetLooping("BOUNCE")
-            local a = ag:CreateAnimation("Alpha")
-            a:SetFromAlpha(1); a:SetToAlpha(0.25); a:SetDuration(0.55)
-            holder:HookScript("OnShow", function() ag:Play() end)
-            holder:HookScript("OnHide", function() ag:Stop() end)
-            ag:Play()
-        end
         holder.edge:SetFrameLevel(holder:GetFrameLevel() + 2)   -- (the edge over the parts)
-        holder.shine:SetFrameLevel(math.max(0, holder:GetFrameLevel() - 1))   -- (behind the strip: a ring round it)
         holder:Hide()
     end
     -- each part's own colour, by its place: red at the start, orange in the middle, green at the end (finisher time)
@@ -9831,7 +9838,6 @@ do
             holder:SetParent(plate)
             holder:SetFrameLevel((plate:GetFrameLevel() or 0) + 25)
             holder.edge:SetFrameLevel(holder:GetFrameLevel() + 2)
-            holder.shine:SetFrameLevel(math.max(0, holder:GetFrameLevel() - 1))
             holder:ClearAllPoints()   -- as wide as the health bar with its edge, just under it
             holder:SetPoint("TOPLEFT", under, "BOTTOMLEFT", -3, -4)
             holder:SetPoint("TOPRIGHT", under, "BOTTOMRIGHT", 3, -4)
@@ -9839,8 +9845,6 @@ do
         end
         local w = (holder:GetWidth() or 0) > 0 and holder:GetWidth() or ((under:GetWidth() or 100) + 6)
         local part = (w - INSET * 2 - (max - 1) * SEP) / max
-        holder.shine:SetMinMaxValues(max - 1, max)
-        holder.shine:SetValue(cp)
         for i = 1, MAXPIPS do
             local b = holder.pips[i]
             if i <= max then
@@ -9849,6 +9853,11 @@ do
                 b:SetSize(math.max(1, part), STRIP_H - INSET * 2)
                 b:SetValue(cp)
                 b:SetStatusBarColor(PartColor(i, max))
+                if b.clip then   -- the sparkle: only on the last one
+                    b.clip:SetShown(i == max)
+                    local h = STRIP_H - INSET * 2
+                    b.spark:SetSize(h * 2.6, h * 2.6)
+                end
                 b:Show()
             else
                 b:Hide()
