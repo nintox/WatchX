@@ -12,7 +12,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: sudo apt-get update -qq && sudo apt-get install -y -qq lua5.1
-      - run: luac5.1 -p WatchX.lua UI.lua Data/Rares.lua
+      - run: luac5.1 -p WatchX.lua UI.lua Scrolls.lua Data/Rares.lua
 
   bridge-windows:
     runs-on: windows-latest

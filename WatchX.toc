@@ -19,3 +19,4 @@ Libs/HereBeDragons/HereBeDragons-Pins-2.0.lua
 Data/Rares.lua
 WatchX.lua
 UI.lua
+Scrolls.lua

@@ -1178,6 +1178,8 @@ local function BuildSettings()
     module("Buff warnings", "before and when a buff runs out",
         function() return db().buffWarn ~= false end, function(v) db().buffWarn = v end,
         function() ns.OpenBuffSettings() end)
+    module("Right-click scrolls (mage)", "a \"Scroll: …\" in your bags: right-click casts Comprehend Scroll on it",
+        function() return db().comprehendClick ~= false end, function(v) db().comprehendClick = v end)
     module("Eating & drinking timer", "time left and how much health / mana you'll get, mid-screen",
         function() return db().eatTimer ~= false end, function(v) db().eatTimer = v; if ns.RefreshEating then ns.RefreshEating() end end)
     module("Spots on the map", "where to stand for the rares you watch",
