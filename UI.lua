@@ -6122,7 +6122,8 @@ end
             blizz.sb = sb
             blizz.done = Seg(sb, "ARTWORK", 1, 0.5, 0.05, 0.75)  -- finished quests: orange
             blizz.todo = Seg(sb, "ARTWORK", 1, 0.82, 0, 0.2)     -- unfinished ones
-            blizz.done:SetDrawLayer("ARTWORK", 7); blizz.todo:SetDrawLayer("ARTWORK", 6)
+            blizz.rest = Seg(sb, "ARTWORK", 0.1, 0.3, 0.75, 0.9) -- rested: on top of the quests (it comes first)
+            blizz.todo:SetDrawLayer("ARTWORK", 5); blizz.done:SetDrawLayer("ARTWORK", 6); blizz.rest:SetDrawLayer("ARTWORK", 7)
             for _, fr in ipairs({ bar, sb, cont }) do
                 if fr and fr.HookScript then
                     pcall(fr.HookScript, fr, "OnEnter", function(self) ns.Safe("xp bar", BlizzTip, self) end)
@@ -6130,12 +6131,13 @@ end
             end
         end
         local on = d and db().blizzXPBar ~= false and sb:IsVisible()
-        if not on then blizz.done:Hide(); blizz.todo:Hide() return end
+        if not on then blizz.done:Hide(); blizz.todo:Hide(); blizz.rest:Hide() return end
         local w = sb:GetWidth() or 0
         if w <= 0 then return end
         local function X(v) return math.min(w, math.max(0, v / d.max * w)) end
         Place(blizz.done, X(d.cur), X(d.cur + quests.done), sb)
         Place(blizz.todo, X(d.cur + quests.done), X(d.cur + quests.done + quests.todo), sb)
+        Place(blizz.rest, X(d.cur), X(d.cur + d.rested), sb)
     end
 
     local function Build()
@@ -6157,10 +6159,11 @@ end
         local back = f.bar:CreateTexture(nil, "BACKGROUND")
         back:SetAllPoints()
         back:SetColorTexture(0.08, 0.06, 0.04, 0.9)
-        f.rest = Seg(f.bar, "BORDER", 0.0, 0.25, 0.6, 0.6)       -- rested: the darker blue
+        f.rest = Seg(f.bar, "ARTWORK", 0.1, 0.3, 0.75, 0.9)       -- rested: the darker blue, on top of the quests
         f.todo = Seg(f.bar, "ARTWORK", 1, 0.82, 0, 0.18)          -- unfinished quests
         f.done = Seg(f.bar, "ARTWORK", 1, 0.5, 0.05, 0.7)         -- finished quests: orange
         f.cur = Seg(f.bar, "ARTWORK", XP_RESTED[1], XP_RESTED[2], XP_RESTED[3], 1)   -- your XP
+        f.rest:SetDrawLayer("ARTWORK", 1)
         f.cur:SetDrawLayer("ARTWORK", 2)
         f.ticks = Ticks(f.bar, "ARTWORK")
         for _, t in ipairs(f.ticks) do t:SetDrawLayer("ARTWORK", 3) end
