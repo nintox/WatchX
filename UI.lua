@@ -9760,38 +9760,65 @@ do
         holder.pips = {}
         for i = 1, MAXPIPS do
             local b = CreateFrame("StatusBar", nil, holder)
-            b:SetStatusBarTexture("Interface\\TargetingFrame\\UI-StatusBar")   -- (the nameplate bar's own sheen)
+            b:SetStatusBarTexture("Interface\\Buttons\\WHITE8X8")   -- (clear colours; the gloss below gives it depth)
             b:SetStatusBarColor(1, 0.78, 0.12)
             b:SetMinMaxValues(i - 1, i)
             local empty = b:CreateTexture(nil, "BACKGROUND")
             empty:SetAllPoints()
-            empty:SetColorTexture(0.22, 0.17, 0.08, 0.9)
-            -- the last part, when it fills: a sparkle twinkling on it. It sits in a frame as big as the part's fill
-            -- that cuts off what's outside it: an empty part has no fill, so no sparkle (with a hidden number too)
+            empty:SetColorTexture(0.16, 0.12, 0.07, 0.95)
             local fill = b:GetStatusBarTexture()
+            -- a gloss on the filled part: light on its top half, a little shade on the bottom (none on an empty one)
+            if fill then
+                local gloss = b:CreateTexture(nil, "ARTWORK", nil, 3)
+                gloss:SetPoint("TOPLEFT", fill, "TOPLEFT")
+                gloss:SetPoint("BOTTOMRIGHT", fill, "RIGHT")
+                gloss:SetColorTexture(1, 1, 1, 0.3)
+                local shade = b:CreateTexture(nil, "ARTWORK", nil, 3)
+                shade:SetPoint("TOPLEFT", fill, "LEFT")
+                shade:SetPoint("BOTTOMRIGHT", fill, "BOTTOMRIGHT")
+                shade:SetColorTexture(0, 0, 0, 0.18)
+            end
+            -- the last part, when it fills: it flashes bright and three sparkles twinkle on it, reaching a little above
+            -- and below the strip. They sit in a frame as wide as the part's fill that cuts off what's outside it: an
+            -- empty part has no fill, so nothing shows (with a hidden number too).
             local clip = CreateFrame("Frame", nil, b)
             if fill and clip.SetClipsChildren and pcall(clip.SetClipsChildren, clip, true) then
-                clip:SetPoint("TOPLEFT", fill, "TOPLEFT")
-                clip:SetPoint("BOTTOMRIGHT", fill, "BOTTOMRIGHT")
-                clip:SetFrameLevel(b:GetFrameLevel() + 1)
-                local spark = clip:CreateTexture(nil, "OVERLAY")
-                spark:SetTexture("Interface\\Cooldown\\star4")
-                spark:SetBlendMode("ADD")
-                spark:SetVertexColor(1, 1, 0.85, 1)
-                spark:SetPoint("CENTER", b, "CENTER", 0, 0)
-                if spark.CreateAnimationGroup then
-                    local ag = spark:CreateAnimationGroup()
-                    ag:SetLooping("REPEAT")
-                    local turn = ag:CreateAnimation("Rotation")
-                    turn:SetDegrees(-180); turn:SetDuration(1.6)
-                    local tw = ag:CreateAnimation("Alpha")
-                    tw:SetFromAlpha(1); tw:SetToAlpha(0.25); tw:SetDuration(0.4)
-                    local tw2 = ag:CreateAnimation("Alpha")
-                    tw2:SetFromAlpha(0.25); tw2:SetToAlpha(1); tw2:SetDuration(0.4); tw2:SetStartDelay(0.4)
+                clip:SetPoint("TOPLEFT", fill, "TOPLEFT", 0, 9)
+                clip:SetPoint("BOTTOMRIGHT", fill, "BOTTOMRIGHT", 0, -9)
+                clip:SetFrameLevel(b:GetFrameLevel() + 3)
+                local flash = clip:CreateTexture(nil, "ARTWORK")
+                flash:SetAllPoints(b)
+                flash:SetColorTexture(0.7, 1, 0.55, 1)
+                flash:SetBlendMode("ADD")
+                if flash.CreateAnimationGroup then
+                    local ag = flash:CreateAnimationGroup()
+                    ag:SetLooping("BOUNCE")
+                    local a = ag:CreateAnimation("Alpha")
+                    a:SetFromAlpha(0.05); a:SetToAlpha(0.75); a:SetDuration(0.5)
                     ag:Play()
-                    b.sparkAnim = ag
                 end
-                b.spark, b.clip = spark, clip
+                b.sparks = {}
+                for k, spot in ipairs({ { 0.22, 1.9, 1.3, 0 }, { 0.55, 2.6, 1.7, 0.35 }, { 0.85, 2.1, 1.1, 0.6 } }) do
+                    local spark = clip:CreateTexture(nil, "OVERLAY")
+                    spark:SetTexture("Interface\\Cooldown\\star4")
+                    spark:SetBlendMode("ADD")
+                    spark:SetVertexColor(1, 1, 0.8, 1)
+                    spark.spot = spot
+                    if spark.CreateAnimationGroup then
+                        local ag = spark:CreateAnimationGroup()
+                        ag:SetLooping("REPEAT")
+                        local turn = ag:CreateAnimation("Rotation")
+                        turn:SetDegrees(k % 2 == 0 and 180 or -180); turn:SetDuration(spot[3])
+                        local out = ag:CreateAnimation("Alpha")
+                        out:SetFromAlpha(1); out:SetToAlpha(0.1); out:SetDuration(spot[3] / 2); out:SetStartDelay(spot[4] * spot[3] / 2)
+                        local back = ag:CreateAnimation("Alpha")
+                        back:SetFromAlpha(0.1); back:SetToAlpha(1); back:SetDuration(spot[3] / 2)
+                        back:SetStartDelay(spot[4] * spot[3] / 2 + spot[3] / 2)
+                        ag:Play()
+                    end
+                    b.sparks[k] = spark
+                end
+                b.clip = clip
             end
             b:Hide()
             holder.pips[i] = b
@@ -9800,11 +9827,13 @@ do
         holder:Hide()
     end
     -- each part's own colour, by its place: red at the start, orange in the middle, green at the end (finisher time)
-    local STOPS = { { 1, 0.22, 0.12 }, { 1, 0.6, 0.1 }, { 0.35, 0.92, 0.22 } }
+    -- clear, bright colours: red, orange, yellow, green
+    local STOPS = { { 1, 0.12, 0.08 }, { 1, 0.5, 0 }, { 1, 0.9, 0.05 }, { 0.15, 1, 0.2 } }
     local function PartColor(i, max)
         local t = max > 1 and (i - 1) / (max - 1) or 1
-        local a, b, k = STOPS[1], STOPS[2], t * 2
-        if t > 0.5 then a, b, k = STOPS[2], STOPS[3], (t - 0.5) * 2 end
+        local seg = math.min(#STOPS - 1, math.floor(t * (#STOPS - 1)) + 1)
+        local k = t * (#STOPS - 1) - (seg - 1)
+        local a, b = STOPS[seg], STOPS[seg + 1]
         return a[1] + (b[1] - a[1]) * k, a[2] + (b[2] - a[2]) * k, a[3] + (b[3] - a[3]) * k
     end
     local function Uses()
@@ -9853,10 +9882,16 @@ do
                 b:SetSize(math.max(1, part), STRIP_H - INSET * 2)
                 b:SetValue(cp)
                 b:SetStatusBarColor(PartColor(i, max))
-                if b.clip then   -- the sparkle: only on the last one
+                if b.clip then   -- the flash and the sparkles: only on the last one
                     b.clip:SetShown(i == max)
-                    local h = STRIP_H - INSET * 2
-                    b.spark:SetSize(h * 2.6, h * 2.6)
+                    if i == max then
+                        local h = STRIP_H - INSET * 2
+                        for _, sp in ipairs(b.sparks) do
+                            sp:SetSize(h * sp.spot[2] * 1.6, h * sp.spot[2] * 1.6)
+                            sp:ClearAllPoints()
+                            sp:SetPoint("CENTER", b, "LEFT", math.max(1, part) * sp.spot[1], 0)
+                        end
+                    end
                 end
                 b:Show()
             else
