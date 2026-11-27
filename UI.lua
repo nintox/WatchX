@@ -6046,15 +6046,15 @@ end
     local function Key(r, g, b)
         return ("|TInterface\\Buttons\\WHITE8X8:10:10:0:0:8:8:0:8:0:8:%d:%d:%d|t "):format(r * 255, g * 255, b * 255)
     end
-    local function ShowXPTip(owner, d, settingsLine)
-        if not d then return end
-        local pct = d.cur / d.max * 100
+    -- the lines (the game's own XP bar has its own level and XP lines: only the rest is added there)
+    local function XPTipLines(d, short)
         local withDone = math.min(100, (d.cur + quests.done) / d.max * 100)
-        local xc = d.rested > 0 and XP_RESTED or XP_NORMAL
-        GameTooltip:SetOwner(owner, "ANCHOR_TOP")
-        GameTooltip:AddDoubleLine("Level " .. d.level, ("%.1f%%"):format(pct), 1, 0.82, 0, 1, 1, 1)
-        GameTooltip:AddDoubleLine(Key(xc[1], xc[2], xc[3]) .. "XP", Num(d.cur) .. " / " .. Num(d.max) .. "  |cffaaaaaa(" .. Num(d.max - d.cur) .. " to go)|r",
-            1, 1, 1, 1, 1, 1)
+        if not short then
+            local xc = d.rested > 0 and XP_RESTED or XP_NORMAL
+            GameTooltip:AddDoubleLine("Level " .. d.level, ("%.1f%%"):format(d.cur / d.max * 100), 1, 0.82, 0, 1, 1, 1)
+            GameTooltip:AddDoubleLine(Key(xc[1], xc[2], xc[3]) .. "XP", Num(d.cur) .. " / " .. Num(d.max) .. "  |cffaaaaaa(" .. Num(d.max - d.cur) .. " to go)|r",
+                1, 1, 1, 1, 1, 1)
+        end
         if d.rested > 0 then
             GameTooltip:AddDoubleLine(Key(0.0, 0.25, 0.6) .. "Rested |cffaaaaaa– double XP from kills|r", Num(d.rested)
                 .. ("  |cffaaaaaa(%.0f%%)|r"):format(d.rested / d.max * 100), 0.5, 0.75, 1, 1, 1, 1)
@@ -6069,12 +6069,73 @@ end
         GameTooltip:AddDoubleLine(session.reset and "Since you reset" or "This session", "+" .. Num(session.xp) .. " XP  |cffaaaaaain " .. Dur(time() - session.start) .. "|r", 0.7, 0.7, 0.7, 1, 1, 1)
         GameTooltip:AddDoubleLine("XP an hour", d.rate and Num(d.rate) or "–", 0.7, 0.7, 0.7, 1, 1, 1)
         GameTooltip:AddDoubleLine("Next level in", d.rate and ("|cff40ff40" .. Dur((d.max - d.cur) / d.rate * 3600) .. "|r") or "|cffaaaaaa– after your first kill|r", 0.7, 0.7, 0.7, 1, 1, 1)
+    end
+    local function ShowXPTip(owner, d, settingsLine)
+        if not d then return end
+        GameTooltip:SetOwner(owner, "ANCHOR_TOP")
+        XPTipLines(d)
         if settingsLine then
             GameTooltip:AddLine(" ")
             GameTooltip:AddLine("|cffffd100Shift-click:|r count XP an hour again from now (farming)", 0.8, 0.8, 0.8)
             GameTooltip:AddLine("|cffffd100Right-click:|r settings", 0.8, 0.8, 0.8)
         end
         GameTooltip:Show()
+    end
+
+    -- The game's own XP bar (at the bottom): the same quest colours on it – ready to hand in, in progress – and
+    -- WatchX's lines under its tooltip. Its textures on that bar; nothing of the game's is moved or replaced.
+    local blizz = { data = nil }
+    local function BlizzXPBar()
+        local M = StatusTrackingBarManager
+        for _, cont in pairs(M and type(M.barContainers) == "table" and M.barContainers or {}) do
+            for _, bar in pairs(type(cont) == "table" and type(cont.bars) == "table" and cont.bars or {}) do
+                if type(bar) == "table" and type(rawget(bar, "StatusBar")) == "table"
+                        and ((ExpBarMixin and bar.Update == ExpBarMixin.Update)
+                        or type(rawget(bar, "ExhaustionTick")) == "table" or type(rawget(bar, "ExhaustionLevelFillBar")) == "table") then
+                    return bar, bar.StatusBar, cont
+                end
+            end
+        end
+        if MainMenuExpBar then return MainMenuExpBar, MainMenuExpBar end   -- (the classic one)
+    end
+    ns.BlizzXPBar = BlizzXPBar
+    function ns.BlizzXPBarSegs() return blizz end   -- (tests)
+    local function BlizzTip(owner)
+        local d = blizz.data
+        if not d or db().blizzXPBar == false then return end
+        if GameTooltip.watchxXP == GetTime() then return end   -- (the bar and its parts may all say "entered")
+        GameTooltip.watchxXP = GetTime()
+        if not GameTooltip:IsShown() or GameTooltip:GetOwner() ~= owner then
+            GameTooltip:SetOwner(owner, "ANCHOR_TOP")
+            XPTipLines(d)
+        else
+            GameTooltip:AddLine(" ")
+            GameTooltip:AddLine("WatchX", ACCENT[1], ACCENT[2], ACCENT[3])
+            XPTipLines(d, true)
+        end
+        GameTooltip:Show()
+    end
+    local function PaintBlizz(d)
+        local bar, sb, cont = BlizzXPBar()
+        if not sb then return end
+        if not blizz.sb or blizz.sb ~= sb then
+            blizz.sb = sb
+            blizz.done = Seg(sb, "ARTWORK", 1, 0.82, 0, 0.55)    -- finished quests
+            blizz.todo = Seg(sb, "ARTWORK", 1, 0.82, 0, 0.2)     -- unfinished ones
+            blizz.done:SetDrawLayer("ARTWORK", 7); blizz.todo:SetDrawLayer("ARTWORK", 6)
+            for _, fr in ipairs({ bar, sb, cont }) do
+                if fr and fr.HookScript then
+                    pcall(fr.HookScript, fr, "OnEnter", function(self) ns.Safe("xp bar", BlizzTip, self) end)
+                end
+            end
+        end
+        local on = d and db().blizzXPBar ~= false and sb:IsVisible()
+        if not on then blizz.done:Hide(); blizz.todo:Hide() return end
+        local w = sb:GetWidth() or 0
+        if w <= 0 then return end
+        local function X(v) return math.min(w, math.max(0, v / d.max * w)) end
+        Place(blizz.done, X(d.cur), X(d.cur + quests.done), sb)
+        Place(blizz.todo, X(d.cur + quests.done), X(d.cur + quests.done + quests.todo), sb)
     end
 
     local function Build()
@@ -6220,8 +6281,11 @@ end
             end
             if xbLabel then xbLabel:Hide() end
         end
-        if not show then
+        local leveling = level > 0 and level < (ns.MaxLevel and ns.MaxLevel() or 60)
+        if not (show or (leveling and d.blizzXPBar ~= false)) then
             HideOwn()
+            blizz.data = nil
+            ns.Safe("xp bar", PaintBlizz, nil)
             return
         end
         local cur, max = N(UnitXP("player")) or 0, N(UnitXPMax("player")) or 1
@@ -6232,6 +6296,12 @@ end
         local spent = now - session.start
         local rate = (session.xp > 0 and spent > 60) and (session.xp / spent * 3600) or nil
         local data = { level = level, cur = cur, max = max, rested = rested, rate = rate }
+        blizz.data = leveling and data or nil
+        ns.Safe("xp bar", PaintBlizz, blizz.data)   -- (the game's own XP bar)
+        if not show then
+            HideOwn()
+            return
+        end
         if not xb then xb = Build() end
         local compact = d.xpBarAttach ~= false
         Layout(compact)
@@ -7120,6 +7190,8 @@ function ns.BuildLevelSettings()
     check("XP bar between the mini bar and the Enemies list", "just level and %, same width – the rest when you hover it",
         function() return db().xpBarAttach ~= false end,
         function(v) db().xpBarAttach = v; ns.RefreshXPBar(); if ns.AttachNearby then ns.AttachNearby() end end)
+    check("Quests on the game's XP bar", "the one at the bottom: ready to hand in (gold), in progress (faint) – and WatchX's lines when you hover it",
+        function() return db().blizzXPBar ~= false end, function(v) db().blizzXPBar = v; ns.RefreshXPBar() end)
     check("XP an hour on the XP bar", "Shift-click the bar: count again from now (to see what a farming spot gives)",
         function() return db().xpRateOnBar ~= false end, function(v) db().xpRateOnBar = v; ns.RefreshXPBar() end)
     check("Hide in combat", "the icons (the XP bar stays)",
