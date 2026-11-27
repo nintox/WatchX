@@ -5412,6 +5412,20 @@ local function BuildLevel()
         local hl = b:CreateTexture(nil, "HIGHLIGHT")
         hl:SetAllPoints()
         hl:SetColorTexture(1, 1, 1, 0.15)
+        -- the item's cooldown: the game's own shade sweeping round (drawn by the game, no Lua each frame); the
+        -- numbers stay ours, on a layer above it
+        local okCd, cdf = pcall(CreateFrame, "Cooldown", nil, b, "CooldownFrameTemplate")
+        if okCd and cdf then
+            cdf:SetAllPoints(b.icon)
+            if cdf.SetHideCountdownNumbers then cdf:SetHideCountdownNumbers(true) end
+            if cdf.SetDrawEdge then cdf:SetDrawEdge(false) end
+            cdf:SetFrameLevel(b:GetFrameLevel() + 1)
+            b.cd = cdf
+            local top = CreateFrame("Frame", nil, b)
+            top:SetAllPoints(b)
+            top:SetFrameLevel(b:GetFrameLevel() + 2)
+            for _, r in ipairs({ b.dim, b.timer, b.count, b.badge }) do r:SetParent(top) end
+        end
         b:SetScript("OnEnter", function(self) ns.Safe("xp tooltip", function(s) OpenLevelMenu(s); LevelIconTip(s) end, self) end)
         b:SetScript("OnLeave", GameTooltip_Hide)
         b:SetScript("PostClick", function(self, button)
@@ -5581,6 +5595,13 @@ local function PaintLevelIcon(b, r)
     b.count:SetText(r.count or "")
     b.timerCol = nil   -- (a new row: its colour is set again)
     ns.PaintLevelTimer(b, r)
+    if b.cd then   -- the item's cooldown, set once per new one
+        local key = (r.cdStart and r.cdDur) and (r.cdStart .. "/" .. r.cdDur) or nil
+        if key ~= b.cdKey then
+            b.cdKey = key
+            if key then b.cd:SetCooldown(r.cdStart, r.cdDur) elseif b.cd.Clear then b.cd:Clear() else b.cd:SetCooldown(0, 0) end
+        end
+    end
     b.flashing = r.state == "todo"
     local pulse = b.flashing and db().levelFlash ~= false and not moving
     for _, ag in ipairs(b.pulses or {}) do

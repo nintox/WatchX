@@ -1525,13 +1525,57 @@ local function ItemName(id, fallback)
     return type(n) == "string" and n or fallback
 end
 
+-- An item's cooldown: start and duration, or nil when it's ready. Every way the client may have is asked (one of
+-- them alone showed nothing on Forever): the item's, its bag slot's, and its Use: spell's – the longest wins.
+-- Kept a second (it's asked on every refresh, and the bag slots are only looked through when the rest say nothing).
+do   -- (its own block: the main chunk is at Lua's 200-locals limit)
+local cdCache = {}
+local function CdPair(a, b)
+    if type(a) == "table" then return tonumber(Plain(a.startTime or a.start)), tonumber(Plain(a.duration)) end
+    return tonumber(Plain(a)), tonumber(Plain(b))
+end
+function ns.ItemCooldown(id)
+    local now = GetTime()
+    local c = cdCache[id]
+    if c and now - c.at < 1 then
+        if c.s and c.s + c.d > now then return c.s, c.d end
+        return nil
+    end
+    local bs, bd, bend = nil, nil, now
+    local function try(f, ...)
+        if type(f) ~= "function" then return end
+        local ok, a, b = pcall(f, ...)
+        if not ok then return end
+        local st, du = CdPair(a, b)
+        -- (1.5 s or less = the global cooldown)
+        if st and du and st > 0 and du > 1.5 and st + du > bend then bs, bd, bend = st, du, st + du end
+    end
+    try(C_Item and C_Item.GetItemCooldown, id)
+    try(C_Container and C_Container.GetItemCooldown, id)
+    try(GetItemCooldown, id)
+    local getSpell = (C_Item and C_Item.GetItemSpell) or GetItemSpell
+    if getSpell then
+        local ok, _, sid = pcall(getSpell, id)
+        sid = ok and tonumber(Plain(sid))
+        if sid then try(C_Spell and C_Spell.GetSpellCooldown, sid); try(GetSpellCooldown, sid) end
+    end
+    local CC = C_Container
+    if not bs and CC and CC.GetContainerItemCooldown and CC.GetContainerNumSlots and ns.SlotItem then
+        for bag = 0, 4 do
+            local okN, n = pcall(CC.GetContainerNumSlots, bag)
+            for slot = 1, (okN and tonumber(Plain(n)) or 0) do
+                if ns.SlotItem(bag, slot) == id then try(CC.GetContainerItemCooldown, bag, slot) break end
+            end
+            if bs then break end
+        end
+    end
+    cdCache[id] = { at = now, s = bs, d = bd }
+    return bs, bd
+end
+end
 local function ItemCooldownLeft(id)
-    local f = (C_Container and C_Container.GetItemCooldown) or GetItemCooldown
-    if not f then return 0 end
-    local ok, start, dur = pcall(f, id)
-    start, dur = ok and tonumber(Plain(start)), ok and tonumber(Plain(dur))
-    if not (start and dur) or start == 0 or dur <= 1.5 then return 0 end   -- 1.5 s = the global cooldown
-    return math.max(0, start + dur - GetTime())
+    local st, du = ns.ItemCooldown(id)
+    return st and math.max(0, st + du - GetTime()) or 0
 end
 
 -- Does a buff's text say it gives XP? (true / false / nil = can't tell). Set below, with the tooltip helpers.
@@ -2457,14 +2501,23 @@ ComputeLevelStatus = function()
         how = " You can make one with " .. use.craft.prof .. (use.craft.can > 0 and (" (reagents for " .. use.craft.can .. ")")
             or (use.craft.missing ~= "" and (" – missing " .. use.craft.missing) or "")) .. ". Click: open " .. use.craft.prof .. "."
     elseif use then how = " Click: " .. use.name .. (near and " (there's a campfire close by)." or ".") end
+    -- the camp feature (they share one hour) or the fire you'd put down: on cooldown?
+    local cdItem = (feat and not feat.craft and feat) or (use and not use.craft and use) or nil
+    local cs, cd = nil, nil
+    if cdItem then cs, cd = ns.ItemCooldown(cdItem.id) end
+    local cdLeft = cs and math.max(0, cs + cd - GetTime()) or 0
     if boost then
         add("wait", "Boosted Rest – you can use another tent when it's gone.", tentTip, boost.left)
+    elseif cdLeft > 0 and pct < 5 then
+        add("wait", cdItem.name .. " is on cooldown – ready again when the clock runs out (camp features share one hour).",
+            tentTip, cdLeft)
     elseif pct < 5 then
         add("todo", "Your rested is under 5%." .. ((tents > 0 or (use and use.craft)) and how or " You have no Camp Tent."), tentTip, nil, tents)
     else
         add("ok", ("Not needed – you have %d%% rested."):format(math.floor(pct + 0.5)) .. how, tentTip)
     end
     rows[#rows].picks, rows[#rows].fireNear = picks, near
+    rows[#rows].cdStart, rows[#rows].cdDur = cs, cd   -- (the swipe on the icon)
 
     -- Well Fed, and XP food in your bags
     local food, foodName, foodID, foods = foodCache[1], foodCache[2], foodCache[3], foodCache[4]
@@ -2517,6 +2570,8 @@ ComputeLevelStatus = function()
     options = {}
     if bags > 0 then options[1] = { id = SLEEPING_BAG, name = ItemName(SLEEPING_BAG, "Cozy Sleeping Bag"), count = bags, toy = toy } end
     use = options[1]
+    local bagS, bagD = nil, nil
+    if bags > 0 then bagS, bagD = ns.ItemCooldown(SLEEPING_BAG) end
     if wr then
         local st = math.max(1, math.min(3, wr.stacks))
         icon = ItemIcon(SLEEPING_BAG) or SpellIcon(WELL_RESTED) or icon   -- the bag, not the buff
@@ -2524,11 +2579,15 @@ ComputeLevelStatus = function()
         local renew = st >= 3 and bags > 0 and wr.left and wr.left < 6900 and ItemCooldownLeft(SLEEPING_BAG) <= 0
         add((st >= 3 and not renew) and "ok" or "wait", ("Well-Rested %d/3: +%d%% XP."):format(st, st)
             .. (st < 3 and " Keep lying on the bag for the full +3%." or "")
-            .. (renew and " |cffffd100The bag is ready: lie on it again to set the timer back to 2 hours.|r" or ""), bagTip, wr.left, st)
+            .. (renew and " |cffffd100The bag is ready: lie on it again to set the timer back to 2 hours.|r" or "")
+            .. ((not renew and bagS) and ("\nThe bag is on cooldown – the shade on the icon shows when it's ready.") or ""),
+            bagTip, wr.left, st)
+        rows[#rows].cdStart, rows[#rows].cdDur = bagS, bagD
     elseif bags > 0 then
         local cd = ItemCooldownLeft(SLEEPING_BAG)
         seen.bagCd = cd > 0 or nil
         if cd > 0 then add("wait", "On cooldown – ready again when the clock runs out.", bagTip, cd)
+            rows[#rows].cdStart, rows[#rows].cdDur = bagS, bagD
         else add("todo", "Ready – lie on it for 3 minutes.", bagTip) end
     elseif level >= 14 then
         add("info", "You don't have one yet – a quest chain from level 14.", bagTip .. "\n\nThe chain starts at Alexston "

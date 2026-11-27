@@ -63,6 +63,27 @@ ex('for i = 1, 130 do tick(1, 1); NS.RefreshLevel() end')
 t2 = str(ev('bagIcon() and bagIcon().timer.__text'))
 print("    bag clock:", t1, "->", t2)
 check(t1 == "58m" and t2 == "56m", "the bag's clock counts down: " + t1 + " -> " + t2)
+# cooldowns: only C_Item's call knows them (the container one says 0 on Forever) – the bag and the Fish Bowl
+# show theirs, as a clock and as the game's shade on the icon
+ex(r"""
+CDS = { [211527] = { T - 600, 3600 }, [279967] = { T - 1200, 3600 } }
+C_Item.GetItemCooldown = function(id) local c = CDS[id] if c then return c[1], c[2], 1 end return 0, 0, 1 end
+C_Item.GetItemCount = function(id) return (id == 211527 or id == 279967) and 1 or 0 end; GetItemCount = C_Item.GetItemCount
+GetXPExhaustion = function() return 0 end; fire("UPDATE_EXHAUSTION")
+AURAS = {}; NS.bagsDirty = true; if NS.OnBagsChanged then NS.OnBagsChanged() end; fire("BAG_UPDATE_DELAYED")
+""")
+b = ev('row("bag")')
+print("    bag:", b and b.state, b and b.timer)
+check(b and b.state == "wait" and b.timer and 2900 < b.timer < 3100, "the bag on cooldown: waiting, about 50 min")
+t = ev('row("tent")')
+print("    tent:", t and t.state, str(t and t.text)[:80], t and t.timer)
+check(t and t.state == "wait" and "279967 is on cooldown" in str(t.text) and t.timer and 2300 < t.timer < 2500, "the Fish Bowl on cooldown: its clock")
+check(t and t.cdStart and t.cdDur == 3600, "and the shade's start and length")
+ex('NS.RefreshLevel(); function tentIcon() for _, b in ipairs(NS.levelFrame.icons) do if b.row and b.row.slot == "tent" and b:IsShown() then return b end end end')
+check(ev('tentIcon() ~= nil and tentIcon().cdKey ~= nil'), "the shade is set on the icon")
+ex('CDS = {}; tick(2, 1)')
+t = ev('row("tent")')
+check(t and t.state != "wait" and not t.cdStart, "ready again: no clock, no shade")
 errs = errors(ev)
 check(len(errs) == 0, "no Lua errors " + (str(errs[0])[:300] if errs else ""))
 print("camp:", "ALL PASSED" if not fails else "%d FAILED" % len(fails))
