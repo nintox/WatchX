@@ -5940,7 +5940,7 @@ function ns.ApplyLevelLayout()
 end
 
 -- ---------------------------------------------------------------- XP bar (until max level)
--- Under the XP boosts icons: your XP with rested, finished quests (orange) and unfinished ones (yellow) on the
+-- Under the XP boosts icons: your XP with rested, finished quests (orange) and unfinished ones (faint gold) on the
 -- bar, time this level and this session, XP an hour and when you'll level. A plain frame: shows in combat too.
 -- Its own function (not a do-block): UI.lua's main chunk is close to Lua's 200-locals limit.
 (function()
@@ -6061,8 +6061,8 @@ end
         else
             GameTooltip:AddDoubleLine(Key(0.25, 0.25, 0.25) .. "Rested", "none", 0.6, 0.6, 0.6, 0.6, 0.6, 0.6)
         end
-        GameTooltip:AddDoubleLine(Key(1, 0.82, 0) .. "Ready to hand in", (quests.done > 0 and ("+" .. Num(quests.done) .. ("  |cffaaaaaa= %.1f%%|r"):format(withDone)) or "none"),
-            1, 0.82, 0, 1, 1, 1)
+        GameTooltip:AddDoubleLine(Key(1, 0.5, 0.05) .. "Ready to hand in", (quests.done > 0 and ("+" .. Num(quests.done) .. ("  |cffaaaaaa= %.1f%%|r"):format(withDone)) or "none"),
+            1, 0.6, 0.2, 1, 1, 1)
         GameTooltip:AddDoubleLine(Key(0.55, 0.47, 0.2) .. "Quests in progress", quests.todo > 0 and Num(quests.todo) or "none", 0.8, 0.7, 0.4, 1, 1, 1)
         GameTooltip:AddLine(" ")
         GameTooltip:AddDoubleLine("Time this level", played.level and Dur(played.level + time() - played.at) or "–", 0.7, 0.7, 0.7, 1, 1, 1)
@@ -6083,7 +6083,7 @@ end
     end
 
     -- The game's own XP bar (at the bottom): the same quest colours on it – ready to hand in, in progress – and
-    -- WatchX's lines under its tooltip. Its textures on that bar; nothing of the game's is moved or replaced.
+    -- WatchX's lines under its tooltip (ready: orange, in progress: faint gold). Its textures on that bar; nothing of the game's is moved or replaced.
     local blizz = { data = nil }
     local function BlizzXPBar()
         local M = StatusTrackingBarManager
@@ -6120,7 +6120,7 @@ end
         if not sb then return end
         if not blizz.sb or blizz.sb ~= sb then
             blizz.sb = sb
-            blizz.done = Seg(sb, "ARTWORK", 1, 0.82, 0, 0.55)    -- finished quests
+            blizz.done = Seg(sb, "ARTWORK", 1, 0.5, 0.05, 0.75)  -- finished quests: orange
             blizz.todo = Seg(sb, "ARTWORK", 1, 0.82, 0, 0.2)     -- unfinished ones
             blizz.done:SetDrawLayer("ARTWORK", 7); blizz.todo:SetDrawLayer("ARTWORK", 6)
             for _, fr in ipairs({ bar, sb, cont }) do
@@ -6159,7 +6159,7 @@ end
         back:SetColorTexture(0.08, 0.06, 0.04, 0.9)
         f.rest = Seg(f.bar, "BORDER", 0.0, 0.25, 0.6, 0.6)       -- rested: the darker blue
         f.todo = Seg(f.bar, "ARTWORK", 1, 0.82, 0, 0.18)          -- unfinished quests
-        f.done = Seg(f.bar, "ARTWORK", 1, 0.82, 0, 0.5)           -- finished quests
+        f.done = Seg(f.bar, "ARTWORK", 1, 0.5, 0.05, 0.7)         -- finished quests: orange
         f.cur = Seg(f.bar, "ARTWORK", XP_RESTED[1], XP_RESTED[2], XP_RESTED[3], 1)   -- your XP
         f.cur:SetDrawLayer("ARTWORK", 2)
         f.ticks = Ticks(f.bar, "ARTWORK")
@@ -6331,7 +6331,7 @@ end
         xb.top2:SetText("Session: |cffffd100" .. Dur(spent) .. "|r  ·  +" .. Num(session.xp) .. " XP"
             .. (rate and ("  ·  " .. Num(rate) .. "/h") or ""))
         xb.bot1:SetText("Level in: |cffffd100" .. (rate and Dur((max - cur) / rate * 3600) or "–") .. "|r")
-        xb.bot2:SetText(("|cffffd100Done %s|r  ·  |cffbfa060Quests %s|r  ·  |cff80b8ffRested %s (%.0f%%)|r"):format(
+        xb.bot2:SetText(("|cffff9a33Done %s|r  ·  |cffbfa060Quests %s|r  ·  |cff80b8ffRested %s (%.0f%%)|r"):format(
             Num(quests.done), Num(quests.todo), Num(rested), rested / max * 100))
         xb:EnableMouse(true)
         xb:Show()
