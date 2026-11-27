@@ -542,7 +542,7 @@ end
 function ns.EnemyMenu(anchor, key)
     local r = ns.db.enemies[key]
     if not r then return end
-    -- whole lines in one colour: red = KOS, orange = avoid, gold = bounty; then where to tell, each in its chat's colour
+    -- whole lines in one colour: red = KOS, gold = bounty, orange = avoid (last); then where to tell, each in its chat's colour
     local items = {
         { r.kos and "|cffff9090Remove from KOS|r" or "|cffff4040Kill on sight (KOS)|r", function() ns.SetKOS(key, not r.kos) end },
     }
@@ -551,8 +551,6 @@ function ns.EnemyMenu(anchor, key)
         items[#items + 1] = { gk and ("|cffff9090Guild off KOS: " .. r.guild .. "|r") or ("|cffff6060KOS the guild: " .. r.guild .. "|r"),
             function() ns.SetGuildKOS(r.guild, not gk) end }
     end
-    items[#items + 1] = { r.avoid and "|cffffc090Remove from avoid list|r" or "|cffff8040Avoid – don't play with|r",
-        function() ns.SetAvoid(key, not r.avoid) end }
     local mineW = r.wanted and ns.WantedMine(r.wanted)
     if r.wanted and not mineW then
         items[#items + 1] = { "|cff909090Bounty by " .. ((r.wanted.by or "?"):gsub("%-", " ")) .. " – only they can change it|r", nil }
@@ -573,6 +571,8 @@ function ns.EnemyMenu(anchor, key)
         items[#items + 1] = { "|cffffa000WANTED – put a bounty on them|r", function() ns.ShowBounty(key) end }
     end
     items[#items + 1] = { r.note and "Edit note" or "Add note", function() StaticPopup_Show("WATCHX_NOTE", r.name, nil, key) end }
+    items[#items + 1] = { r.avoid and "|cffffc090Remove from avoid list|r" or "|cffff8040Avoid – don't play with|r",
+        function() ns.SetAvoid(key, not r.avoid) end }
 
     -- tell others about this one: who, level, class, guild, KOS / WANTED with the reward, where you are
     local function Tell(where)

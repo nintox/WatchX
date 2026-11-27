@@ -95,12 +95,12 @@ check("WHISPER>Ann|WatchX: Kill on sight – [Bram Stonefist]" in str(ev('said()
 ex('NS.db.enemies["Bram-X"].zone, NS.db.enemies["Bram-X"].pos = "Arathi Highlands", "45,62"')
 check(ev('NS.WhereSeen(NS.db.enemies["Bram-X"])') == "Arathi Highlands 45,62", "last seen: zone and coordinates")
 check(ev('NS.Coords()') == "45,62", "your spot: 45,62")
-# the menu's order: the player first (KOS, the guild, avoid, bounty, note), then "Announce" (party, guild, friends,
+# the menu's order: the player first (KOS, the guild, bounty, note, avoid last), then "Announce" (party, guild, friends,
 # say – each in its chat's colour), forget last
 ex('NS.EnemyMenu(UIParent, "Bram-X")')
 rows = ev('(function() local t = {} for _, b in ipairs(WatchXMenu.buttons) do if b:IsShown() then t[#t + 1] = tostring(b:GetText()):gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "") end end return table.concat(t, " / ") end)()')
 print("    menu:", rows)
-order = [rows.find(x) for x in ("KOS", "KOS the guild", "Avoid", "WANTED", "note", "Party", "Guild", "friends", "Say", "Forget")]
+order = [rows.find(x) for x in ("KOS", "KOS the guild", "WANTED", "note", "Avoid", "Party", "Guild", "friends", "Say", "Forget")]
 check(all(i >= 0 for i in order) and order == sorted(order), "menu order: player things, then announce (say last), forget at the end")
 check(ev('WatchXMenu.heads[1]:IsShown() and WatchXMenu.heads[1]:GetText() == "Announce"'), "an 'Announce' heading over where to tell")
 errs = errors(ev)
