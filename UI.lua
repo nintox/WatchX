@@ -3558,7 +3558,8 @@ local function BuildNearby()
     f.news:SetPoint("RIGHT", f.count, "LEFT", -6, 0)
     -- ms and fps, once a second (two cheap calls): green / yellow / red by how good it is
     f.stats = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    f.stats:SetPoint("CENTER", f, "TOP", 0, -13)
+    f.stats:SetJustifyH("CENTER")   -- (in the middle of the room between the title and the coin / the count)
+    if f.stats.SetWordWrap then f.stats:SetWordWrap(false) end
     -- a timer, not a check every frame; nothing to do while the list is hidden
     local function Stats()
         local self = f
@@ -3569,11 +3570,23 @@ local function BuildNearby()
         local fps = math.floor((tonumber(GetFramerate()) or 0) + 0.5)
         local mc = ms < 100 and "|cff40ff40" or ms < 250 and "|cffffd100" or "|cffff4040"
         local fc = fps >= 50 and "|cff40ff40" or fps >= 25 and "|cffffd100" or "|cffff4040"
-        self.stats:SetText(mc .. ms .. "|r|cff999999ms|r  " .. fc .. fps .. "|r|cff999999fps|r")
-        -- no room in the middle (a narrow list): left out rather than written over the title or the count
-        local tr, sl, sr = self.title:GetRight(), self.stats:GetLeft(), self.stats:GetRight()
-        local right = (self.news:IsShown() and self.news:GetLeft()) or self.count:GetLeft()
-        if (tr and sl and sl < tr + 4) or (right and sr and sr > right - 4) then self.stats:SetText("") end
+        -- between the title and the coin (when it shows) or the count, in the middle of that room
+        local right = self.news:IsShown() and self.news or self.count
+        if self.statsRight ~= right then
+            self.statsRight = right
+            self.stats:ClearAllPoints()
+            self.stats:SetPoint("LEFT", self.title, "RIGHT", 6, 0)
+            self.stats:SetPoint("RIGHT", right, "LEFT", -6, 0)
+        end
+        -- not room for it all (a narrow list): shorter, then just the fps, then nothing – never over the title
+        local room = self.stats:GetWidth() or 0
+        for _, t in ipairs({ mc .. ms .. "|r|cff999999ms|r  " .. fc .. fps .. "|r|cff999999fps|r",
+                             mc .. ms .. "|r " .. fc .. fps .. "|r|cff999999fps|r", fc .. fps .. "|r|cff999999fps|r", "" }) do
+            self.stats:SetText(t)
+            local st = self.stats
+            local w = (st.GetUnboundedStringWidth and st:GetUnboundedStringWidth()) or st:GetStringWidth() or 0   -- (its whole width)
+            if t == "" or w <= room then break end
+        end
     end
     if C_Timer and C_Timer.NewTicker then C_Timer.NewTicker(1, function() ns.Safe("nearby stats", Stats) end) end
     f:HookScript("OnShow", function() ns.Safe("nearby stats", Stats) end)   -- right away when it comes up
