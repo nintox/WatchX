@@ -73,9 +73,25 @@ local function Build()
     btn:RegisterForClicks("RightButtonUp", "RightButtonDown")   -- (either: the "cast on key down" setting)
     btn:SetAttribute("type2", "macro")
     if btn.SetPassThroughButtons then pcall(btn.SetPassThroughButtons, btn, "LeftButton") end   -- left: the bag's own
+    -- the scroll under the mouse: a clear purple – a fill and an edge, gently pulsing (the game's animation)
     local glow = btn:CreateTexture(nil, "OVERLAY")
     glow:SetAllPoints()
-    glow:SetColorTexture(0.7, 0.45, 1, 0.22)
+    glow:SetColorTexture(0.7, 0.4, 1, 0.38)
+    for _, e in ipairs({ { "TOPLEFT", "TOPRIGHT", true }, { "BOTTOMLEFT", "BOTTOMRIGHT", true },
+                         { "TOPLEFT", "BOTTOMLEFT", false }, { "TOPRIGHT", "BOTTOMRIGHT", false } }) do
+        local t = btn:CreateTexture(nil, "OVERLAY", nil, 1)
+        t:SetColorTexture(0.85, 0.6, 1, 1)
+        t:SetPoint(e[1]); t:SetPoint(e[2])
+        if e[3] then t:SetHeight(2) else t:SetWidth(2) end
+    end
+    if glow.CreateAnimationGroup then
+        local ag = glow:CreateAnimationGroup()
+        ag:SetLooping("BOUNCE")
+        local a = ag:CreateAnimation("Alpha")
+        a:SetFromAlpha(1); a:SetToAlpha(0.45); a:SetDuration(0.6)
+        btn:SetScript("OnShow", function() ag:Play() end)
+        btn:SetScript("OnHide", function() ag:Stop() end)
+    end
     btn:SetScript("OnEnter", function(self)
         if not self.bag then return end
         GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
