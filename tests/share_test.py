@@ -67,6 +67,34 @@ ex('tick(2, 1); NS.EnemyMenu(UIParent, "Bram-X")')
 ex('for _, b in ipairs(WatchXMenu.buttons) do if b:IsShown() and tostring(b:GetText()):find("party|r") then b:GetScript("OnClick")(b) end end')
 check(str(ev('said()')).startswith("PARTY|WatchX: Kill on sight"), "menu: announce in party")
 
+# your friends: a whisper each, with their own ticks (following the party's until ticked); offline ones skipped
+ex(r"""
+function SendChatMessage(msg, chan, lang, to) table.insert(SAID, chan .. (to and (">" .. to) or "") .. "|" .. msg) end
+C_FriendList = C_FriendList or {}
+C_FriendList.GetFriendInfo = function(n) if n == "Olaf" then return { connected = false } end if n == "Ann" then return { connected = true } end end
+NS.db.shareParty = false; NS.db.shareGuild = false
+NS.SetShareFriends("ann, Bob-Silvermoon  olaf, Ann")
+tick(70, 1)
+""")
+check(ev('table.concat(NS.db.shareFriendNames, ",")') == "Ann,Bob-Silvermoon,Olaf", "names: split, capitalised, no doubles")
+ex('NS.ShareSpot({ key = "Zed-X", name = "Zed Morrow", class = "ROGUE", level = 40 }, "kos")')
+check(ev('said()') == "", "friends not ticked: nobody whispered")
+ex('NS.db.shareFriends = true; tick(5, 1); NS.ShareSpot({ key = "Zed-X", name = "Zed Morrow", class = "ROGUE", level = 40 }, "kos")')
+out = str(ev('said()'))
+print("    " + out.replace("\n", "\n    "))
+check("WHISPER>Ann|WatchX: Kill on sight – [Zed Morrow] 40 Rogue · Arathi Highlands 45,62" in out, "Ann gets a whisper, with where")
+check("WHISPER>Bob-Silvermoon|" in out, "Bob on another realm too")
+check(">Olaf" not in out, "Olaf (offline) is skipped")
+ex('NS.db.shareFriendsKOS = false; tick(70, 1); NS.ShareSpot({ key = "Yul-X", name = "Yul Brand", class = "MAGE", level = 40 }, "kos")')
+check(ev('said()') == "", "KOS off for friends: not whispered")
+ex('NS.db.shareFriendsKOS = nil; NS.db.shareFriends = false; tick(5, 1)')
+ex('NS.EnemyMenu(UIParent, "Bram-X")')
+ex('for _, b in ipairs(WatchXMenu and WatchXMenu.buttons or {}) do if b:IsShown() and tostring(b:GetText()):find("your friends") then b:GetScript("OnClick")(b) end end')
+check("WHISPER>Ann|WatchX: Kill on sight – [Bram Stonefist]" in str(ev('said()')), "the menu: whisper this one to your friends")
+# where you last saw them: zone and coordinates, kept with the player
+ex('NS.db.enemies["Bram-X"].zone, NS.db.enemies["Bram-X"].pos = "Arathi Highlands", "45,62"')
+check(ev('NS.WhereSeen(NS.db.enemies["Bram-X"])') == "Arathi Highlands 45,62", "last seen: zone and coordinates")
+check(ev('NS.Coords()') == "45,62", "your spot: 45,62")
 errs = errors(ev)
 check(len(errs) == 0, "no Lua errors " + (str(errs[0])[:300] if errs else ""))
 print("share:", "ALL PASSED" if not fails else "%d FAILED" % len(fails))

@@ -16,9 +16,10 @@
 - **WANTED bounties** – put gold on a player's head, shared with your guild and friends who run WatchX. A
   reward for one kill or per kill (e.g. 1g a kill, up to 10). Kills are claimed by themselves, you pay by mail
   with one click, and it can be announced in guild chat.
-- **Tell your party / guild** – a line in party or guild chat when you spot a stealther, a KOS or WANTED player
-  (or every enemy): who, level, class, guild, reward and where. Once a minute per player; not twice when a friend's
-  WatchX said it first.
+- **Tell your party / guild / friends** – a line in party or guild chat, or a whisper to the friends you list, when
+  you spot a stealther, a KOS or WANTED player (or every enemy): who, level, class, guild, reward and where (zone and
+  coordinates). Each of the three has its own ticks. Once a minute per player; not twice when a friend's WatchX said
+  it first. The Enemies window remembers where you last saw each player, and a new bounty says it in guild chat.
 - **Sounds** – pick your own for Stealth, Kill on sight, WANTED, a new enemy nearby and bounty news (or off).
 - **Nameplate icons** – class, proven healers and KOS over enemy players.
 - **History** – everyone you've met: kills, deaths, last seen, notes, guilds.

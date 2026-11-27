@@ -69,6 +69,8 @@ local defaults = {
     kosAlert = true,      -- Nearby: a "Kill on sight!" card + sound when a KOS player shows up
     shareParty = false,   -- Enemies: say what you spot in party / raid chat
     shareGuild = false,   -- ... and / or in guild chat
+    shareFriends = false, -- ... and / or whispered to the friends in shareFriendNames
+    shareFriendNames = {},
     shareStealth = true,  -- ... which: stealth, KOS, WANTED (and every new enemy, at most one every 10 s)
     shareKOS = true,
     shareWanted = true,
@@ -974,6 +976,7 @@ local function NoteNearby(unit)
     local r = ns.EnemyRecord(key, display)
     if isNew or now - (r.lastSeen or 0) > NearbyKeep() then r.seen = (r.seen or 0) + 1 end
     r.lastSeen, r.zone = now, GetZoneText and Plain(GetZoneText()) or r.zone
+    r.pos = ns.Coords and ns.Coords() or nil   -- (where you were: close enough to find them; none in dungeons)
     r.class, r.level, r.guild, r.race = e.class or r.class, e.level or r.level, e.guild or r.guild, e.race or r.race
     local guid = Plain(UnitGUID(unit))
     if type(guid) == "string" then ns.playerGuids[guid] = key end
@@ -2287,6 +2290,18 @@ local function PlayerPos()
 end
 
 ns.PlayerPos = PlayerPos
+-- Your spot on the map as "45,62" (nil in dungeons and where the map has none).
+function ns.Coords()
+    local map, x, y = PlayerPos()
+    if not (map and x and y) or (x == 0 and y == 0) then return nil end
+    return ("%d,%d"):format(math.floor(x * 100 + 0.5), math.floor(y * 100 + 0.5))
+end
+-- Where a player was last seen: "Arathi Highlands 45,62" (or just the zone, or nil).
+function ns.WhereSeen(r)
+    if not r then return nil end
+    local w = (r.zone or "") .. (r.pos and ((r.zone and " " or "") .. r.pos) or "")
+    return w ~= "" and w or nil
+end
 
 function ns.CampFireNear()
     if auraCache.found and auraCache.found.campfire then return true end
@@ -3330,8 +3345,10 @@ end
         Print("|cffffa000WANTED|r posted: " .. r.name .. " – " .. Money(copper) .. per
             .. (r.wanted.note and (" (" .. r.wanted.note .. ")") or "") .. " |cffaaaaaa– sent to your guild and friends|r")
         if fresh then
+            local seen = r.lastSeen and ns.WhereSeen and ns.WhereSeen(r)
+            seen = seen and (" Last seen: " .. seen .. ", " .. Fmt(math.max(0, time() - r.lastSeen)) .. " ago.") or ""
             Announce("WANTED: " .. r.name .. " – " .. Gold(copper) .. (kills > 1 and (" per kill, up to " .. kills .. " kills") or " reward")
-                .. (r.wanted.note and (" (" .. r.wanted.note .. ")") or "") .. ". Kill them and claim it!")
+                .. (r.wanted.note and (" (" .. r.wanted.note .. ")") or "") .. ". Kill them and claim it!" .. seen)
         end
         Changed()
         return true

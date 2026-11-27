@@ -535,6 +535,9 @@ function ns.EnemyMenu(anchor, key)
         items[#items + 1] = { "Announce in |cffaad4ff" .. ((IsInRaid and IsInRaid()) and "raid" or "party") .. "|r", function() Tell("party") end }
     end
     if IsInGuild and IsInGuild() then items[#items + 1] = { "Announce in |cff40ff40guild|r", function() Tell("guild") end } end
+    if ns.ShareFriendNames and #ns.ShareFriendNames() > 0 then
+        items[#items + 1] = { "Whisper to |cffff80ffyour friends|r", function() Tell("friends") end }
+    end
     if r.guild then
         local gk = ns.db.kosGuilds[r.guild:lower()]
         items[#items + 1] = { (gk and "Guild off KOS: " or "KOS the guild: ") .. r.guild, function() ns.SetGuildKOS(r.guild, not gk) end }
@@ -1935,7 +1938,8 @@ local function HistoryRow(i)
         GameTooltip:AddLine(((rec.level and rec.level > 0) and rec.level or "??") .. " " .. (rec.race and (rec.race .. " ") or "")
             .. ClassName(rec.class) .. (rec.guild and ("  <" .. rec.guild .. ">") or ""), 1, 1, 1)
         if rec.lastSeen then
-            GameTooltip:AddLine("Last seen " .. ns.AgoLong(time() - rec.lastSeen) .. " ago" .. (rec.zone and (" · " .. rec.zone) or ""), 0.7, 0.7, 0.7)
+            local where = ns.WhereSeen and ns.WhereSeen(rec)
+            GameTooltip:AddLine("Last seen " .. ns.AgoLong(time() - rec.lastSeen) .. " ago" .. (where and (" · " .. where) or ""), 0.7, 0.7, 0.7)
         end
         ns.AddEnemyHistoryLines(self.key)
         if rec.wanted and ns.AddWantedLines then ns.AddWantedLines(GameTooltip, rec.wanted) end
@@ -2428,7 +2432,7 @@ function ns.BuildNearbySettings()
     heading("TELL YOUR GROUP")
     -- two columns: what your party / raid hears, and what your guild hears
     do
-        local COLP, COLG = L + 330, L + 450
+        local COLP, COLG, COLF = L + 330, L + 430, L + 530
         local function colHead(text, x)
             local h = o:CreateFontString(nil, "OVERLAY", "GameFontNormal")
             h:SetPoint("TOP", o, "TOPLEFT", x + 9, y)
@@ -2436,6 +2440,7 @@ function ns.BuildNearbySettings()
         end
         colHead("Party / raid", COLP)
         colHead("Guild", COLG)
+        colHead("Friends", COLF)
         y = y - 20
         local function box(x, get, set)
             local cb = ns.CheckBox(o)
@@ -2445,23 +2450,46 @@ function ns.BuildNearbySettings()
             cb:SetScript("OnClick", function(self) set(self:GetChecked() and true or false); self:SetChecked(get()); ns.RefreshUI() end)
             checks[#checks + 1] = cb
         end
-        local function row(label, hint, pkey, gkey, on, own)
+        local function row(label, hint, pkey, gkey, on, own, fkey)
             local name = o:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
             name:SetPoint("TOPLEFT", o, "TOPLEFT", L + 4, y - 3)
             name:SetText(label .. (hint and ("  |cff808080" .. hint .. "|r") or ""))
             box(COLP, function() return ns.ShareWants(pkey, false, on) end, function(v) db()[pkey] = v end)
             box(COLG, function() return own and db()[gkey] == true or (not own and ns.ShareWants(pkey, gkey, on)) end,
                 function(v) db()[gkey] = v end)
+            box(COLF, function() return own and db()[fkey] == true or (not own and ns.ShareWants(pkey, fkey, on)) end,
+                function(v) db()[fkey] = v end)
             y = y - 27
         end
-        row("|cffffd100Tell them|r", "a line in chat when you spot one of these", "shareParty", "shareGuild", false, true)
-        row("Stealth", nil, "shareStealth", "shareGuildStealth", true)
-        row("Kill on sight", nil, "shareKOS", "shareGuildKOS", true)
-        row("WANTED", "with the reward", "shareWanted", "shareGuildWanted", true)
-        row("Every new enemy", "at most one line every 10 s", "shareAll", "shareGuildAll", false)
+        row("|cffffd100Tell them|r", "a line when you spot one of these", "shareParty", "shareGuild", false, true, "shareFriends")
+        row("Stealth", nil, "shareStealth", "shareGuildStealth", true, nil, "shareFriendsStealth")
+        row("Kill on sight", nil, "shareKOS", "shareGuildKOS", true, nil, "shareFriendsKOS")
+        row("WANTED", "with the reward", "shareWanted", "shareGuildWanted", true, nil, "shareFriendsWanted")
+        row("Every new enemy", "at most one line every 10 s", "shareAll", "shareGuildAll", false, nil, "shareFriendsAll")
+        -- the friends: names, a whisper each (any you know are offline are skipped)
+        local lab = o:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+        lab:SetPoint("TOPLEFT", o, "TOPLEFT", L + 4, y - 6)
+        lab:SetText("Friends to whisper")
+        local eb = CreateFrame("EditBox", "WatchXShareFriends", o, "InputBoxTemplate")
+        eb:SetSize(330, 20)
+        eb:SetPoint("TOPLEFT", o, "TOPLEFT", L + 140, y - 2)
+        eb:SetAutoFocus(false)
+        eb:SetMaxLetters(240)
+        local function show() eb:SetText(table.concat(type(db().shareFriendNames) == "table" and db().shareFriendNames or {}, ", ")) end
+        local function save() ns.SetShareFriends(eb:GetText()); show() end
+        eb:SetScript("OnEnterPressed", function(self) save(); self:ClearFocus() end)
+        eb:SetScript("OnEditFocusLost", save)
+        eb:SetScript("OnEscapePressed", function(self) show(); self:ClearFocus() end)
+        eb:SetScript("OnShow", show)
+        P.friendsBox = eb
+        y = y - 26
+        note("Names with a comma between (Name-Realm for another realm). Friends you know are offline are skipped.")
+        y = y - 22
     end
-    note("Right-click a row in the list to announce one player by hand: say, party, raid or guild.")
-    y = y - 20
+    note("Right-click a row in the list to announce one player by hand: say, party, raid, guild or your friends.")
+    y = y - 18
+    note("Every line says where you are (zone and coordinates); the Enemies window remembers where you last saw each player.")
+    y = y - 34
 
     heading("HOW IT WORKS")
     local help = o:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
@@ -3410,10 +3438,14 @@ local function BuildNearby()
         self.stats:SetText(mc .. ms .. "|r|cff999999ms|r  " .. fc .. fps .. "|r|cff999999fps|r")
         -- at the right end of the title's line, on the title's baseline: left of the count and the coin only when they
         -- show (else it would float in the middle)
+        -- (the count keeps the coin's place beside it even when there's no coin: 7 + 18 + 8 from the right)
         local inset = 8
-        if self.news:IsShown() then inset = inset + (self.news:GetWidth() or 18) + 6 end
         local ct = self.count:GetText()
-        if type(ct) == "string" and ct ~= "" then inset = inset + (self.count:GetStringWidth() or 0) + 8 end
+        if type(ct) == "string" and ct ~= "" then
+            inset = 7 + (self.news:GetWidth() or 18) + 8 + (self.count:GetStringWidth() or 0) + 10
+        elseif self.news:IsShown() then
+            inset = 7 + (self.news:GetWidth() or 18) + 8
+        end
         local base = 6 + math.floor((self.title:GetStringHeight() or 13) + 0.5)
         if self.statsAt ~= inset * 1000 + base then
             self.statsAt = inset * 1000 + base
@@ -4038,8 +4070,36 @@ function ns.ShareWants(pkey, gkey, on)
     if v == nil then return on and true or false end
     return v and true or false
 end
-local SHARE_KEYS = { stealth = { "shareStealth", "shareGuildStealth", true }, kos = { "shareKOS", "shareGuildKOS", true },
-    wanted = { "shareWanted", "shareGuildWanted", true }, enemy = { "shareAll", "shareGuildAll", false } }
+local SHARE_KEYS = { stealth = { "shareStealth", "shareGuildStealth", true, "shareFriendsStealth" },
+    kos = { "shareKOS", "shareGuildKOS", true, "shareFriendsKOS" },
+    wanted = { "shareWanted", "shareGuildWanted", true, "shareFriendsWanted" },
+    enemy = { "shareAll", "shareGuildAll", false, "shareFriendsAll" } }
+-- The friends you tell straight (a whisper each): the names you typed, not the ones you know are offline.
+function ns.ShareFriendNames()
+    local out = {}
+    for _, n in ipairs(type(db().shareFriendNames) == "table" and db().shareFriendNames or {}) do
+        local off = false
+        if C_FriendList and C_FriendList.GetFriendInfo then
+            local ok, info = pcall(C_FriendList.GetFriendInfo, n)
+            local c = nil   -- (not on your friends list: can't tell, they're whispered)
+            if ok and type(info) == "table" then c = info.connected end
+            if issecretvalue and c ~= nil and issecretvalue(c) then c = nil end
+            off = c == false
+        end
+        if not off and n ~= UnitName("player") then out[#out + 1] = n end
+    end
+    return out
+end
+-- "Ann, Bob-Realm  Cid" -> { "Ann", "Bob-Realm", "Cid" } (first letter up)
+function ns.SetShareFriends(text)
+    local t, seen = {}, {}
+    for n in tostring(text or ""):gmatch("[^,;%s]+") do
+        n = n:sub(1, 1):upper() .. n:sub(2)
+        if not seen[n:lower()] then seen[n:lower()] = true; t[#t + 1] = n end
+    end
+    db().shareFriendNames = t
+    return t
+end
 function ns.ShareSpot(e, kind, extra, force)
     local d = db()
     if not (d and e and type(e.name) == "string") then return end
@@ -4052,7 +4112,8 @@ function ns.ShareSpot(e, kind, extra, force)
         if not sk then return end
         local wantP = d.shareParty == true and ns.ShareWants(sk[1], false, sk[3])
         local wantG = d.shareGuild == true and ns.ShareWants(sk[1], sk[2], sk[3])
-        if not (wantP or wantG) then return end
+        local wantF = d.shareFriends == true and ns.ShareWants(sk[1], sk[4], sk[3]) and #ns.ShareFriendNames() > 0
+        if not (wantP or wantG or wantF) then return end
         if IsInInstance then
             local _, it = IsInInstance()
             if it == "pvp" or it == "arena" then return end
@@ -4093,6 +4154,10 @@ function ns.ShareSpot(e, kind, extra, force)
     if toGuild and IsInGuild and IsInGuild() then
         sent = (ns.SendChat and ns.SendChat(msg:sub(1, 255), "GUILD")) or sent
     end
+    local toFriends = (force == "friends") or (not force and d.shareFriends == true and ns.ShareWants(sk[1], sk[4], sk[3]))
+    if toFriends and ns.SendChat then
+        for _, n in ipairs(ns.ShareFriendNames()) do sent = ns.SendChat(msg:sub(1, 255), "WHISPER", n) or sent end
+    end
     if sent then
         ns.spotSaid[k], ns.spotLast = now, now
         ns.spotCount = (ns.spotCount or 0) + 1
@@ -4106,7 +4171,7 @@ end
 do
     local hear = CreateFrame("Frame")
     for _, ev in ipairs({ "CHAT_MSG_PARTY", "CHAT_MSG_PARTY_LEADER", "CHAT_MSG_RAID", "CHAT_MSG_RAID_LEADER", "CHAT_MSG_GUILD",
-                          "CHAT_MSG_INSTANCE_CHAT", "CHAT_MSG_INSTANCE_CHAT_LEADER" }) do pcall(hear.RegisterEvent, hear, ev) end
+                          "CHAT_MSG_INSTANCE_CHAT", "CHAT_MSG_INSTANCE_CHAT_LEADER", "CHAT_MSG_WHISPER" }) do pcall(hear.RegisterEvent, hear, ev) end
     hear:SetScript("OnEvent", function(_, _, msg)
         if issecretvalue and msg ~= nil and issecretvalue(msg) then return end   -- (a hidden chat line: can't be read)
         if type(msg) ~= "string" or msg:sub(1, 8) ~= "WatchX: " then return end
@@ -4121,7 +4186,9 @@ end
 -- A KOS player showed up: the KOS card always wins, with a sound.
 function ns.OnKOS(e)
     if not db().nearby then return end
-    ns.Print("|cffff3030Kill on sight:|r " .. e.name .. (e.guild and (" <" .. e.guild .. ">") or ""))
+    local at = ns.Coords and ns.Coords()
+    ns.Print("|cffff3030Kill on sight:|r " .. e.name .. (e.guild and (" <" .. e.guild .. ">") or "")
+        .. (at and ("  |cffaaaaaa" .. (GetZoneText and GetZoneText() or "") .. " " .. at .. "|r") or ""))
     ns.AlertSound("kos")
     ns.ShowStealthToast(e, "kos")
 end
@@ -4130,7 +4197,9 @@ end
 function ns.OnWantedSeen(e, w)
     if not db().nearby then return end
     local rw = ns.WantedReward(w)
-    ns.Print("|cffffa000WANTED|r nearby: " .. e.name .. (rw and (" – " .. rw) or "") .. (w.by and (" (from " .. w.by .. ")") or ""))
+    local at = ns.Coords and ns.Coords()
+    ns.Print("|cffffa000WANTED|r nearby: " .. e.name .. (rw and (" – " .. rw) or "") .. (w.by and (" (from " .. w.by .. ")") or "")
+        .. (at and ("  |cffaaaaaa" .. (GetZoneText and GetZoneText() or "") .. " " .. at .. "|r") or ""))
     ns.AlertSound("wanted")
     local function Card()   -- (waits until the fight is over when a card with a click is up)
         if not ns.ShowStealthToast(e, "wanted") then
